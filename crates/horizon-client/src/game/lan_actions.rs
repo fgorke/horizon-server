@@ -1918,8 +1918,8 @@ impl Game<'_> {
             );
             return;
         }
-        if words == ["spawn"] {
-            self.respawn_at_world_spawn(host, conn);
+        if words == ["spawn"] || words == ["setspawn"] || words[0] == "spawnelytra" {
+            self.spawn_command(host, conn, &words);
             return;
         }
         if words[0] == "dimension" {

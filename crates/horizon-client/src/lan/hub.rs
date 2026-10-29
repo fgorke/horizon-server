@@ -2934,6 +2934,16 @@ fn with_builtin_commands(mods: &serde_json::Value) -> serde_json::Value {
         children
             .entry("spawn")
             .or_insert_with(|| serde_json::json!({ "type": "literal", "executable": true }));
+        children
+            .entry("setspawn")
+            .or_insert_with(|| serde_json::json!({ "type": "literal", "executable": true }));
+        children.entry("spawnelytra").or_insert_with(|| {
+            serde_json::json!({ "type": "literal", "executable": true, "children": {
+                "pos1": { "type": "literal", "executable": true },
+                "pos2": { "type": "literal", "executable": true },
+                "off": { "type": "literal", "executable": true },
+            }})
+        });
         let switch = serde_json::json!({ "type": "literal", "children": {
             "on": { "type": "literal", "executable": true },
             "off": { "type": "literal", "executable": true },

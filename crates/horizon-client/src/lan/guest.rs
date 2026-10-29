@@ -117,6 +117,8 @@ pub struct Guest {
     pub spawn_jump: bool,
     pub spawn_gliding: bool,
     pub spawn_boosted: bool,
+    /// /spawn's countdown: the ticks left and where it stood when it asked.
+    pub spawn_countdown: Option<(u32, [f64; 3])>,
     pub sleeping: bool,
     /// `LivingEntity.DATA_LIVING_ENTITY_FLAGS`: 1 while using an item, 2 if
     /// it is in the off hand.
@@ -312,6 +314,7 @@ impl Guest {
             spawn_jump: false,
             spawn_gliding: false,
             spawn_boosted: false,
+            spawn_countdown: None,
             sleeping: false,
             living_flags: 0,
             bed: None,
