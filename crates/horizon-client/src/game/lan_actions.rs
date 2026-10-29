@@ -1916,6 +1916,18 @@ impl Game<'_> {
             );
             return;
         }
+        if words == ["tps"] {
+            let content =
+                horizon_client::lan::data::component_nbt(&self.tps_reply(host).component());
+            host.hub.send_to(
+                conn,
+                &C::SystemChat(play::SystemChat {
+                    content,
+                    overlay: false,
+                }),
+            );
+            return;
+        }
         // An integrated server runs every player's commands at their own
         // permission level (`CommandSourceStack.permissions`); a LAN world
         // follows its Allow Commands, and a dedicated server leaves it to
@@ -3399,4 +3411,53 @@ fn swing_packet(id: i32, hand: Hand, animation: SwingAnimation) -> C {
         kind: i32::from(animation.kind),
         duration: animation.duration,
     })
+}
+
+impl Game<'_> {
+    /// `/tps`: the tick rate, the milliseconds per tick (average, then the
+    /// percentiles `/tick query` prints), players and loaded chunks.
+    fn tps_reply(&self, host: &LanHost) -> horizon_client::text::Text {
+        let millis = |nanos: u64| nanos as f64 / 1e6;
+        let target = self.clock.rate();
+        let average = millis(self.clock.average_nanos());
+        let budget = millis(self.clock.tick_duration().as_nanos() as u64);
+        let tps = if average > budget {
+            1000.0 / average
+        } else {
+            f64::from(target)
+        };
+        let samples = self.clock.sorted_samples();
+        let at = |q: f64| {
+            let i = ((samples.len() as f64 * q) as usize).min(samples.len().saturating_sub(1));
+            samples.get(i).copied().map_or(0.0, millis)
+        };
+        let tps_colour = if tps >= f64::from(target) * 0.975 {
+            'a'
+        } else if tps >= f64::from(target) * 0.75 {
+            'e'
+        } else {
+            'c'
+        };
+        let ms_colour = |ms: f64| {
+            if ms <= budget * 0.6 {
+                'a'
+            } else if ms <= budget {
+                'e'
+            } else {
+                'c'
+            }
+        };
+        let players = host.hub.guests.iter().filter(|g| g.placed).count();
+        let max = host.hub.lan.shared.max_players();
+        horizon_client::text::Text::legacy(&format!(
+            "\u{a7}6TPS \u{a7}{tps_colour}{tps:.1}\u{a7}7/{target:.1}  \u{a7}6MSPT \u{a7}{}{average:.2}\u{a7}7 ms \
+             (P50 {:.2}, P95 {:.2}, P99 {:.2}, Budget {budget:.0})\n\u{a7}6Spieler \u{a7}f{players}/{max}  \
+             \u{a7}6Chunks \u{a7}f{}",
+            ms_colour(average),
+            at(0.5),
+            at(0.95),
+            at(0.99),
+            self.world.chunks.len(),
+        ))
+    }
 }

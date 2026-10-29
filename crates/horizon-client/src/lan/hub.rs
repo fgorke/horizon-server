@@ -957,7 +957,7 @@ impl Hub {
                     g.permission,
                     dedicated,
                     &self.sync.builtin,
-                    &self.mod_commands.0,
+                    &with_builtin_commands(&self.mod_commands.0),
                 )
             }
             None => play::Commands {
@@ -2914,4 +2914,19 @@ mod tests {
             }
         }
     }
+}
+
+/// The server's own commands beside the server mods' (`extra` of
+/// `CommandTree::packet_with`): `/tps`, open to every player.
+fn with_builtin_commands(mods: &serde_json::Value) -> serde_json::Value {
+    let mut extra = match mods {
+        serde_json::Value::Object(_) => mods.clone(),
+        _ => serde_json::json!({ "type": "root", "children": {} }),
+    };
+    if let Some(children) = extra["children"].as_object_mut() {
+        children
+            .entry("tps")
+            .or_insert_with(|| serde_json::json!({ "type": "literal", "executable": true }));
+    }
+    extra
 }
