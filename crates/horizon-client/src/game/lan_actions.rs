@@ -1440,6 +1440,9 @@ impl Game<'_> {
             S::CustomPayload(p) if p.channel == horizon_protocol::quiet::CHANNEL => {
                 self.guest_quiet_commands(host, conn, &p.data)
             }
+            S::CustomPayload(p) if p.channel.starts_with("voicechat:") => {
+                self.voice_payload(host, conn, &p.channel, &p.data)
+            }
             S::ChatCommandSigned(p) => self.guest_signed_command(host, conn, p),
             S::ChangeDifficulty(p) if host.hub.guests[gi].permission >= 2 => {
                 if !self.level.difficulty_locked && (0..=3).contains(&p.difficulty) {
@@ -2635,6 +2638,7 @@ impl Game<'_> {
             .and_then(|g| g.moves.last().map(|m| m.0[1]))
             .unwrap_or(0.0);
         self.spawn_elytra_tick(host, conn);
+        self.voice_tick(host, conn);
         self.guest_glide_tick(host, conn, fell);
         let Some(g) = host.hub.guest_mut(conn) else {
             return;

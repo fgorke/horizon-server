@@ -1730,6 +1730,7 @@ impl Game<'_> {
                         self.save_guest(&host, &guest);
                         host.models.remove(&guest.conn);
                         host.play.remove(&guest.conn);
+                        super::voice_chat::guest_left(&host, guest.uuid);
                         self.guest_combat.remove(&guest.conn);
                         if self.options.dedicated.is_some() && guest.placed {
                             super::dedicated::log(
