@@ -118,6 +118,8 @@ pub(super) struct EndState {
     gateways: HashMap<u32, horizon_client::end_gateway::Traveller>,
     /// The entities that went through a gateway, waiting for its exit.
     arrivals: Vec<GatewayArrival>,
+    /// The ender pearls that went through a gateway, waiting for its exit.
+    pearls: Vec<(horizon_client::projectiles::Projectile, GatewayJob, Vec3)>,
     /// The chunks kept loaded for those arrivals.
     areas: Vec<(i32, i32)>,
     /// The Overworld generator, for stronghold positions (ServerLevel.findNearestMapStructure).
@@ -1481,6 +1483,37 @@ impl Game<'_> {
             .map(|m| (m.id, m.position, m.width(), m.height()))
             .collect();
         let mut inside: Vec<(u32, BlockPos)> = Vec::new();
+        // ThrownEnderpearl: through a gateway it takes its owner along.
+        let mut pearls: Vec<(u32, BlockPos)> = Vec::new();
+        for p in &self.creatures.projectiles {
+            if !matches!(p.kind, horizon_client::projectiles::ProjectileKind::EnderPearl) {
+                continue;
+            }
+            let found = horizon_client::end_gateway::swept_gateway(
+                p.previous,
+                p.position,
+                0.25,
+                0.25,
+                |b| {
+                    &*self.res.facts().get(self.world.block(b.x, b.y, b.z)).name
+                        == "minecraft:end_gateway"
+                },
+            );
+            if let Some(pos) = found {
+                pearls.push((p.id, pos));
+            }
+        }
+        for (id, pos) in pearls {
+            if !self.gateway_enter([pos.x, pos.y, pos.z]) || self.restart_portal_cooldown(id) {
+                continue;
+            }
+            let Some(i) = self.creatures.projectiles.iter().position(|p| p.id == id) else {
+                continue;
+            };
+            let pearl = self.creatures.projectiles.remove(i);
+            let (job, target) = self.gateway_job([pos.x, pos.y, pos.z]);
+            self.end.pearls.push((pearl, job, target));
+        }
         for (id, to, width, height) in items.into_iter().chain(mobs) {
             let from = self.portals.before.get(&id).copied().unwrap_or(to);
             let found = horizon_client::end_gateway::swept_gateway(from, to, width, height, |p| {
@@ -1587,6 +1620,30 @@ impl Game<'_> {
             return Ok(());
         }
         let mut i = 0;
+        while i < self.end.pearls.len() {
+            let target = self.end.pearls[i].2;
+            let chunk = ((target.x.floor() as i32) >> 4, (target.z.floor() as i32) >> 4);
+            if !self.world.chunks.contains_key(&chunk) {
+                i += 1;
+                continue;
+            }
+            let at = match self.resolve_gateway(self.end.pearls[i].1, target) {
+                Ok(at) => at,
+                Err(e) => {
+                    log::warn!("End gateway: {e}");
+                    i += 1;
+                    continue;
+                }
+            };
+            let (mut pearl, ..) = self.end.pearls.remove(i);
+            // TeleportTransition(level, exit, Vec3.ZERO, 0, 0, Set.of()).
+            pearl.position = at;
+            pearl.previous = at;
+            pearl.velocity = Vec3::ZERO;
+            pearl.needs_sync = true;
+            self.creatures.projectiles.push(pearl);
+        }
+        let mut i = 0;
         while i < self.end.arrivals.len() {
             let (cx, cz) = (
                 (self.end.arrivals[i].target.x.floor() as i32) >> 4,
@@ -1635,10 +1692,11 @@ impl Game<'_> {
             .extra
             .retain(|&(c, r)| !(r == 1 && areas.contains(&c)));
         let mut areas = Vec::new();
-        for a in &self.end.arrivals {
+        let targets = self.end.arrivals.iter().map(|a| a.target);
+        for target in targets.chain(self.end.pearls.iter().map(|p| p.2)) {
             let c = (
-                (a.target.x.floor() as i32) >> 4,
-                (a.target.z.floor() as i32) >> 4,
+                (target.x.floor() as i32) >> 4,
+                (target.z.floor() as i32) >> 4,
             );
             if !areas.contains(&c) {
                 areas.push(c);
