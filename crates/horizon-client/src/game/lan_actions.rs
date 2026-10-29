@@ -2416,6 +2416,16 @@ impl Game<'_> {
             if let Some(play) = host.play.get_mut(&conn) {
                 play.hook = None;
             }
+            // ServerPlayer.die: deaths, what killed them, and the
+            // time-since counters restart.
+            self.as_guest(host, conn, |game| {
+                game.stats.custom("deaths", 1);
+                if let Some(kind) = game.combat_killer_kind() {
+                    game.stats.add("killed_by", &kind, 1);
+                }
+                game.stats.reset("custom", "minecraft:time_since_death");
+                game.stats.reset("custom", "minecraft:time_since_rest");
+            });
         }
         let g = &mut host.hub.guests[gi];
         if g.health <= 0.0 && !g.dead {
@@ -2712,6 +2722,7 @@ impl Game<'_> {
             for (moved, on_ground) in moves {
                 let movement = Vec3::new(moved[0], moved[1], moved[2]);
                 if w.player.ground.on_ground && !on_ground && moved[1] > 0.0 {
+                    game.stats.custom("jump", 1);
                     let sprinting = w.player.sprinting;
                     w.player
                         .cause_food_exhaustion(if sprinting { 0.2 } else { 0.05 });

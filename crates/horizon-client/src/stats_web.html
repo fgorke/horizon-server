@@ -265,6 +265,20 @@ const esc = t => String(t).replace(/[&<>"']/g, ch => ({ "&": "&amp;", "<": "&lt;
 const head = (p, size) => `<img class="head" src="skin/head/${encodeURIComponent(p.uuid)}" alt="" width="${size}" height="${size}" loading="lazy">`;
 const link = p => `#/${encodeURIComponent(p.uuid)}`;
 const human = id => id.replace(/^minecraft:/, "").split("_").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+// German names from the server's de_de.json (block., item., entity., stat.).
+let LANG = {};
+function nameOf(cat, id) {
+  const k = id.replace(/^minecraft:/, "");
+  if (cat === "minecraft:custom") return CUSTOM[k] || LANG["stat.minecraft." + k] || human(id);
+  const order = cat === "minecraft:killed" || cat === "minecraft:killed_by"
+    ? ["entity", "item", "block"]
+    : ["item", "block", "entity"];
+  for (const kind of order) {
+    const name = LANG[`${kind}.minecraft.${k}`];
+    if (name) return name;
+  }
+  return human(id);
+}
 
 function playTime(ticks) {
   const d = Math.floor(ticks / TICKS_PER_DAY);
@@ -346,7 +360,7 @@ function overview() {
 
 function tableRows(p) {
   const entries = Object.entries((p.stats && p.stats[tab]) || {})
-    .map(([k, v]) => [k, v, tab === "minecraft:custom" ? (CUSTOM[k.replace(/^minecraft:/, "")] || human(k)) : human(k)])
+    .map(([k, v]) => [k, v, nameOf(tab, k)])
     .filter(([, , name]) => name.toLowerCase().includes(query.toLowerCase()))
     .sort((a, b) => b[1] - a[1]);
   if (!entries.length) return '<p class="empty">Nichts gefunden.</p>';
@@ -358,14 +372,14 @@ function tableRows(p) {
 
 function detail(p) {
   const s = p.stats;
-  const kills = c(s, "mob_kills") + c(s, "player_kills");
+  const kills = c(s, "player_kills");
   const deaths = c(s, "deaths");
   const facts = [
     [playTime(c(s, "play_time")), "Spielzeit"],
     [fmt(sum(s, "minecraft:mined")), "Abgebaut"],
     [fmt(c(s, "mob_kills")), "Mob-Kills"],
     [fmt(deaths), "Tode"],
-    [deaths ? fmt(kills / deaths, 2) : fmt(kills), "K/D"],
+    [deaths ? fmt(kills / deaths, 2) : fmt(kills), "K/D (PvP)"],
     [fmt(sum(s, "minecraft:crafted")), "Hergestellt"],
     [fmt(c(s, "player_kills")), "Spieler-Kills"],
     [fmt((c(s, "walk_one_cm") + c(s, "sprint_one_cm") + c(s, "crouch_one_cm")) / CM_PER_KM, 1) + " km", "Zu Fuß"],
@@ -421,6 +435,10 @@ async function load() {
   }
 }
 window.addEventListener("hashchange", () => { query = ""; tab = "minecraft:custom"; render(); window.scrollTo(0, 0); });
+fetch("api/lang").then(r => r.ok ? r.json() : {}).catch(() => ({})).then(names => {
+  LANG = names || {};
+  if (players.length) render();
+});
 load();
 setInterval(load, POLL_MS);
 </script>

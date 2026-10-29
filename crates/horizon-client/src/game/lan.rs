@@ -1549,7 +1549,7 @@ impl Game<'_> {
         };
         // The stats page is up while nobody is online, too.
         if self.options.dedicated.is_some() {
-            super::stats_page::start(&self.world_root);
+            super::stats_page::start(&self.world_root, &self.options.resources);
         }
         // What the tick sends a guest goes to its connection at the end.
         let holding = lan::Holding::start();

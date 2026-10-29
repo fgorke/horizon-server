@@ -10,7 +10,7 @@ static WEB: OnceLock<Option<StatsWeb>> = OnceLock::new();
 /// How often, in ticks, a guest's counters reach the page.
 const EVERY: i64 = 20;
 
-fn web(world: &std::path::Path) -> Option<&'static StatsWeb> {
+fn web(world: &std::path::Path, resources: &std::path::Path) -> Option<&'static StatsWeb> {
     WEB.get_or_init(|| {
         let port = std::env::var("HORIZON_STATS_PORT")
             .ok()
@@ -18,7 +18,8 @@ fn web(world: &std::path::Path) -> Option<&'static StatsWeb> {
             .unwrap_or(stats_web::PORT);
         // The server's folder holds the world and usercache.json.
         let usercache = world.parent().unwrap_or(std::path::Path::new("")).join("usercache.json");
-        match StatsWeb::start(port, world.to_path_buf(), usercache) {
+        let lang = resources.join("assets/minecraft/lang/de_de.json");
+        match StatsWeb::start(port, world.to_path_buf(), usercache, &lang) {
             Ok(w) => Some(w),
             Err(e) => {
                 log::warn!("stats page: port {port}: {e}");
@@ -30,8 +31,8 @@ fn web(world: &std::path::Path) -> Option<&'static StatsWeb> {
 }
 
 /// Starts the page, once.
-pub(super) fn start(world: &std::path::Path) {
-    web(world);
+pub(super) fn start(world: &std::path::Path, resources: &std::path::Path) {
+    web(world, resources);
 }
 
 /// A guest left: the page reads their saved file from now on.
@@ -51,7 +52,7 @@ impl Game<'_> {
         let (Some(g), Some(play)) = (host.hub.guest(conn), host.play.get(&conn)) else {
             return;
         };
-        let Some(web) = web(&self.world_root) else {
+        let Some(web) = web(&self.world_root, &self.options.resources) else {
             return;
         };
         web.set_player(

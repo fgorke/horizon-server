@@ -35,6 +35,8 @@ pub struct LivePlayer {
 #[derive(Default)]
 struct State {
     live: BTreeMap<String, LivePlayer>,
+    /// The block, item, entity and statistic names of de_de.json, as JSON.
+    lang: String,
     /// (`head`/`body`, uuid): when fetched, the PNG.
     skins: HashMap<(&'static str, String), (Instant, Vec<u8>)>,
 }
@@ -46,9 +48,12 @@ pub struct StatsWeb {
 impl StatsWeb {
     /// Binds the port and serves `world`'s statistics, with the names from
     /// `usercache`.
-    pub fn start(port: u16, world: PathBuf, usercache: PathBuf) -> std::io::Result<Self> {
+    pub fn start(port: u16, world: PathBuf, usercache: PathBuf, lang: &Path) -> std::io::Result<Self> {
         let listener = TcpListener::bind(("0.0.0.0", port))?;
-        let state = Arc::new(Mutex::new(State::default()));
+        let state = Arc::new(Mutex::new(State {
+            lang: names_of(lang),
+            ..State::default()
+        }));
         let shared = Arc::clone(&state);
         std::thread::Builder::new().name("stats web".into()).spawn(move || {
             let (world, usercache) = (Arc::new(world), Arc::new(usercache));
@@ -89,6 +94,25 @@ impl StatsWeb {
     pub fn remove_player(&self, uuid: u128) {
         self.lock().live.remove(&dashed(uuid));
     }
+}
+
+/// The names the page shows from a language file: blocks, items,
+/// entities and statistics (`{}` without the file).
+fn names_of(lang: &Path) -> String {
+    const KINDS: [&str; 4] = ["block.minecraft.", "item.minecraft.", "entity.minecraft.", "stat.minecraft."];
+    let all: BTreeMap<String, Value> = std::fs::read(lang)
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_default();
+    let names: serde_json::Map<String, Value> = all
+        .into_iter()
+        // `block.minecraft.x` and not its sub-keys (`.desc`, `.beds`).
+        .filter(|(k, v)| {
+            v.is_string()
+                && KINDS.iter().any(|p| k.strip_prefix(p).is_some_and(|rest| !rest.contains('.')))
+        })
+        .collect();
+    Value::Object(names).to_string()
 }
 
 /// A dashed lowercase UUID, as the stats files are named.
@@ -237,6 +261,10 @@ fn serve(mut s: TcpStream, state: &Mutex<State>, world: &Path, usercache: &Path)
     }
     match path {
         "/" | "/index.html" => respond(&mut s, "200 OK", "text/html; charset=utf-8", PAGE.as_bytes()),
+        "/api/lang" => {
+            let body = state.lock().unwrap_or_else(PoisonError::into_inner).lang.clone();
+            respond(&mut s, "200 OK", "application/json", body.as_bytes())
+        }
         "/api/stats" => {
             let body = {
                 let state = state.lock().unwrap_or_else(PoisonError::into_inner);

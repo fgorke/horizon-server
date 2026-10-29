@@ -289,6 +289,9 @@ pub struct Menu {
     /// Recipes whose result was taken (`awardUsedRecipes`) and the stacks that
     /// went into each, for the caller.
     pub crafted: Vec<(String, Vec<Option<ItemStack>>)>,
+    /// Items taken from a result slot and how many (`ItemStack.onCraftedBy`'s
+    /// `Stats.ITEM_CRAFTED`), for the caller.
+    pub made: Vec<(String, i32)>,
     /// Potions taken from a brewing stand's bottle slots
     /// (`PotionSlot.onTake`), for the caller.
     pub brewed: Vec<ItemStack>,
@@ -687,6 +690,7 @@ impl Menu {
             sounds: Vec::new(),
             player_sounds: Vec::new(),
             crafted: Vec::new(),
+            made: Vec::new(),
             brewed: Vec::new(),
             equipped: Vec::new(),
             merchant: None,
@@ -1523,6 +1527,11 @@ impl Menu {
         if self.slots[s].role == Role::MerchantResult {
             self.merchant_take(env);
             return;
+        }
+        if matches!(self.slots[s].role, Role::StoneResult | Role::CraftResult)
+            || (self.slots[s].role == Role::CombineResult && self.kind == Kind::Smithing)
+        {
+            self.made.push((taken.item.to_string(), taken.count as i32));
         }
         if self.slots[s].role == Role::StoneResult {
             // StonecutterMenu's result onTake: awardUsedRecipes, one input
