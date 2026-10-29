@@ -158,6 +158,76 @@ pub fn command(dir: &Path, words: &[String]) -> Result<(), String> {
     Ok(())
 }
 
+/// The log lines `console` shows from before it attached.
+const CONSOLE_BACKLOG: usize = 20;
+
+/// How often `console` asks for new log lines while nothing is typed.
+const CONSOLE_POLL: Duration = Duration::from_millis(250);
+
+/// `console`: the running server's log as it comes, and each line typed run as a console command (its
+/// answer is in the log), as `run`'s own console takes them. The server keeps running when it is left.
+pub fn console(dir: &Path) -> Result<(), String> {
+    let client = running(dir)?;
+    let reply = client.call("GET", "/api/v1/logs?since=0", None)?;
+    let lines = reply["lines"].as_array().cloned().unwrap_or_default();
+    for line in &lines[lines.len().saturating_sub(CONSOLE_BACKLOG)..] {
+        println!("{}", line.as_str().unwrap_or_default());
+    }
+    let mut next = reply["next"].as_u64().unwrap_or(0);
+    println!("-- Attached: type console commands. `exit` or Ctrl-D leaves; the server keeps running.");
+    signals::install();
+    let typed = typed_lines();
+    while signals::requests() == 0 {
+        match typed.recv_timeout(CONSOLE_POLL) {
+            Ok(line) => {
+                let line = line.trim();
+                if leaves_console(line) {
+                    break;
+                }
+                if !line.is_empty()
+                    && let Err(e) =
+                        client.call("POST", "/api/v1/command", Some(&json!({ "line": line })))
+                {
+                    eprintln!("horizon-server: {e}");
+                }
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+        let Ok(reply) = client.call("GET", &format!("/api/v1/logs?since={next}"), None) else {
+            println!("-- The server is gone.");
+            return Ok(());
+        };
+        for line in reply["lines"].as_array().into_iter().flatten() {
+            println!("{}", line.as_str().unwrap_or_default());
+        }
+        next = reply["next"].as_u64().unwrap_or(next);
+    }
+    println!("-- Detached; the server is still running.");
+    Ok(())
+}
+
+/// Whether a line typed into `console` leaves it rather than going to the server.
+fn leaves_console(line: &str) -> bool {
+    matches!(line, "exit" | "quit" | "/exit" | "/quit")
+}
+
+/// This program's stdin, line by line; the channel closes at its end (Ctrl-D).
+fn typed_lines() -> std::sync::mpsc::Receiver<String> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let _ = std::thread::Builder::new()
+        .name("console".into())
+        .spawn(move || {
+            for line in std::io::BufRead::lines(std::io::stdin().lock()) {
+                let Ok(line) = line else { break };
+                if tx.send(line).is_err() {
+                    break;
+                }
+            }
+        });
+    rx
+}
+
 /// `panel`: a one-time login link for the web panel.
 pub fn panel(dir: &Path) -> Result<(), String> {
     let reply = running(dir)?.call("POST", "/api/v1/panel/login", None)?;
@@ -421,6 +491,16 @@ pub fn logs(dir: &Path, follow: bool, count: usize) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn console_leaves_on_exit_words_only() {
+        for word in ["exit", "quit", "/exit", "/quit"] {
+            assert!(leaves_console(word), "{word}");
+        }
+        for line in ["stop", "list", "say exit", "exits", ""] {
+            assert!(!leaves_console(line), "{line}");
+        }
+    }
 
     #[test]
     fn status_reads_well() {
