@@ -4,7 +4,8 @@
 //! the UDP port over AES-128-GCM. The server only relays the clients' Opus
 //! frames: a microphone packet goes on to every other player in the same
 //! level within the voice distance, as the mod's `Server.processProximityPacket`
-//! does. Groups and recording are left out.
+//! does, and to the other members of the sender's group wherever they are
+//! (`processGroupPacket`). Recording is left out.
 
 use std::collections::HashMap;
 use std::net::{SocketAddr, UdpSocket};
@@ -23,14 +24,24 @@ pub const WHISPER_DISTANCE: f64 = 24.0;
 pub const MTU: i32 = 1275;
 pub const KEEP_ALIVE_MS: i32 = 1000;
 /// The mod's channels the server listens on and sends on.
-pub const CHANNELS: [&str; 6] = [
+pub const CHANNELS: [&str; 12] = [
     "voicechat:request_secret",
     "voicechat:secret",
     "voicechat:update_state",
     "voicechat:state",
     "voicechat:states",
     "voicechat:remove_state",
+    "voicechat:create_group",
+    "voicechat:set_group",
+    "voicechat:leave_group",
+    "voicechat:add_group",
+    "voicechat:remove_group",
+    "voicechat:joined_group",
 ];
+/// `Voicechat.MAX_GROUP_NAME_LENGTH`, in characters.
+const MAX_GROUP_NAME: usize = 24;
+/// `JoinGroupPacket`'s password length limit, in bytes.
+const MAX_PASSWORD: usize = 512;
 
 const MAGIC: u8 = 0xFF;
 const MAX_PACKET: usize = 2048;
@@ -179,6 +190,9 @@ impl Writer {
     fn utf(&mut self, v: &str) -> &mut Self {
         self.bytes(v.as_bytes())
     }
+    fn short(&mut self, v: u16) -> &mut Self {
+        self.raw(&v.to_be_bytes())
+    }
     fn raw(&mut self, v: &[u8]) -> &mut Self {
         self.0.extend_from_slice(v);
         self
@@ -229,6 +243,21 @@ impl Reader<'_> {
         }
         self.take(n)
     }
+    fn utf(&mut self, max: usize) -> Option<String> {
+        String::from_utf8(self.bytes(max * 3)?.to_vec()).ok()
+    }
+    fn short(&mut self) -> Option<u16> {
+        self.take(2).map(|b| u16::from_be_bytes([b[0], b[1]]))
+    }
+}
+
+/// `Voicechat.GROUP_REGEX`: 1 to 24 characters, none a control character,
+/// the first no whitespace either.
+fn valid_group_text(s: &str) -> bool {
+    let n = s.chars().count();
+    (1..=MAX_GROUP_NAME).contains(&n)
+        && !s.chars().any(char::is_control)
+        && !s.starts_with(char::is_whitespace)
 }
 
 // ---- The channel payloads ----
@@ -244,7 +273,7 @@ pub fn parse_update_state(data: &[u8]) -> Option<bool> {
 }
 
 /// `SecretPacket`: the secret, the UDP port, the player, the codec (VOIP),
-/// the MTU, the distance, the keep-alive, groups off, no voice host (the
+/// the MTU, the distance, the keep-alive, groups on, no voice host (the
 /// client uses the server's address) and no recording.
 pub fn secret_payload(secret: &[u8; 16], port: u16, player: u128) -> Vec<u8> {
     let mut w = Writer::default();
@@ -255,19 +284,109 @@ pub fn secret_payload(secret: &[u8; 16], port: u16, player: u128) -> Vec<u8> {
         .int(MTU)
         .double(DISTANCE)
         .int(KEEP_ALIVE_MS)
-        .bool(false)
+        .bool(true)
         .utf("")
         .bool(false);
     w.0
 }
 
-/// A `PlayerState`: off, gone, the player, their name, no group.
+/// A `PlayerState`: off, gone, the player, their name, their group.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PlayerState {
     pub uuid: u128,
     pub name: String,
     pub disabled: bool,
     pub disconnected: bool,
+    pub group: Option<u128>,
+}
+
+/// `Group.Type`: NORMAL (members hear only each other and the players
+/// near them), OPEN (the players near them hear them too) and ISOLATED
+/// (members hear no one outside the group).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GroupKind {
+    Normal,
+    Open,
+    Isolated,
+}
+
+impl GroupKind {
+    /// `GroupImpl.TypeImpl.fromInt`.
+    fn from_short(v: u16) -> Self {
+        match v {
+            1 => GroupKind::Open,
+            2 => GroupKind::Isolated,
+            _ => GroupKind::Normal,
+        }
+    }
+    fn to_short(self) -> u16 {
+        match self {
+            GroupKind::Normal => 0,
+            GroupKind::Open => 1,
+            GroupKind::Isolated => 2,
+        }
+    }
+}
+
+/// A voice chat group (`Group`): its name, password and type.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Group {
+    pub name: String,
+    pub password: Option<String>,
+    pub kind: GroupKind,
+}
+
+/// `CreateGroupPacket`: the name, the password if any, the type; `None`
+/// unless both name and password pass `GROUP_REGEX`.
+pub fn parse_create_group(data: &[u8]) -> Option<Group> {
+    let mut r = Reader(data);
+    let name = r.utf(MAX_GROUP_NAME)?;
+    let password = if r.bool()? { Some(r.utf(MAX_GROUP_NAME)?) } else { None };
+    let kind = GroupKind::from_short(r.short()?);
+    if !valid_group_text(&name) || password.as_deref().is_some_and(|p| !valid_group_text(p)) {
+        return None;
+    }
+    Some(Group { name, password, kind })
+}
+
+/// `JoinGroupPacket` (`voicechat:set_group`): the group and the password.
+pub fn parse_join_group(data: &[u8]) -> Option<(u128, Option<String>)> {
+    let mut r = Reader(data);
+    let group = r.uuid()?;
+    let password = if r.bool()? { Some(r.utf(MAX_PASSWORD)?) } else { None };
+    Some((group, password))
+}
+
+/// `AddGroupPacket`: a `ClientGroup` (id, name, has a password, not
+/// persistent, not hidden, type).
+pub fn add_group_payload(id: u128, group: &Group) -> Vec<u8> {
+    let mut w = Writer::default();
+    w.uuid(id)
+        .utf(&group.name)
+        .bool(group.password.is_some())
+        .bool(false)
+        .bool(false)
+        .short(group.kind.to_short());
+    w.0
+}
+
+/// `RemoveGroupPacket`.
+pub fn remove_group_payload(id: u128) -> Vec<u8> {
+    let mut w = Writer::default();
+    w.uuid(id);
+    w.0
+}
+
+/// `JoinedGroupPacket`: the group joined (none: left, or refused) and
+/// whether the password was wrong.
+pub fn joined_group_payload(group: Option<u128>, wrong_password: bool) -> Vec<u8> {
+    let mut w = Writer::default();
+    w.bool(group.is_some());
+    if let Some(g) = group {
+        w.uuid(g);
+    }
+    w.bool(wrong_password);
+    w.0
 }
 
 impl PlayerState {
@@ -276,7 +395,10 @@ impl PlayerState {
             .bool(self.disconnected)
             .uuid(self.uuid)
             .utf(&self.name)
-            .bool(false);
+            .bool(self.group.is_some());
+        if let Some(g) = self.group {
+            w.uuid(g);
+        }
     }
 }
 
@@ -323,10 +445,12 @@ struct Client {
     dimension: String,
     position: [f64; 3],
     listening: bool,
+    group: Option<u128>,
 }
 
+/// The players by UUID, and the groups by id.
 #[derive(Default)]
-struct Clients(HashMap<u128, Client>);
+struct Clients(HashMap<u128, Client>, HashMap<u128, Group>);
 
 /// The voice chat server: a UDP socket and the thread that serves it.
 pub struct VoiceServer {
@@ -375,9 +499,61 @@ impl VoiceServer {
                 dimension: String::new(),
                 position: [0.0; 3],
                 listening: false,
+                group: None,
             },
         );
         Ok(secret)
+    }
+
+    /// `ServerGroupManager.addGroup`: a new group, the player in it; its id.
+    pub fn create_group(&self, player: u128, group: Group) -> Option<u128> {
+        let mut id = [0u8; 16];
+        horizon_protocol::crypto::random_bytes(&mut id).ok()?;
+        // A version 4 UUID, as UUID.randomUUID.
+        id[6] = (id[6] & 0x0F) | 0x40;
+        id[8] = (id[8] & 0x3F) | 0x80;
+        let id = u128::from_be_bytes(id);
+        let mut clients = self.lock();
+        let c = clients.0.get_mut(&player)?;
+        c.group = Some(id);
+        clients.1.insert(id, group);
+        Some(id)
+    }
+
+    /// `ServerGroupManager.joinGroup`: `Err(true)` for a wrong password,
+    /// `Err(false)` for no such group.
+    pub fn join_group(&self, player: u128, id: u128, password: Option<&str>) -> Result<(), bool> {
+        let mut clients = self.lock();
+        let group = clients.1.get(&id).ok_or(false)?;
+        if group.password.is_some() && group.password.as_deref() != password {
+            return Err(true);
+        }
+        clients.0.get_mut(&player).ok_or(false)?.group = Some(id);
+        Ok(())
+    }
+
+    /// `ServerGroupManager.leaveGroup`.
+    pub fn leave_group(&self, player: u128) {
+        if let Some(c) = self.lock().0.get_mut(&player) {
+            c.group = None;
+        }
+    }
+
+    /// `ServerGroupManager.cleanupGroups`: the groups nobody is in are
+    /// removed; their ids.
+    pub fn cleanup_groups(&self) -> Vec<u128> {
+        let mut clients = self.lock();
+        let used: Vec<u128> = clients.0.values().filter_map(|c| c.group).collect();
+        let empty: Vec<u128> = clients.1.keys().copied().filter(|g| !used.contains(g)).collect();
+        for id in &empty {
+            clients.1.remove(id);
+        }
+        empty
+    }
+
+    /// The groups there are.
+    pub fn groups(&self) -> Vec<(u128, Group)> {
+        self.lock().1.iter().map(|(id, g)| (*id, g.clone())).collect()
     }
 
     pub fn remove(&self, player: u128) {
@@ -406,9 +582,10 @@ impl VoiceServer {
         }
     }
 
-    /// The players with a secret and whether they turned voice chat off.
-    pub fn players(&self) -> Vec<(u128, bool)> {
-        self.lock().0.iter().map(|(u, c)| (*u, c.disabled)).collect()
+    /// The players with a secret, whether they turned voice chat off, and
+    /// their group.
+    pub fn players(&self) -> Vec<(u128, bool, Option<u128>)> {
+        self.lock().0.iter().map(|(u, c)| (*u, c.disabled, c.group)).collect()
     }
 }
 
@@ -518,10 +695,33 @@ fn handle(clients: &mut Clients, data: &[u8], from: SocketAddr) -> Vec<(SocketAd
                 return Vec::new();
             };
             sender.last_answer = Instant::now();
-            proximity(clients, player, &opus, sequence, whispering)
+            let group = sender.group;
+            // Server.processMicPacket: the group, then the players around
+            // unless the group keeps to itself.
+            let Some(id) = group else {
+                return proximity(clients, player, &opus, sequence, whispering);
+            };
+            let mut out = group_voice(clients, player, id, &opus, sequence);
+            if clients.1.get(&id).is_none_or(|g| g.kind == GroupKind::Open) {
+                out.extend(proximity(clients, player, &opus, sequence, whispering));
+            }
+            out
         }
         _ => Vec::new(),
     }
+}
+
+/// `Server.processGroupPacket`: a `GroupSoundPacket` for every other
+/// member of the group, wherever they are.
+fn group_voice(clients: &Clients, player: u128, group: u128, opus: &[u8], sequence: i64) -> Vec<(SocketAddr, Vec<u8>)> {
+    let mut body = Writer::default();
+    body.uuid(player).uuid(player).bytes(opus).long(sequence).byte(0);
+    clients
+        .0
+        .iter()
+        .filter(|(uuid, c)| **uuid != player && c.group == Some(group) && !c.disabled && c.checked)
+        .filter_map(|(_, c)| Some((c.address?, message(&c.gcm, 0x3, &body.0)?)))
+        .collect()
 }
 
 /// `Server.processProximityPacket`: a `PlayerSoundPacket` for every other
@@ -548,6 +748,14 @@ fn proximity(
     let mut out = Vec::new();
     for (uuid, c) in &clients.0 {
         if *uuid == player || c.disabled || !c.listening || !c.checked {
+            continue;
+        }
+        // Server.broadcast: the sender's group heard it already, and an
+        // isolated group's members hear no one else.
+        if c.group.is_some()
+            && (c.group == sender.group
+                || c.group.and_then(|g| clients.1.get(&g)).is_some_and(|g| g.kind == GroupKind::Isolated))
+        {
             continue;
         }
         let Some(to) = c.address else {
@@ -625,6 +833,7 @@ mod tests {
                 dimension: "minecraft:overworld".into(),
                 position: at,
                 listening: true,
+                group: None,
             },
         );
         let mut auth = Writer::default();
@@ -669,6 +878,59 @@ mod tests {
     }
 
     #[test]
+    fn a_group_hears_its_members_anywhere_and_isolated_ones_nothing_else() {
+        let mut clients = Clients::default();
+        let addr = |p: u16| SocketAddr::from(([127, 0, 0, 1], p));
+        let (a, b, c) = (1u128, 2u128, 3u128);
+        join(&mut clients, a, [1; 16], addr(1), [0.0, 64.0, 0.0]);
+        join(&mut clients, b, [2; 16], addr(2), [5000.0, 64.0, 0.0]);
+        join(&mut clients, c, [3; 16], addr(3), [10.0, 64.0, 0.0]);
+        let mut group = |kind| {
+            clients.1.insert(7, Group { name: "g".into(), password: None, kind });
+            clients.0.get_mut(&a).unwrap().group = Some(7);
+            clients.0.get_mut(&b).unwrap().group = Some(7);
+            let mut mic = Writer::default();
+            mic.bytes(&[1]).long(1).bool(false);
+            let mut to: Vec<SocketAddr> =
+                handle(&mut clients, &client_packet(a, &[1; 16], 0x1, &mic.0), addr(1)).into_iter().map(|o| o.0).collect();
+            to.sort();
+            to
+        };
+        // Normal: b far away hears a, c next to a doesn't.
+        assert_eq!(group(GroupKind::Normal), vec![addr(2)]);
+        // Open: c nearby too.
+        assert_eq!(group(GroupKind::Open), vec![addr(2), addr(3)]);
+        // c talking: an isolated group's a doesn't hear it.
+        clients.1.insert(7, Group { name: "g".into(), password: None, kind: GroupKind::Isolated });
+        let mut mic = Writer::default();
+        mic.bytes(&[1]).long(2).bool(false);
+        assert!(handle(&mut clients, &client_packet(c, &[3; 16], 0x1, &mic.0), addr(3)).is_empty());
+    }
+
+    #[test]
+    fn group_packets_are_read_and_laid_out_as_the_mod_does() {
+        let mut w = Writer::default();
+        w.utf("Bau").bool(true).utf("pw").short(1);
+        assert_eq!(
+            parse_create_group(&w.0),
+            Some(Group { name: "Bau".into(), password: Some("pw".into()), kind: GroupKind::Open })
+        );
+        let mut w = Writer::default();
+        w.utf(" leer").bool(false).short(0);
+        assert_eq!(parse_create_group(&w.0), None);
+        let mut w = Writer::default();
+        w.uuid(9).bool(false);
+        assert_eq!(parse_join_group(&w.0), Some((9, None)));
+        let g = Group { name: "Bau".into(), password: None, kind: GroupKind::Isolated };
+        let p = add_group_payload(9, &g);
+        let mut r = Reader(&p);
+        assert_eq!(r.uuid(), Some(9));
+        assert_eq!(r.utf(24).as_deref(), Some("Bau"));
+        assert_eq!((r.bool(), r.bool(), r.bool(), r.short()), (Some(false), Some(false), Some(false), Some(2)));
+        assert_eq!(joined_group_payload(None, true), vec![0, 1]);
+    }
+
+    #[test]
     fn the_secret_payload_is_laid_out_as_the_mod_reads_it() {
         let p = secret_payload(&[4; 16], 24454, 0xAB);
         let mut r = Reader(&p);
@@ -679,7 +941,7 @@ mod tests {
         assert_eq!(r.int(), Some(MTU));
         assert_eq!(r.take(8), Some(&DISTANCE.to_be_bytes()[..]));
         assert_eq!(r.int(), Some(KEEP_ALIVE_MS));
-        assert_eq!(r.bool(), Some(false));
+        assert_eq!(r.bool(), Some(true));
         assert_eq!(r.bytes(10), Some(&[][..]));
         assert_eq!(r.bool(), Some(false));
         assert!(r.0.is_empty());
