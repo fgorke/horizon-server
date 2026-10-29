@@ -1,15 +1,17 @@
 //! A small read-only web page with every player's statistics, live for the
 //! players online: `GET /` is the page (`stats_web.html`), `GET /api/stats`
-//! the players and their `stats/<uuid>.json` statistics. The game hands the
+//! the players and their `stats/<uuid>.json` statistics, `GET /skin/head/<uuid>`
+//! and `/skin/body/<uuid>` their skins from mc-heads.net (kept an hour, so
+//! the page's many heads are one fetch each). The game hands the
 //! online players' counters over once a second ([`StatsWeb::set_live`]);
 //! everyone else's come from the files.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
@@ -17,6 +19,10 @@ use serde_json::{Value, json};
 pub const PORT: u16 = 8100;
 const PAGE: &str = include_str!("stats_web.html");
 const MAX_REQUEST: usize = 8 * 1024;
+/// How long a fetched skin is served before it is fetched again.
+const SKIN_TTL: Duration = Duration::from_secs(3600);
+const SKIN_TIMEOUT: Duration = Duration::from_secs(5);
+const MAX_SKIN: u64 = 512 * 1024;
 
 /// What the game knows of an online player.
 #[derive(Clone, Debug)]
@@ -29,6 +35,8 @@ pub struct LivePlayer {
 #[derive(Default)]
 struct State {
     live: BTreeMap<String, LivePlayer>,
+    /// (`head`/`body`, uuid): when fetched, the PNG.
+    skins: HashMap<(&'static str, String), (Instant, Vec<u8>)>,
 }
 
 pub struct StatsWeb {
@@ -43,14 +51,24 @@ impl StatsWeb {
         let state = Arc::new(Mutex::new(State::default()));
         let shared = Arc::clone(&state);
         std::thread::Builder::new().name("stats web".into()).spawn(move || {
+            let (world, usercache) = (Arc::new(world), Arc::new(usercache));
             for stream in listener.incoming() {
-                match stream {
-                    Ok(s) => {
-                        if let Err(e) = serve(s, &shared, &world, &usercache) {
-                            log::debug!("stats web: {e}");
-                        }
+                let s = match stream {
+                    Ok(s) => s,
+                    Err(e) => {
+                        log::debug!("stats web: accept: {e}");
+                        continue;
                     }
-                    Err(e) => log::debug!("stats web: accept: {e}"),
+                };
+                // A skin fetch takes a while: the other requests don't wait for it.
+                let (shared, world, usercache) = (Arc::clone(&shared), Arc::clone(&world), Arc::clone(&usercache));
+                let spawned = std::thread::Builder::new().name("stats web request".into()).spawn(move || {
+                    if let Err(e) = serve(s, &shared, &world, &usercache) {
+                        log::debug!("stats web: {e}");
+                    }
+                });
+                if let Err(e) = spawned {
+                    log::warn!("stats web: no thread for a request: {e}");
                 }
             }
         })?;
@@ -130,10 +148,54 @@ fn players(state: &State, world: &Path, usercache: &Path) -> Value {
     Value::Array(out.into_values().collect())
 }
 
+/// A skin as PNG: kept, or fetched from mc-heads.net (`kind` is `head` or
+/// `body`).
+fn skin(state: &Mutex<State>, kind: &'static str, uuid: &str) -> Option<Vec<u8>> {
+    let key = (kind, uuid.to_owned());
+    if let Some((at, png)) = state.lock().unwrap_or_else(PoisonError::into_inner).skins.get(&key)
+        && at.elapsed() < SKIN_TTL
+    {
+        return Some(png.clone());
+    }
+    let url = match kind {
+        "head" => format!("https://mc-heads.net/avatar/{uuid}/64"),
+        _ => format!("https://mc-heads.net/body/{uuid}/240"),
+    };
+    let fetched = ureq::AgentBuilder::new()
+        .timeout(SKIN_TIMEOUT)
+        .build()
+        .get(&url)
+        .call()
+        .map_err(|e| e.to_string())
+        .and_then(|r| {
+            let mut png = Vec::new();
+            r.into_reader()
+                .take(MAX_SKIN)
+                .read_to_end(&mut png)
+                .map_err(|e| e.to_string())?;
+            Ok(png)
+        });
+    let mut state = state.lock().unwrap_or_else(PoisonError::into_inner);
+    match fetched {
+        Ok(png) if png.starts_with(b"\x89PNG") => {
+            state.skins.insert(key, (Instant::now(), png.clone()));
+            Some(png)
+        }
+        other => {
+            if let Err(e) = other {
+                log::debug!("stats web: skin {url}: {e}");
+            }
+            // An old copy beats none.
+            state.skins.get(&key).map(|(_, png)| png.clone())
+        }
+    }
+}
+
 fn respond(s: &mut TcpStream, status: &str, kind: &str, body: &[u8]) -> std::io::Result<()> {
+    let cache = if kind == "image/png" { "public, max-age=3600" } else { "no-store" };
     let head = format!(
         "HTTP/1.1 {status}\r\nContent-Type: {kind}\r\nContent-Length: {}\r\n\
-         Cache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\n\
+         Cache-Control: {cache}\r\nX-Content-Type-Options: nosniff\r\n\
          Referrer-Policy: no-referrer\r\nConnection: close\r\n\r\n",
         body.len()
     );
@@ -160,7 +222,20 @@ fn serve(mut s: TcpStream, state: &Mutex<State>, world: &Path, usercache: &Path)
     if method != "GET" {
         return respond(&mut s, "405 Method Not Allowed", "text/plain", b"GET only");
     }
-    match path.split('?').next().unwrap_or("") {
+    let path = path.split('?').next().unwrap_or("");
+    for kind in ["head", "body"] {
+        if let Some(uuid) = path.strip_prefix("/skin/").and_then(|p| p.strip_prefix(kind)).and_then(|p| p.strip_prefix('/')) {
+            let uuid = uuid.to_lowercase();
+            if !is_uuid(&uuid) {
+                return respond(&mut s, "404 Not Found", "text/plain", b"not found");
+            }
+            return match skin(state, kind, &uuid) {
+                Some(png) => respond(&mut s, "200 OK", "image/png", &png),
+                None => respond(&mut s, "502 Bad Gateway", "text/plain", b"no skin"),
+            };
+        }
+    }
+    match path {
         "/" | "/index.html" => respond(&mut s, "200 OK", "text/html; charset=utf-8", PAGE.as_bytes()),
         "/api/stats" => {
             let body = {

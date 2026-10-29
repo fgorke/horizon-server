@@ -3,184 +3,181 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Winterprojekt Statistiken</title>
+<title>Stats · Winterprojekt</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,800&family=JetBrains+Mono:wght@400;600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Silkscreen:wght@400;700&family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,600;12..96,800&display=swap" rel="stylesheet">
 <style>
 :root {
-  --night: #0b1020;
-  --night-2: #121a31;
-  --night-3: #1a2443;
-  --line: #26325a;
-  --frost: #e8eefc;
-  --mist: #9aa8cc;
-  --ice: #7fd6ff;
-  --ice-deep: #3a8fd1;
-  --ember: #ffb35c;
-  --ember-deep: #e2742b;
-  --moss: #6fe3a5;
-  --blood: #ff6b7a;
-  --radius-s: 6px;
-  --radius-l: 18px;
-  --display: "Fraunces", Georgia, serif;
-  --mono: "JetBrains Mono", ui-monospace, monospace;
-  --sans: "Inter", system-ui, sans-serif;
-  --ease: cubic-bezier(0.16, 1, 0.3, 1);
+  --ink: #16120f;
+  --cream: #fff6e0;
+  --teal: #4de3d6;
+  --green: #6edc5a;
+  --purple: #c68ae6;
+  --violet: #8b5cf6;
+  --red: #ff6352;
+  --yellow: #ffd43f;
+  --blue: #8fcbff;
+  --pink: #f0b6e6;
+  --orange: #ff9c3a;
+  --night: #2b1d36;
+  --pixel: "Silkscreen", ui-monospace, monospace;
+  --sans: "Bricolage Grotesque", system-ui, sans-serif;
+  --frame: 0 -4px 0 0 var(--ink), 0 4px 0 0 var(--ink), -4px 0 0 0 var(--ink), 4px 0 0 0 var(--ink),
+           4px 8px 0 0 var(--ink), 8px 4px 0 0 var(--ink), 8px 8px 0 0 var(--ink);
+  --frame-s: 0 -3px 0 0 var(--ink), 0 3px 0 0 var(--ink), -3px 0 0 0 var(--ink), 3px 0 0 0 var(--ink),
+             3px 6px 0 0 var(--ink), 6px 3px 0 0 var(--ink), 6px 6px 0 0 var(--ink);
 }
 * { box-sizing: border-box; }
-html { background: var(--night); }
-body {
-  margin: 0;
-  color: var(--frost);
-  font: 15px/1.5 var(--sans);
-  background:
-    radial-gradient(1200px 600px at 85% -10%, rgba(127, 214, 255, 0.14), transparent 60%),
-    radial-gradient(900px 500px at -10% 10%, rgba(255, 179, 92, 0.08), transparent 60%),
-    var(--night);
-  min-height: 100vh;
-}
-body::before {
-  content: "";
-  position: fixed; inset: 0;
-  pointer-events: none;
-  background-image: radial-gradient(rgba(232, 238, 252, 0.5) 0.6px, transparent 0.8px);
-  background-size: 46px 46px;
-  mask-image: linear-gradient(to bottom, rgba(0,0,0,0.5), transparent 70%);
-  opacity: 0.35;
-}
-a { color: inherit; text-decoration: none; }
-.wrap { max-width: 1180px; margin: 0 auto; padding: 0 16px 80px; position: relative; }
+html, body { margin: 0; background: var(--cream); color: var(--ink); }
+body { font: 16px/1.5 var(--sans); }
+a { color: inherit; }
+img.head { image-rendering: pixelated; background: rgba(22, 18, 15, 0.15); display: block; }
+.wrap { max-width: 1000px; margin: 0 auto; padding: 0 16px; }
+.band { padding: 56px 0; }
+.band.teal { background: var(--teal); }
+.band.dark { background: var(--ink); color: var(--cream); padding: 44px 0; }
+.band.yellow { background: var(--yellow); padding: 36px 0; }
+.band.green { background: var(--green); }
+.band.night { background: var(--night); color: var(--cream); }
+.band.cream { background: var(--cream); }
 
-header.top {
-  display: grid; grid-template-columns: 1fr auto; align-items: end; gap: 16px;
-  padding: 56px 0 28px; border-bottom: 1px solid var(--line);
-}
-.kicker { font: 600 12px/1 var(--mono); letter-spacing: 0.22em; text-transform: uppercase; color: var(--ice); }
-h1 {
-  font: 800 clamp(44px, 8vw, 104px)/0.92 var(--display);
-  letter-spacing: -0.03em; margin: 12px 0 0;
-  background: linear-gradient(180deg, #fff 30%, #a9c4ff);
-  -webkit-background-clip: text; background-clip: text; color: transparent;
-}
-.live { font: 500 13px/1.4 var(--mono); color: var(--mist); text-align: right; }
-.live b { color: var(--moss); font-weight: 600; }
-.pulse { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--moss); margin-right: 8px; box-shadow: 0 0 0 0 rgba(111, 227, 165, 0.6); animation: pulse 2s infinite; }
-@keyframes pulse { 70% { box-shadow: 0 0 0 10px rgba(111, 227, 165, 0); } 100% { box-shadow: 0 0 0 0 rgba(111, 227, 165, 0); } }
+.topbar { background: var(--teal); border-bottom: 4px solid var(--ink); position: sticky; top: 0; z-index: 5; }
+.topbar .wrap { display: flex; align-items: center; justify-content: space-between; height: 52px; }
+.brand { font: 700 18px var(--pixel); text-decoration: none; display: flex; gap: 10px; align-items: center; }
+.brand i { width: 22px; height: 22px; background: var(--violet); box-shadow: inset -4px -4px 0 rgba(0,0,0,0.25); }
+.nav a { font: 400 13px var(--pixel); text-decoration: none; padding: 8px 10px; }
+.nav a.on { background: var(--ink); color: var(--cream); }
 
-h2 { font: 600 28px/1.1 var(--display); margin: 52px 0 18px; letter-spacing: -0.01em; }
-h2 small { font: 500 12px var(--mono); color: var(--mist); letter-spacing: 0.12em; margin-left: 12px; text-transform: uppercase; }
+.kicker { font: 400 13px var(--pixel); letter-spacing: 0.06em; text-transform: uppercase; }
+h1 { font: 700 clamp(48px, 9vw, 76px)/1 var(--pixel); margin: 6px 0 18px; text-transform: uppercase; letter-spacing: -0.02em; }
+h2 { font: 700 clamp(30px, 5vw, 44px)/1.05 var(--pixel); margin: 0 0 24px; text-transform: uppercase; }
+.lead { max-width: 560px; font-size: 17px; margin: 0 0 18px; }
+.status { font: 400 13px var(--pixel); display: flex; align-items: center; gap: 8px; }
+.status i { width: 12px; height: 12px; background: var(--green); outline: 2px solid var(--ink); }
+.status.off i { background: var(--red); }
 
-/* Leaderboards: a bento with one wide lead card. */
-.boards { display: grid; grid-template-columns: repeat(12, 1fr); gap: 14px; }
-.board {
-  grid-column: span 4; background: linear-gradient(180deg, var(--night-2), rgba(18, 26, 49, 0.6));
-  border: 1px solid var(--line); border-radius: var(--radius-l); padding: 18px 18px 14px;
-  position: relative; overflow: hidden;
-  transition: transform 0.4s var(--ease), border-color 0.3s;
-}
-.board:hover { transform: translateY(-3px); border-color: var(--ice-deep); }
-.board.lead { grid-column: span 8; grid-row: span 2; padding: 26px; }
-.board .label { font: 600 11px/1 var(--mono); letter-spacing: 0.18em; text-transform: uppercase; color: var(--mist); }
-.board .champ { display: flex; align-items: center; gap: 12px; margin: 14px 0 12px; }
-.board .champ img { width: 40px; height: 40px; border-radius: 8px; image-rendering: pixelated; box-shadow: 0 0 0 2px var(--ember); }
-.board.lead .champ img { width: 76px; height: 76px; border-radius: 12px; }
-.board .champ .who { font: 600 16px var(--sans); }
-.board.lead .champ .who { font: 800 34px/1 var(--display); }
-.board .champ .val { font: 600 22px var(--mono); color: var(--ember); }
-.board.lead .champ .val { font-size: 46px; line-height: 1; }
-.board .champ .unit { font: 500 12px var(--mono); color: var(--mist); margin-left: 4px; }
-.rows { display: grid; gap: 6px; }
-.row { display: grid; grid-template-columns: 18px 1fr auto; gap: 10px; align-items: center; font-size: 13px; }
-.row .rank { font: 600 11px var(--mono); color: var(--mist); }
-.row .bar { position: relative; height: 22px; border-radius: var(--radius-s); background: rgba(127, 214, 255, 0.06); overflow: hidden; }
-.row .bar span { position: absolute; inset: 0 auto 0 0; background: linear-gradient(90deg, rgba(58, 143, 209, 0.55), rgba(127, 214, 255, 0.35)); transform-origin: left; transition: transform 0.8s var(--ease); }
-.row:first-child .bar span { background: linear-gradient(90deg, rgba(226, 116, 43, 0.6), rgba(255, 179, 92, 0.4)); }
-.row .bar em { position: relative; font-style: normal; padding-left: 8px; line-height: 22px; }
-.row .num { font: 500 12px var(--mono); color: var(--frost); }
+.tiles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 28px; }
+.tile { padding: 18px 18px 16px; color: var(--ink); }
+.tile b { display: block; font: 700 clamp(30px, 4.4vw, 44px)/1 var(--pixel); }
+.tile span { font: 400 12px var(--pixel); text-transform: uppercase; display: block; margin-top: 12px; }
+.tile:nth-child(1) { background: var(--green); }
+.tile:nth-child(2) { background: var(--purple); }
+.tile:nth-child(3) { background: var(--teal); }
+.tile:nth-child(4) { background: var(--red); }
 
-/* Roster */
-.roster { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 14px; }
-.card {
-  display: grid; grid-template-columns: 64px 1fr; gap: 14px; align-items: center;
-  padding: 16px; border-radius: var(--radius-l); border: 1px solid var(--line);
-  background: var(--night-2); transition: transform 0.35s var(--ease), background 0.3s, border-color 0.3s;
-}
-.card:hover { transform: translateY(-3px) rotate(-0.4deg); background: var(--night-3); border-color: var(--ice); }
-.card:focus-visible, .tab:focus-visible, .back:focus-visible, input:focus-visible { outline: 2px solid var(--ice); outline-offset: 3px; }
-.card img { width: 64px; height: 64px; border-radius: 10px; image-rendering: pixelated; }
-.card .name { font: 600 19px/1.2 var(--display); display: flex; align-items: center; gap: 8px; }
-.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--line); flex: none; }
-.dot.on { background: var(--moss); box-shadow: 0 0 10px var(--moss); }
-.card .meta { font: 400 12px/1.6 var(--mono); color: var(--mist); }
+.box { background: var(--cream); box-shadow: var(--frame); padding: 18px 20px; }
+.fact { display: flex; align-items: center; gap: 16px; }
+.fact .text { flex: 1; display: flex; align-items: center; gap: 10px; font-size: 17px; }
+.fact .text a { font-weight: 600; }
+.btn { font: 400 12px var(--pixel); background: var(--cream); color: var(--ink); border: 0; box-shadow: var(--frame-s); padding: 9px 12px; cursor: pointer; text-transform: uppercase; }
+.btn:hover { background: var(--yellow); }
+.btn:active { transform: translate(3px, 3px); box-shadow: 0 -3px 0 0 var(--ink), 0 3px 0 0 var(--ink), -3px 0 0 0 var(--ink), 3px 0 0 0 var(--ink); }
+.btn:focus-visible, .chip:focus-visible, .row a:focus-visible, .tab:focus-visible { outline: 3px dashed var(--ink); outline-offset: 4px; }
 
-/* Player detail */
-.back { display: inline-flex; gap: 8px; align-items: center; margin-top: 28px; font: 500 13px var(--mono); color: var(--mist); padding: 6px 10px; border-radius: var(--radius-s); }
-.back:hover { color: var(--frost); background: var(--night-2); }
-.hero { display: grid; grid-template-columns: 180px 1fr; gap: 32px; align-items: end; margin-top: 18px; padding-bottom: 28px; border-bottom: 1px solid var(--line); }
-.hero img { width: 180px; height: auto; image-rendering: pixelated; filter: drop-shadow(0 18px 30px rgba(127, 214, 255, 0.25)); }
-.hero h1 { font-size: clamp(40px, 7vw, 88px); }
-.hero .sub { font: 500 13px var(--mono); color: var(--mist); margin-top: 10px; }
-.facts { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: var(--radius-l); overflow: hidden; margin-top: 28px; }
-.fact { background: var(--night-2); padding: 16px 18px; }
-.fact .v { font: 600 26px/1.1 var(--mono); }
-.fact .k { font: 500 11px/1.3 var(--mono); letter-spacing: 0.12em; text-transform: uppercase; color: var(--mist); margin-top: 6px; }
-.fact.hot .v { color: var(--ember); }
-.tabs { display: flex; flex-wrap: wrap; gap: 6px; margin: 34px 0 14px; }
-.tab { font: 500 13px var(--sans); color: var(--mist); padding: 8px 14px; border-radius: 999px; border: 1px solid var(--line); background: transparent; cursor: pointer; transition: all 0.25s; }
-.tab:hover { color: var(--frost); border-color: var(--ice-deep); }
-.tab.on { color: var(--night); background: var(--ice); border-color: var(--ice); }
-.tab .c { font: 400 11px var(--mono); opacity: 0.7; margin-left: 6px; }
-.filter { width: 100%; max-width: 340px; padding: 10px 14px; border-radius: var(--radius-s); border: 1px solid var(--line); background: var(--night-2); color: var(--frost); font: 14px var(--sans); margin-bottom: 12px; }
-table { width: 100%; border-collapse: collapse; }
-td { padding: 7px 10px; border-bottom: 1px solid rgba(38, 50, 90, 0.6); font-size: 14px; }
-td.n { font-family: var(--mono); text-align: right; width: 120px; }
-td.b { width: 40%; }
-td.b div { height: 6px; border-radius: 3px; background: linear-gradient(90deg, var(--ice-deep), var(--ice)); }
-tr:hover td { background: rgba(127, 214, 255, 0.04); }
-.empty { color: var(--mist); font: 13px var(--mono); padding: 18px 0; }
-footer { margin-top: 70px; color: var(--mist); font: 12px var(--mono); }
+.sec-title { display: flex; align-items: center; gap: 12px; }
+.sec-title i { width: 18px; height: 18px; background: var(--cream); outline: 3px solid var(--ink); }
+.chips { display: flex; flex-wrap: wrap; gap: 14px 16px; }
+.chip { display: inline-flex; align-items: center; gap: 8px; background: var(--violet); color: #fff; text-decoration: none; padding: 4px 10px 4px 4px; box-shadow: var(--frame-s); font-weight: 600; }
+.chip:hover { background: var(--ink); }
+.chip small { font: 400 11px var(--pixel); display: inline-flex; align-items: center; gap: 5px; opacity: 0.95; }
+.chip small::before { content: ""; width: 8px; height: 8px; background: var(--red); outline: 1px solid var(--ink); }
+.empty { font: 400 13px var(--pixel); opacity: 0.8; }
 
-@media (max-width: 820px) {
-  .board, .board.lead { grid-column: span 12; grid-row: auto; }
-  header.top { grid-template-columns: 1fr; }
-  .live { text-align: left; }
-  .hero { grid-template-columns: 1fr; }
-  .hero img { width: 120px; }
-  td.b { display: none; }
+.boards-head { display: flex; justify-content: space-between; align-items: end; gap: 12px; flex-wrap: wrap; margin-bottom: 26px; }
+.boards-head h2 { margin: 0; }
+.boards-head p { margin: 0; font-size: 14px; opacity: 0.75; }
+.boards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 36px 34px; }
+.board { box-shadow: var(--frame); padding: 16px 16px 10px; }
+.board header { display: flex; gap: 12px; align-items: center; margin-bottom: 12px; }
+.board header .ico { width: 36px; height: 36px; background: var(--ink); display: grid; place-items: center; flex: none; }
+.board header .ico svg { width: 22px; height: 22px; }
+.board h3 { font: 700 19px/1.1 var(--pixel); margin: 0; }
+.board header p { margin: 2px 0 0; font-size: 13px; font-weight: 600; opacity: 0.7; }
+.board.dark { color: var(--cream); }
+.board.dark header .ico { background: var(--cream); }
+.row { display: grid; grid-template-columns: 26px 26px 1fr auto; gap: 8px; align-items: center; padding: 6px 0; border-top: 2px solid rgba(22, 18, 15, 0.18); }
+.board.dark .row { border-top-color: rgba(255, 246, 224, 0.18); }
+.row:first-of-type { border-top: 0; }
+.rank { font: 700 12px var(--pixel); width: 24px; height: 24px; display: grid; place-items: center; }
+.row.top .rank { background: var(--ink); color: var(--cream); }
+.board.dark .row.top .rank { background: var(--yellow); color: var(--ink); }
+.row a { text-decoration: none; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row a:hover { text-decoration: underline; text-decoration-thickness: 2px; }
+.row .v { font: 700 13px var(--pixel); white-space: nowrap; }
+
+/* player page */
+.profile { display: grid; grid-template-columns: 160px 1fr; gap: 36px; align-items: end; }
+.profile img { width: 160px; image-rendering: pixelated; filter: drop-shadow(8px 8px 0 var(--ink)); }
+.profile .back { font: 400 13px var(--pixel); text-decoration: none; display: inline-block; margin-bottom: 18px; }
+.profile .back:hover { text-decoration: underline; }
+.badge { font: 400 12px var(--pixel); background: var(--cream); padding: 4px 8px; box-shadow: var(--frame-s); display: inline-flex; gap: 6px; align-items: center; margin-left: 4px; }
+.badge i { width: 9px; height: 9px; background: var(--red); outline: 1px solid var(--ink); }
+.badge.on i { background: var(--green); }
+.ptiles { display: grid; grid-template-columns: repeat(5, 1fr); gap: 24px; }
+.ptiles .tile { background: var(--cream); }
+.ptiles .tile:nth-child(5n+1) { background: var(--green); }
+.ptiles .tile:nth-child(5n+2) { background: var(--purple); }
+.ptiles .tile:nth-child(5n+3) { background: var(--teal); }
+.ptiles .tile:nth-child(5n+4) { background: var(--red); }
+.ptiles .tile:nth-child(5n+5) { background: var(--yellow); }
+.ptiles .tile b { font-size: clamp(22px, 3vw, 30px); }
+.tabs { display: flex; flex-wrap: wrap; gap: 14px; margin-bottom: 26px; }
+.tab { font: 400 12px var(--pixel); border: 0; background: var(--cream); color: var(--ink); box-shadow: var(--frame-s); padding: 8px 11px; cursor: pointer; text-transform: uppercase; }
+.tab:hover { background: var(--yellow); }
+.tab.on { background: var(--ink); color: var(--cream); }
+.tab small { opacity: 0.6; margin-left: 4px; }
+.filter { font: 600 15px var(--sans); background: #fff; border: 0; box-shadow: var(--frame-s); padding: 9px 12px; width: 100%; max-width: 320px; margin-bottom: 22px; color: var(--ink); }
+.filter:focus { outline: 3px dashed var(--ink); outline-offset: 4px; }
+.table { box-shadow: var(--frame); background: #fff; }
+.trow { display: grid; grid-template-columns: 1fr 34% 130px; gap: 14px; align-items: center; padding: 8px 14px; border-top: 2px solid rgba(22, 18, 15, 0.1); }
+.trow:first-child { border-top: 0; }
+.trow:hover { background: var(--cream); }
+.trow .bar { height: 10px; background: rgba(22, 18, 15, 0.08); }
+.trow .bar span { display: block; height: 100%; background: var(--teal); box-shadow: inset 0 -3px 0 rgba(0,0,0,0.18); }
+.trow .v { font: 700 13px var(--pixel); text-align: right; }
+
+footer { background: var(--ink); color: var(--cream); padding: 26px 0; font: 400 12px var(--pixel); }
+
+@media (max-width: 860px) {
+  .tiles { grid-template-columns: repeat(2, 1fr); gap: 20px; }
+  .ptiles { grid-template-columns: repeat(2, 1fr); gap: 20px; }
+  .boards { grid-template-columns: 1fr; }
+  .profile { grid-template-columns: 1fr; gap: 20px; }
+  .profile img { width: 110px; }
+  .trow { grid-template-columns: 1fr 110px; }
+  .trow .bar { display: none; }
+  .fact { flex-direction: column; align-items: flex-start; }
+  .nav { display: none; }
 }
-@media (prefers-reduced-motion: reduce) {
-  *, *::before { animation: none !important; transition: none !important; }
-}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 </style>
 </head>
 <body>
-<div class="wrap">
-  <header class="top">
-    <div>
-      <div class="kicker">Server-Almanach</div>
-      <h1>Winterprojekt</h1>
-    </div>
-    <div class="live" id="live">lädt…</div>
-  </header>
-  <main id="view" aria-live="polite"></main>
-  <footer>Statistiken der Spieler, live für alle, die gerade online sind.</footer>
-</div>
+<div class="topbar"><div class="wrap">
+  <a class="brand" href="#/"><i></i>Winterprojekt</a>
+  <nav class="nav" aria-label="Navigation"><a class="on" href="#/">Stats</a></nav>
+</div></div>
+<main id="view" aria-live="polite"></main>
+<footer><div class="wrap">Winterprojekt · Statistiken live vom Server</div></footer>
 <script>
 "use strict";
 const CM_PER_KM = 100000;
 const TICKS_PER_HOUR = 72000;
+const TICKS_PER_DAY = TICKS_PER_HOUR * 24;
 const POLL_MS = 5000;
+const TOP = 10;
+
 const CAT = {
+  "minecraft:custom": "Allgemein",
   "minecraft:mined": "Abgebaut",
   "minecraft:used": "Benutzt",
   "minecraft:crafted": "Hergestellt",
-  "minecraft:broken": "Kaputt gegangen",
+  "minecraft:broken": "Verbraucht",
   "minecraft:picked_up": "Aufgehoben",
   "minecraft:dropped": "Fallengelassen",
   "minecraft:killed": "Getötet",
   "minecraft:killed_by": "Getötet von",
-  "minecraft:custom": "Allgemein",
 };
 const CUSTOM = {
   play_time: "Spielzeit", deaths: "Tode", mob_kills: "Mob-Kills", player_kills: "Spieler-Kills",
@@ -190,90 +187,173 @@ const CUSTOM = {
   boat_one_cm: "Boot gefahren", horse_one_cm: "Geritten", minecart_one_cm: "Lore gefahren",
   climb_one_cm: "Geklettert", walk_on_water_one_cm: "Auf Wasser gelaufen", walk_under_water_one_cm: "Unter Wasser gelaufen",
   leave_game: "Spiel verlassen", time_since_death: "Zeit seit letztem Tod", time_since_rest: "Zeit seit letztem Schlaf",
-  sneak_time: "Geschlichen (Zeit)", total_world_time: "Zeit in der Welt", open_chest: "Truhen geöffnet",
+  sneak_time: "Schleichzeit", total_world_time: "Zeit in der Welt", open_chest: "Truhen geöffnet",
   open_enderchest: "Endertruhen geöffnet", drop: "Items gedroppt", sleep_in_bed: "Im Bett geschlafen",
   traded_with_villager: "Mit Dorfbewohnern gehandelt", enchant_item: "Items verzaubert", fish_caught: "Fische gefangen",
   animals_bred: "Tiere gezüchtet", eat_cake_slice: "Kuchenstücke gegessen", interact_with_crafting_table: "Werkbank benutzt",
   interact_with_furnace: "Ofen benutzt", interact_with_anvil: "Amboss benutzt", raid_win: "Überfälle gewonnen",
   bell_ring: "Glocke geläutet", target_hit: "Zielblock getroffen", play_record: "Schallplatten abgespielt",
 };
+// Facts for the "Wusstest du?" box: key, sentence after the name.
+const FACTS = [
+  ["traded_with_villager", v => `hat ${fmt(v)} Mal mit Dorfbewohnern gehandelt.`],
+  ["jump", v => `ist ${fmt(v)} Mal gesprungen.`],
+  ["deaths", v => `ist schon ${fmt(v)} Mal gestorben.`],
+  ["open_chest", v => `hat ${fmt(v)} Truhen aufgemacht.`],
+  ["aviate_one_cm", v => `ist ${fmt(v / CM_PER_KM, 1)} km mit der Elytra geflogen.`],
+  ["fish_caught", v => `hat ${fmt(v)} Fische geangelt.`],
+  ["animals_bred", v => `hat ${fmt(v)} Tiere gezüchtet.`],
+  ["sleep_in_bed", v => `hat ${fmt(v)} Mal im Bett geschlafen.`],
+  ["eat_cake_slice", v => `hat ${fmt(v)} Stück Kuchen gegessen.`],
+  ["fall_one_cm", v => `ist insgesamt ${fmt(v / 100)} Blöcke tief gefallen.`],
+  ["swim_one_cm", v => `ist ${fmt(v / CM_PER_KM, 2)} km geschwommen.`],
+  ["enchant_item", v => `hat ${fmt(v)} Items verzaubert.`],
+  ["mob_kills", v => `hat ${fmt(v)} Mobs erledigt.`],
+  ["damage_taken", v => `hat ${fmt(v / 20)} Herzen Schaden eingesteckt.`],
+];
+
+// 7x7 pixel icons, "#" = filled.
+const ICONS = {
+  clock: [" ##### ", "#  #  #", "#  #  #", "#  ### ", "#     #", "#     #", " ##### "],
+  pick:  ["  #### ", "     ##", "    # #", "   #  #", "  #    ", " #     ", "#      "],
+  boot:  ["  ##   ", "  ##   ", "  ##   ", "  ##   ", "  #### ", "#######", "#######"],
+  wing:  ["#      ", "##     ", "###    ", "####   ", "#####  ", "###### ", "#######"],
+  sword: ["     ##", "    ###", "   ### ", "# ###  ", " ##    ", " ##    ", "#  #   "],
+  skull: [" ##### ", "#######", "#  #  #", "#######", " ##### ", " # # # ", "       "],
+  cross: ["   #   ", "   #   ", "#######", "   #   ", "   #   ", "   #   ", "   #   "],
+  hammer:["#####  ", "#####  ", "  #    ", "  #    ", "  #    ", "  #    ", "  #    "],
+  heart: [" ## ## ", "#######", "#######", " ##### ", "  ###  ", "   #   ", "       "],
+  gem:   [" ##### ", "#######", " ##### ", "  ###  ", "   #   ", "       ", "       "],
+  coin:  ["  ###  ", " #   # ", "# ### #", "# #   #", "# ### #", " #   # ", "  ###  "],
+  up:    ["   #   ", "  ###  ", " ##### ", "   #   ", "   #   ", "   #   ", "   #   "],
+};
+const svg = (name, color) => `<svg viewBox="0 0 7 7" aria-hidden="true" shape-rendering="crispEdges">${
+  ICONS[name].flatMap((r, y) => [...r].map((ch, x) => ch === "#" ? `<rect x="${x}" y="${y}" width="1" height="1" style="fill:${color}"/>` : "")).join("")}</svg>`;
+
 const BOARDS = [
-  { key: "play", label: "Spielzeit", unit: "h", lead: true, get: s => c(s, "play_time") / TICKS_PER_HOUR, digits: 1 },
-  { key: "mined", label: "Abgebaute Blöcke", unit: "", get: s => sum(s, "minecraft:mined") },
-  { key: "walk", label: "Zu Fuß", unit: "km", get: s => (c(s, "walk_one_cm") + c(s, "sprint_one_cm") + c(s, "crouch_one_cm")) / CM_PER_KM, digits: 1 },
-  { key: "elytra", label: "Elytra-Flug", unit: "km", get: s => c(s, "aviate_one_cm") / CM_PER_KM, digits: 1 },
-  { key: "mobs", label: "Mob-Kills", unit: "", get: s => c(s, "mob_kills") },
-  { key: "pvp", label: "Spieler-Kills", unit: "", get: s => c(s, "player_kills") },
-  { key: "deaths", label: "Tode", unit: "", get: s => c(s, "deaths") },
-  { key: "crafted", label: "Hergestellt", unit: "", get: s => sum(s, "minecraft:crafted") },
-  { key: "damage", label: "Schaden ausgeteilt", unit: "♥", get: s => c(s, "damage_dealt") / 20, digits: 0 },
+  { title: "Sitzfleisch", sub: "Meiste Spielzeit", bg: "var(--blue)", icon: "clock", get: s => c(s, "play_time"), show: playTime },
+  { title: "Bergbau AG", sub: "Meiste Blöcke abgebaut", bg: "var(--yellow)", icon: "pick", get: s => sum(s, "minecraft:mined") },
+  { title: "Diamantenfieber", sub: "Diamanterz abgebaut", bg: "var(--teal)", icon: "gem",
+    get: s => item(s, "minecraft:mined", "diamond_ore") + item(s, "minecraft:mined", "deepslate_diamond_ore") },
+  { title: "Monsterschreck", sub: "Meiste Mobs erledigt", bg: "var(--green)", icon: "sword", get: s => c(s, "mob_kills") },
+  { title: "Kopfgeldjäger", sub: "Meiste Spieler erledigt", bg: "var(--orange)", icon: "cross", get: s => c(s, "player_kills") },
+  { title: "Stammgast im Jenseits", sub: "Meiste Tode", bg: "var(--night)", dark: true, icon: "skull", get: s => c(s, "deaths") },
+  { title: "Wandervogel", sub: "Weiteste Strecke zu Fuß", bg: "var(--pink)", icon: "boot",
+    get: s => (c(s, "walk_one_cm") + c(s, "sprint_one_cm") + c(s, "crouch_one_cm")) / CM_PER_KM, show: v => fmt(v, 1) + " km" },
+  { title: "Himmelsstürmer", sub: "Weiteste Strecke mit Elytra", bg: "var(--purple)", icon: "wing",
+    get: s => c(s, "aviate_one_cm") / CM_PER_KM, show: v => fmt(v, 1) + " km" },
+  { title: "Schlagkraft", sub: "Meisten Schaden ausgeteilt", bg: "var(--red)", icon: "heart",
+    get: s => c(s, "damage_dealt") / 20, show: v => fmt(v) + " ♥" },
+  { title: "Werkbankheld", sub: "Meiste Items hergestellt", bg: "var(--orange)", icon: "hammer", get: s => sum(s, "minecraft:crafted") },
+  { title: "Feilscher", sub: "Meiste Trades mit Dorfbewohnern", bg: "var(--green)", icon: "coin", get: s => c(s, "traded_with_villager") },
+  { title: "Flummi", sub: "Meiste Sprünge", bg: "var(--blue)", icon: "up", get: s => c(s, "jump") },
 ];
 
 let players = [];
+let lastJson = "";
 let lastUpdate = 0;
-let tab = "minecraft:mined";
+let reachable = true;
+let tab = "minecraft:custom";
 let query = "";
+let factSeed = Math.random();
 
 const c = (s, k) => ((s && s["minecraft:custom"]) || {})["minecraft:" + k] || 0;
+const item = (s, cat, k) => ((s && s[cat]) || {})["minecraft:" + k] || 0;
 const sum = (s, cat) => Object.values((s && s[cat]) || {}).reduce((a, b) => a + b, 0);
-const fmt = (n, d = 0) => n.toLocaleString("de-DE", { maximumFractionDigits: d, minimumFractionDigits: 0 });
+const fmt = (n, d = 0) => Number(n).toLocaleString("de-DE", { maximumFractionDigits: d });
 const esc = t => String(t).replace(/[&<>"']/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
-const head = (p, size = 64) => `https://mc-heads.net/avatar/${encodeURIComponent(p.uuid)}/${size}`;
+const head = (p, size) => `<img class="head" src="skin/head/${encodeURIComponent(p.uuid)}" alt="" width="${size}" height="${size}" loading="lazy">`;
+const link = p => `#/${encodeURIComponent(p.uuid)}`;
 const human = id => id.replace(/^minecraft:/, "").split("_").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+
+function playTime(ticks) {
+  const d = Math.floor(ticks / TICKS_PER_DAY);
+  const h = Math.floor((ticks % TICKS_PER_DAY) / TICKS_PER_HOUR);
+  return d ? `${d} T ${h} Std` : `${fmt(ticks / TICKS_PER_HOUR, 1)} Std`;
+}
 
 function customValue(key, v) {
   const k = key.replace(/^minecraft:/, "");
   if (k.endsWith("_one_cm")) return fmt(v / CM_PER_KM, 2) + " km";
-  if (k.endsWith("_time") || k.startsWith("time_since")) return fmt(v / TICKS_PER_HOUR, 1) + " h";
-  if (k.startsWith("damage_")) return fmt(v / 20, 0) + " ♥";
+  if (k.endsWith("_time") || k.startsWith("time_since")) return playTime(v);
+  if (k.startsWith("damage_")) return fmt(v / 20) + " ♥";
   return fmt(v);
 }
 
-function boardHtml(b) {
-  const ranked = players.map(p => ({ p, v: b.get(p.stats) })).filter(r => r.v > 0).sort((x, y) => y.v - x.v);
-  if (!ranked.length) {
-    return `<section class="board${b.lead ? " lead" : ""}"><div class="label">${esc(b.label)}</div><p class="empty">Noch niemand.</p></section>`;
-  }
-  const top = ranked[0];
-  const max = top.v;
-  const rows = ranked.slice(0, b.lead ? 6 : 3).map((r, i) => `
-    <div class="row"><span class="rank">${i + 1}</span>
-      <div class="bar"><span style="transform:scaleX(${(r.v / max).toFixed(4)})"></span><em>${esc(r.p.name)}</em></div>
-      <span class="num">${fmt(r.v, b.digits || 0)}</span></div>`).join("");
-  return `<section class="board${b.lead ? " lead" : ""}">
-    <div class="label">${esc(b.label)}</div>
-    <a class="champ" href="#/${encodeURIComponent(top.p.uuid)}">
-      <img src="${head(top.p, b.lead ? 96 : 48)}" alt="" width="40" height="40" loading="lazy">
-      <div><div class="who">${esc(top.p.name)}</div>
-      <div><span class="val">${fmt(top.v, b.digits || 0)}</span><span class="unit">${esc(b.unit)}</span></div></div>
-    </a>
-    <div class="rows">${rows}</div></section>`;
+function header() {
+  const online = players.filter(p => p.online).length;
+  const when = lastUpdate ? new Date(lastUpdate).toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "–";
+  return `<section class="band teal"><div class="wrap">
+      <div class="kicker">Live vom Server</div>
+      <h1>Stats</h1>
+      <p class="lead">Wer ist gerade drauf, wer spielt am meisten, wer stirbt am häufigsten und wer gräbt die meisten Diamanten aus.</p>
+      <div class="status${reachable ? "" : " off"}"><i></i>${reachable ? `Server online · ${online} Spieler drauf · Stand ${when}` : "Server nicht erreichbar"}</div>
+    </div></section>`;
+}
+
+function tiles() {
+  const online = players.filter(p => p.online).length;
+  const hours = players.reduce((a, p) => a + c(p.stats, "play_time"), 0) / TICKS_PER_HOUR;
+  const deaths = players.reduce((a, p) => a + c(p.stats, "deaths"), 0);
+  return `<section class="band dark"><div class="wrap tiles">
+      <div class="tile"><b>${online}</b><span>Online</span></div>
+      <div class="tile"><b>${players.length}</b><span>Spieler</span></div>
+      <div class="tile"><b>${fmt(hours)}</b><span>Stunden gespielt</span></div>
+      <div class="tile"><b>${fmt(deaths)}</b><span>Tode</span></div>
+    </div></section>`;
+}
+
+function fact() {
+  const pool = [];
+  for (const p of players) for (const [k, say] of FACTS) { const v = c(p.stats, k); if (v > 0) pool.push([p, say(v)]); }
+  if (!pool.length) return "";
+  const [p, text] = pool[Math.floor(factSeed * pool.length) % pool.length];
+  return `<section class="band yellow"><div class="wrap"><div class="box fact">
+      <div><div class="kicker">Wusstest du?</div>
+      <div class="text">${head(p, 26)}<span><a href="${link(p)}">${esc(p.name)}</a> ${esc(text)}</span></div></div>
+      <button class="btn" id="nextfact" type="button">Noch einer</button>
+    </div></div></section>`;
+}
+
+function onlineBand() {
+  const on = players.filter(p => p.online).sort((a, b) => c(b.stats, "play_time") - c(a.stats, "play_time"));
+  const chips = on.map(p => `<a class="chip" href="${link(p)}">${head(p, 28)}${esc(p.name)}<small>${fmt(c(p.stats, "play_time") / TICKS_PER_HOUR)} h</small></a>`).join("");
+  return `<section class="band green"><div class="wrap">
+      <h2 class="sec-title"><i></i>Gerade online (${on.length})</h2>
+      <div class="chips">${chips || '<p class="empty">Gerade ist niemand online.</p>'}</div>
+    </div></section>`;
+}
+
+function board(b) {
+  const ranked = players.map(p => ({ p, v: b.get(p.stats) })).filter(r => r.v > 0).sort((x, y) => y.v - x.v).slice(0, TOP);
+  const rows = ranked.map((r, i) => `<div class="row${i < 3 ? " top" : ""}">
+      <span class="rank">${i + 1}</span>${head(r.p, 24)}
+      <a href="${link(r.p)}">${esc(r.p.name)}</a><span class="v">${(b.show || fmt)(r.v)}</span></div>`).join("");
+  return `<article class="board${b.dark ? " dark" : ""}" style="background:${b.bg}">
+      <header><span class="ico">${svg(b.icon, b.dark ? "#16120f" : b.bg)}</span>
+      <div><h3>${esc(b.title)}</h3><p>${esc(b.sub)}</p></div></header>
+      ${rows || '<p class="empty">Noch niemand.</p>'}
+    </article>`;
 }
 
 function overview() {
-  const sorted = [...players].sort((a, b) => (b.online - a.online) || (c(b.stats, "play_time") - c(a.stats, "play_time")));
-  const cards = sorted.map(p => `
-    <a class="card" href="#/${encodeURIComponent(p.uuid)}">
-      <img src="${head(p)}" alt="" width="64" height="64" loading="lazy">
-      <div><div class="name"><span class="dot${p.online ? " on" : ""}" title="${p.online ? "online" : "offline"}"></span>${esc(p.name)}</div>
-      <div class="meta">${fmt(c(p.stats, "play_time") / TICKS_PER_HOUR, 1)} h gespielt<br>${fmt(c(p.stats, "mob_kills"))} Kills · ${fmt(c(p.stats, "deaths"))} Tode</div></div>
-    </a>`).join("");
-  return `<h2>Spitzenreiter<small>live</small></h2>
-    <div class="boards">${BOARDS.map(boardHtml).join("")}</div>
-    <h2>Spieler<small>${players.length}</small></h2>
-    <div class="roster">${cards || '<p class="empty">Noch keine Statistiken.</p>'}</div>`;
+  return header() + tiles() + fact() + onlineBand() +
+    `<section class="band cream"><div class="wrap">
+      <div class="boards-head"><h2>Bestenlisten</h2><p>Top ${TOP} · Name anklicken für die ganze Spielerseite</p></div>
+      <div class="boards">${BOARDS.map(board).join("")}</div>
+    </div></section>`;
 }
 
-function categoryRows(p) {
+function tableRows(p) {
   const entries = Object.entries((p.stats && p.stats[tab]) || {})
     .map(([k, v]) => [k, v, tab === "minecraft:custom" ? (CUSTOM[k.replace(/^minecraft:/, "")] || human(k)) : human(k)])
     .filter(([, , name]) => name.toLowerCase().includes(query.toLowerCase()))
     .sort((a, b) => b[1] - a[1]);
   if (!entries.length) return '<p class="empty">Nichts gefunden.</p>';
   const max = entries[0][1] || 1;
-  return `<table><tbody>${entries.map(([k, v, name]) => `<tr>
-    <td>${esc(name)}</td><td class="b"><div style="width:${Math.max(2, (v / max) * 100).toFixed(1)}%"></div></td>
-    <td class="n">${tab === "minecraft:custom" ? customValue(k, v) : fmt(v)}</td></tr>`).join("")}</tbody></table>`;
+  return `<div class="table">${entries.map(([k, v, name]) => `<div class="trow"><span>${esc(name)}</span>
+      <span class="bar"><span style="width:${Math.max(2, (v / max) * 100).toFixed(1)}%"></span></span>
+      <span class="v">${tab === "minecraft:custom" ? customValue(k, v) : fmt(v)}</span></div>`).join("")}</div>`;
 }
 
 function detail(p) {
@@ -281,31 +361,31 @@ function detail(p) {
   const kills = c(s, "mob_kills") + c(s, "player_kills");
   const deaths = c(s, "deaths");
   const facts = [
-    ["Spielzeit", fmt(c(s, "play_time") / TICKS_PER_HOUR, 1) + " h", true],
-    ["Abgebaut", fmt(sum(s, "minecraft:mined"))],
-    ["Hergestellt", fmt(sum(s, "minecraft:crafted"))],
-    ["Mob-Kills", fmt(c(s, "mob_kills"))],
-    ["Spieler-Kills", fmt(c(s, "player_kills"))],
-    ["Tode", fmt(deaths)],
-    ["K/D", deaths ? fmt(kills / deaths, 2) : fmt(kills)],
-    ["Zu Fuß", fmt((c(s, "walk_one_cm") + c(s, "sprint_one_cm") + c(s, "crouch_one_cm")) / CM_PER_KM, 1) + " km"],
-    ["Elytra", fmt(c(s, "aviate_one_cm") / CM_PER_KM, 1) + " km"],
-    ["Sprünge", fmt(c(s, "jump"))],
+    [playTime(c(s, "play_time")), "Spielzeit"],
+    [fmt(sum(s, "minecraft:mined")), "Abgebaut"],
+    [fmt(c(s, "mob_kills")), "Mob-Kills"],
+    [fmt(deaths), "Tode"],
+    [deaths ? fmt(kills / deaths, 2) : fmt(kills), "K/D"],
+    [fmt(sum(s, "minecraft:crafted")), "Hergestellt"],
+    [fmt(c(s, "player_kills")), "Spieler-Kills"],
+    [fmt((c(s, "walk_one_cm") + c(s, "sprint_one_cm") + c(s, "crouch_one_cm")) / CM_PER_KM, 1) + " km", "Zu Fuß"],
+    [fmt(c(s, "aviate_one_cm") / CM_PER_KM, 1) + " km", "Elytra"],
+    [fmt(c(s, "jump")), "Sprünge"],
   ];
-  const tabs = Object.keys(CAT).map(k => {
-    const n = Object.keys((s && s[k]) || {}).length;
-    return `<button class="tab${k === tab ? " on" : ""}" data-tab="${k}">${CAT[k]}<span class="c">${n}</span></button>`;
-  }).join("");
-  return `<a class="back" href="#/">← Alle Spieler</a>
-    <section class="hero">
-      <img src="https://mc-heads.net/body/${encodeURIComponent(p.uuid)}/180" alt="Skin von ${esc(p.name)}" width="180" height="432">
-      <div><div class="kicker">${p.online ? "● online" : "offline"}</div><h1>${esc(p.name)}</h1>
-      <div class="sub">${esc(p.uuid)}</div></div>
-    </section>
-    <div class="facts">${facts.map(([k, v, hot]) => `<div class="fact${hot ? " hot" : ""}"><div class="v">${v}</div><div class="k">${k}</div></div>`).join("")}</div>
-    <div class="tabs" role="tablist">${tabs}</div>
-    <input class="filter" id="filter" placeholder="Filtern…" value="${esc(query)}" aria-label="Einträge filtern">
-    <div id="rows">${categoryRows(p)}</div>`;
+  const tabs = Object.keys(CAT).map(k => `<button type="button" class="tab${k === tab ? " on" : ""}" data-tab="${k}">${CAT[k]}<small>${Object.keys((s && s[k]) || {}).length}</small></button>`).join("");
+  return `<section class="band teal"><div class="wrap profile">
+      <img src="skin/body/${encodeURIComponent(p.uuid)}" alt="Skin von ${esc(p.name)}" width="160" height="360">
+      <div><a class="back" href="#/">← Alle Stats</a>
+        <div class="kicker">Spieler <span class="badge${p.online ? " on" : ""}"><i></i>${p.online ? "online" : "offline"}</span></div>
+        <h1>${esc(p.name)}</h1></div>
+    </div></section>
+    <section class="band dark"><div class="wrap ptiles">${facts.map(([v, k]) => `<div class="tile"><b>${v}</b><span>${k}</span></div>`).join("")}</div></section>
+    <section class="band cream"><div class="wrap">
+      <h2>Alle Statistiken</h2>
+      <div class="tabs" role="tablist">${tabs}</div>
+      <input class="filter" id="filter" placeholder="Suchen…" value="${esc(query)}" aria-label="Einträge filtern">
+      <div id="rows">${tableRows(p)}</div>
+    </div></section>`;
 }
 
 function render() {
@@ -316,28 +396,31 @@ function render() {
     const focused = document.activeElement && document.activeElement.id === "filter";
     view.innerHTML = detail(p);
     const filter = document.getElementById("filter");
-    filter.addEventListener("input", e => { query = e.target.value; document.getElementById("rows").innerHTML = categoryRows(p); });
+    filter.addEventListener("input", e => { query = e.target.value; document.getElementById("rows").innerHTML = tableRows(p); });
     if (focused) { filter.focus(); filter.setSelectionRange(query.length, query.length); }
     view.querySelectorAll(".tab").forEach(b => b.addEventListener("click", () => { tab = b.dataset.tab; query = ""; render(); }));
   } else {
     view.innerHTML = overview();
+    const next = document.getElementById("nextfact");
+    if (next) next.addEventListener("click", () => { factSeed = Math.random(); render(); });
   }
-  const online = players.filter(x => x.online).length;
-  document.getElementById("live").innerHTML = `<span class="pulse"></span><b>${online}</b> online · ${players.length} Spieler<br>aktualisiert ${new Date(lastUpdate).toLocaleTimeString("de-DE")}`;
 }
 
 async function load() {
   try {
     const r = await fetch("api/stats", { cache: "no-store" });
-    if (!r.ok) throw new Error(r.status);
-    players = await r.json();
+    if (!r.ok) throw new Error(String(r.status));
+    const text = await r.text();
     lastUpdate = Date.now();
-    render();
+    const changed = text !== lastJson || !reachable;
+    reachable = true;
+    // Same numbers: keep the page (and its images) as it is.
+    if (changed) { lastJson = text; players = JSON.parse(text); render(); }
   } catch (e) {
-    document.getElementById("live").textContent = "Server nicht erreichbar, neuer Versuch…";
+    if (reachable) { reachable = false; render(); }
   }
 }
-window.addEventListener("hashchange", () => { query = ""; render(); window.scrollTo(0, 0); });
+window.addEventListener("hashchange", () => { query = ""; tab = "minecraft:custom"; render(); window.scrollTo(0, 0); });
 load();
 setInterval(load, POLL_MS);
 </script>
