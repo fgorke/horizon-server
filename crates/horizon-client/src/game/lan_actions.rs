@@ -1163,6 +1163,8 @@ impl Game<'_> {
                 }
                 // SWAP_ITEM_WITH_OFFHAND: the hands swap and the item in use stops
                 // (ServerGamePacketListenerImpl.handlePlayerAction), not for spectators.
+                // A spawn glide's boost takes the key instead.
+                7 if !spectator && self.spawn_elytra_boost(host, conn) => {}
                 7 if !spectator => {
                     let g = &mut host.hub.guests[gi];
                     let slot = g.selected;
@@ -2632,6 +2634,7 @@ impl Game<'_> {
             .guest_mut(conn)
             .and_then(|g| g.moves.last().map(|m| m.0[1]))
             .unwrap_or(0.0);
+        self.spawn_elytra_tick(host, conn);
         self.guest_glide_tick(host, conn, fell);
         let Some(g) = host.hub.guest_mut(conn) else {
             return;
@@ -2913,8 +2916,9 @@ impl Game<'_> {
         if g.flying || g.on_ground || g.vehicle.is_some() {
             return Some(false);
         }
+        let spawn = g.spawn_gliding;
         self.as_guest(host, conn, |game| {
-            game.glider_worn() && game.potions.effects.get("levitation").is_none()
+            (spawn || game.glider_worn()) && game.potions.effects.get("levitation").is_none()
         })
     }
 
@@ -2933,7 +2937,8 @@ impl Game<'_> {
             }
             return;
         }
-        let creative = g.creative();
+        // A spawn glide wears no elytra.
+        let creative = g.creative() || g.spawn_gliding;
         if let Some(m) = g.motion.as_mut()
             && fell > -0.5
             && m.fall_distance > 1.0

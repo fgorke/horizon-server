@@ -2179,6 +2179,10 @@ impl Hub {
                 // handlePlayerAbilities: the client flies only if it may.
                 S::PlayerAbilities(p) => {
                     let g = &mut self.guests[i];
+                    // Spawn elytra: a double jump where it may starts a glide.
+                    if p.flags & 2 != 0 && g.spawn_may_fly && !g.creative() && !g.spectator() {
+                        g.spawn_jump = true;
+                    }
                     g.flying = p.flags & 2 != 0 && (g.creative() || g.spectator());
                 }
                 S::MovePlayerPos(p) => {

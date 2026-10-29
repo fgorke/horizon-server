@@ -110,6 +110,13 @@ pub struct Guest {
     pub sprinting: bool,
     pub fall_flying: bool,
     pub flying: bool,
+    /// Spawn elytra (game/spawn_elytra.rs): it may double-jump into a
+    /// glide here, it asked to (a double jump), it glides so, and it
+    /// used that glide's boost.
+    pub spawn_may_fly: bool,
+    pub spawn_jump: bool,
+    pub spawn_gliding: bool,
+    pub spawn_boosted: bool,
     pub sleeping: bool,
     /// `LivingEntity.DATA_LIVING_ENTITY_FLAGS`: 1 while using an item, 2 if
     /// it is in the off hand.
@@ -301,6 +308,10 @@ impl Guest {
             sprinting: false,
             fall_flying: false,
             flying: false,
+            spawn_may_fly: false,
+            spawn_jump: false,
+            spawn_gliding: false,
+            spawn_boosted: false,
             sleeping: false,
             living_flags: 0,
             bed: None,
@@ -424,7 +435,7 @@ impl Guest {
         if self.flying || self.spectator() {
             f |= 2;
         }
-        if self.creative() || self.spectator() {
+        if self.creative() || self.spectator() || self.spawn_may_fly {
             f |= 4;
         }
         if self.creative() {
