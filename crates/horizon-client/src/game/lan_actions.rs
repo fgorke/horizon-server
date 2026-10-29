@@ -2781,7 +2781,13 @@ impl Game<'_> {
         });
         for event in events {
             match event {
-                MotionEvent::HurtSound(sound) => self.player_hurt_sound(sound, at),
+                // Player.playSound: the others hear it from the server, the
+                // guest's own client plays it (LivingEntity.handleDamageEvent).
+                MotionEvent::HurtSound(sound) => {
+                    self.audio.play_unshared(sound, Some(at), 1.0, 1.0);
+                    let source = horizon_client::settings::sound_source(sound) as i32;
+                    host.hub.sound(sound, at, 1.0, 1.0, source, Some(conn));
+                }
                 // LivingEntity.checkFallDamage: the crumbs reach every player.
                 MotionEvent::Fall(horizon_client::landing::FallEvent::Particles {
                     state,
