@@ -255,8 +255,9 @@ experimental = ["ui", "render", "input", "recipes"]
         needed(imports(&wasm).unwrap().iter().map(String::as_str)).0
     };
     assert_eq!(level("coords_hud.hmod"), 0);
-    // The UI guest draws far terrain (`render.set-far-terrain`).
-    assert_eq!(level("horizon_mods_test_ui_guest.hmod"), LEVEL);
+    // The UI guest draws far terrain (`render.set-far-terrain`, level 7).
+    assert_eq!(level("horizon_mods_test_ui_guest.hmod"), 7);
+    assert!(LEVEL >= 7);
 }
 
 #[test]
@@ -997,6 +998,34 @@ fn alex() -> ServerPlayer {
         game_mode: GameMode::Survival,
         health: 20.0,
     }
+}
+
+/// A server's plugins (`plugins/<name>/<plugin>.hmod`) keep their storage in `data/` of their
+/// own folder, not in the shared store beside them.
+#[test]
+fn a_plugin_keeps_its_data_in_its_own_folder() {
+    let plugins = mods_dir().join("plugins");
+    let _ = std::fs::remove_dir_all(&plugins);
+    let folder = plugins.join("greeter");
+    std::fs::create_dir_all(&folder).unwrap();
+    let path = folder.join("welcome.hmod");
+    std::fs::copy(mods_dir().join("welcome.hmod"), &path).unwrap();
+    let mut mods = Mods::load_plugins(std::slice::from_ref(&path), |_| false);
+    assert!(mods.runs_server());
+    let alex = alex();
+    mods.set_snapshot(Snapshot {
+        players: vec![alex.clone()],
+        ..Snapshot::default()
+    });
+    mods.player_joined(&alex);
+    mods.drain();
+    assert!(
+        folder.join("data/seen").is_file(),
+        "welcome remembers Alex in its own data/"
+    );
+    assert!(!folder.join("seen").exists());
+    assert!(!folder.join(horizon_mods::manifest::STORAGE_DIR).exists());
+    assert!(!plugins.join(horizon_mods::manifest::STORAGE_DIR).exists());
 }
 
 #[test]

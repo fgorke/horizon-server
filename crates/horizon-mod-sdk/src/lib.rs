@@ -191,8 +191,11 @@ pub mod server {
         with: {
             "horizon:mods/log@0.1.0": crate::log,
             "horizon:mods/storage@0.1.0": crate::storage,
+            "horizon:mods/command@0.1.0": crate::command,
         },
     });
+    /// Capability `command`: on a server, lines run as the server console.
+    pub use crate::command;
 
     pub use exports::horizon::mods::server_events::{
         Argument, ArgumentKind, ArgumentValue, BlockPos, Guest as __Guest, Registration,

@@ -141,6 +141,7 @@ mod pickups;
 mod piglins;
 mod piston_push;
 mod player_equip;
+mod plugins;
 mod postprocess;
 mod potions;
 mod powder_snow;
@@ -1992,6 +1993,8 @@ struct Game<'a> {
     /// have each chest open.
     lid_openers: HashMap<(i32, i32, i32), i32>,
     lan_acting: Option<u32>,
+    /// Server plugins (game/plugins.rs).
+    plugins: plugins::Plugins,
     /// The name of the guest `lan_acting` acts for (`Player.getName`).
     lan_acting_name: Option<String>,
     /// Their UUID (`Player.getUUID`).
@@ -4235,6 +4238,9 @@ impl Game<'_> {
                 correct_tool,
             )
         });
+        if removed {
+            self.plugin_block_event(pos, broken, false);
+        }
         if removed && !creative {
             let held = self.held().cloned();
             self.mine_block_with_held(&facts.name, facts.hardness);
@@ -4705,6 +4711,7 @@ impl Game<'_> {
         };
         let target = [pos.x, pos.y, pos.z];
         let state = self.apply_item_block_state(target, state, &stack)?;
+        self.plugin_block_event(target, state, true);
         if let Some(entity) = BlockEntity::for_block(&self.res.facts().get(state).name) {
             let key = (target[0], target[1], target[2]);
             self.world.block_entities.insert(key, entity);
@@ -14590,6 +14597,7 @@ impl<'a> Game<'a> {
             lan_global_events: Vec::new(),
             lid_openers: HashMap::new(),
             lan_acting: None,
+            plugins: plugins::Plugins::default(),
             guest_packets: Vec::new(),
             guest_cooldowns: Vec::new(),
             guest_entity_events: Vec::new(),

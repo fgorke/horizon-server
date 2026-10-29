@@ -665,6 +665,12 @@ interface players {
     /// A system message to every player and the server's log, after the
     /// mod's name. Counts toward the same 8 per call.
     broadcast: func(text: string);
+    /// Moves a player as `/execute in <dimension> run tp` does: to `x y z`
+    /// in `dimension` (`minecraft:overworld`, ...), facing `yaw` and
+    /// `pitch`, after this call returns. False when no player with that id
+    /// is online, the dimension is unknown or a number isn't finite. Up to
+    /// 8 per call.
+    teleport: func(player: string, dimension: string, x: f64, y: f64, z: f64, yaw: f32, pitch: f32) -> bool;
 }
 
 /// Capability `world`, server mods only (manifest `api = "0.3"`,
@@ -805,6 +811,9 @@ world horizon-server-mod {
     import storage;
     import players;
     import %world;
+    /// Capability `command`: on a server, vanilla command lines run as the
+    /// server console (permission level 4), after the call returns.
+    import command;
     export server-events;
 }
 

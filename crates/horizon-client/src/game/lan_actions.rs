@@ -1903,6 +1903,10 @@ impl Game<'_> {
         if self.guest_message_command(host, conn, command, signed.as_ref()) {
             return;
         }
+        // A plugin's command, for every player whatever their level.
+        if self.plugin_command(host, conn, command.trim_start_matches('/')) {
+            return;
+        }
         // ListPlayersCommand needs no permission and lists every player.
         let words: Vec<&str> = command.trim_start_matches('/').split(' ').collect();
         if words[0] == "list" && (words.len() == 1 || words[1..] == ["uuids"]) {

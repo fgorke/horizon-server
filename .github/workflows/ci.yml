@@ -53,15 +53,16 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Clippy (server build)
         run: >-
-          cargo clippy --release --locked -p horizon-client --no-default-features --lib --bins
+          cargo clippy --release --locked -p horizon-client --no-default-features --features plugins --lib --bins
           -p horizon-server -p horizon-prepare -p horizon-mods -- -D warnings
       - name: Tests
         run: |
-          cargo test --release --locked -p horizon-client --no-default-features --lib
+          cargo test --release --locked -p horizon-client --no-default-features --features plugins --lib
           cargo test --release --locked -p horizon-server --bin horizon-server
           cargo test --release --locked -p horizon-world --lib
           cargo test --release --locked -p horizon-release-sign
+          cargo test --release --locked -p horizon-mods --features runtime --lib
       - name: The server builds
         run: |
-          cargo build --release --locked -p horizon-client --no-default-features --bin horizon-client
+          cargo build --release --locked -p horizon-client --no-default-features --features plugins --bin horizon-client
           cargo build --release --locked -p horizon-server --bin horizon-server -p horizon-prepare --bin horizon-prepare

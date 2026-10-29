@@ -31,6 +31,14 @@ Everything upstream Horizon's dedicated server does, plus:
 | Server tools | `/tps` (tick rate, MSPT, players, loaded chunks); `horizon-server console` attaches to a running server |
 | Fixes | Ender pearls through End gateways; a neutral mob stays angry at the player who provoked it only; the hurt sound reaches the other players once; PvP death messages name the attacker; no TNT ghost blocks; `x_rotation`/`y_rotation` in selectors; shulker box tooltips; guests' deaths, jumps and crafted items are counted |
 
+## Plugins
+
+Anyone can extend the server with plugins: sandboxed WebAssembly, one folder each in `plugins/`
+(`plugins/<name>/<plugin>.hmod`, its data in `plugins/<name>/data/`). They add commands, hear
+joins, chat and block changes, message and teleport players, read and set blocks, each only as
+far as the capabilities its manifest asks for. Installing and writing one:
+[docs/plugins.md](docs/plugins.md).
+
 ## Ports
 
 | Port | Protocol | What | Change it with |
@@ -69,8 +77,8 @@ git clone https://github.com/fgorke/horizon-server.git
 cd horizon-server
 # The server's game files, from your own 26.3 server jar (needs JDK 25, once):
 cargo run --release -p horizon-prepare -- --prepare --server-jar ~/Downloads/server.jar
-# The engine (headless) and the server CLI:
-cargo build --release --locked -p horizon-client --no-default-features --bin horizon-client
+# The engine (headless, with plugins) and the server CLI:
+cargo build --release --locked -p horizon-client --no-default-features --features plugins --bin horizon-client
 cargo build --release --locked -p horizon-server --bin horizon-server -p horizon-prepare
 # Tests:
 cargo test --release --locked -p horizon-server --bin horizon-server

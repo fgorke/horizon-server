@@ -250,7 +250,11 @@ impl Manifest {
         if let Some(c) = m
             .capabilities
             .iter()
-            .find(|c| c.on_server() != server && **c != Capability::Storage)
+            // storage is both sides'; command runs as the player in a client mod, as the
+            // server console in a server mod.
+            .find(|c| {
+                c.on_server() != server && !matches!(c, Capability::Storage | Capability::Command)
+            })
         {
             let side = if server { "client" } else { "server" };
             return Err(format!("{MANIFEST}: capability {c} is for {side} mods"));

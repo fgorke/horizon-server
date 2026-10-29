@@ -30,6 +30,7 @@ mod server_bindings {
         with: {
             "horizon:mods/log": super::bindings::horizon::mods::log,
             "horizon:mods/storage": super::bindings::horizon::mods::storage,
+            "horizon:mods/command": super::bindings::horizon::mods::command,
         },
     });
 }
@@ -218,6 +219,15 @@ pub enum Output {
     },
     /// `players.broadcast`: a line after the mod's name, to every player.
     Broadcast { name: String, text: String },
+    /// `players.teleport`: the player with this id to a position in a dimension.
+    Teleport {
+        name: String,
+        player: String,
+        dimension: String,
+        at: [f64; 3],
+        yaw: f32,
+        pitch: f32,
+    },
     /// A server mod command's feedback, to the player who typed it.
     Reply {
         player: String,
@@ -441,6 +451,8 @@ pub struct Mods {
     /// Moves on whenever a mod starts or stops: the game resends the server
     /// mods' commands to players when it changes.
     generation: u64,
+    /// Loaded by [`Mods::load_plugins`]: each keeps its `storage` in a folder of its own.
+    plugin_folders: bool,
 }
 
 impl Mods {
@@ -489,7 +501,26 @@ impl Mods {
         enabled: impl Fn(&str) -> bool,
         reserved: impl Fn(&str) -> bool,
     ) -> Mods {
-        let mut mods = Mods::default();
+        Mods::load_into(Mods::default(), runs, paths, enabled, reserved)
+    }
+    /// A server's plugins (`plugins/<name>/<plugin>.hmod`): every server mod in `paths` on,
+    /// each keeping capability `storage` in `data/` of its own folder rather than one shared
+    /// store. `data/` and not the folder itself: a key named `horizon-mod.toml` or
+    /// `x.hmod` there would make a plugin of its own; nothing loads from `data/`.
+    pub fn load_plugins(paths: &[PathBuf], reserved: impl Fn(&str) -> bool) -> Mods {
+        let mods = Mods {
+            plugin_folders: true,
+            ..Mods::default()
+        };
+        Mods::load_into(mods, Runs::Server, paths, |_| true, reserved)
+    }
+    fn load_into(
+        mut mods: Mods,
+        runs: Runs,
+        paths: &[PathBuf],
+        enabled: impl Fn(&str) -> bool,
+        reserved: impl Fn(&str) -> bool,
+    ) -> Mods {
         for path in paths {
             let modified = modified(path);
             let mut entry = Entry {
@@ -587,6 +618,7 @@ impl Mods {
             .collect();
         let snapshot = self.snapshot.clone();
         let world = self.world.clone();
+        let plugin_folders = self.plugin_folders;
         let (engine, linker) = self.engine()?;
         let component =
             Component::new(engine, wasm).map_err(|e| format!("not a component: {e}"))?;
@@ -602,11 +634,14 @@ impl Mods {
         if let Some(why) = crate::api_level::too_new(level, function) {
             return Err(why);
         }
-        let data_dir = path
-            .parent()
-            .unwrap_or(Path::new("."))
-            .join(crate::manifest::STORAGE_DIR)
-            .join(&m.id);
+        let parent = path.parent().unwrap_or(Path::new("."));
+        let data_dir = if plugin_folders {
+            // `plugins/<name>/x.hmod`, or an unpacked plugin `plugins/<name>/` itself.
+            let own = if path.is_dir() { path } else { parent };
+            own.join("data")
+        } else {
+            parent.join(crate::manifest::STORAGE_DIR).join(&m.id)
+        };
         let state = State {
             name: m.name.clone(),
             id: m.id.clone(),
@@ -1610,6 +1645,44 @@ impl players::Host for State {
             name,
             text: clip(text),
         });
+    }
+    fn teleport(
+        &mut self,
+        player: String,
+        dimension: String,
+        x: f64,
+        y: f64,
+        z: f64,
+        yaw: f32,
+        pitch: f32,
+    ) -> bool {
+        let queued = self
+            .out
+            .iter()
+            .filter(|o| matches!(o, Output::Teleport { .. }))
+            .count();
+        let known = matches!(
+            dimension.as_str(),
+            "minecraft:overworld" | "minecraft:the_nether" | "minecraft:the_end"
+        );
+        let finite =
+            [x, y, z].iter().all(|v| v.is_finite()) && yaw.is_finite() && pitch.is_finite();
+        if queued >= CHAT_PER_CALL
+            || !known
+            || !finite
+            || !self.snapshot.players.iter().any(|p| p.id == player)
+        {
+            return false;
+        }
+        self.out.push(Output::Teleport {
+            name: self.name.clone(),
+            player,
+            dimension,
+            at: [x, y, z],
+            yaw,
+            pitch,
+        });
+        true
     }
 }
 /// A key a mod registered (capability `input`).

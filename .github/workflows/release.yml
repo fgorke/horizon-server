@@ -46,7 +46,7 @@ jobs:
           rustup default stable
       - name: Build the engine (headless), horizon-server and horizon-prepare
         run: |
-          cargo build --release --locked -p horizon-client --no-default-features --bin horizon-client
+          cargo build --release --locked -p horizon-client --no-default-features --features plugins --bin horizon-client
           cargo build --release --locked -p horizon-server --bin horizon-server -p horizon-prepare --bin horizon-prepare
       - name: The exporters, from upstream Horizon's ${{ env.EXPORTERS_FROM }} release
         env:

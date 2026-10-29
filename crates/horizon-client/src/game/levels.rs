@@ -113,6 +113,17 @@ pub(super) struct Levels {
 }
 
 impl Levels {
+    /// The chunks of each level not in place (capability `world` lends them to plugins
+    /// for a call).
+    #[cfg_attr(not(feature = "plugins"), allow(dead_code))]
+    pub(super) fn parked_chunks(
+        &mut self,
+    ) -> impl Iterator<Item = (Dim, &mut horizon_client::chunk_map::ChunkMap)> {
+        self.parked
+            .iter_mut()
+            .map(|(d, p)| (*d, &mut p.world.chunks))
+    }
+
     /// The level not in place, in `dim`.
     pub(super) fn parked_mut(&mut self, dim: Dim) -> Option<&mut Parked> {
         self.parked.get_mut(&dim)
@@ -354,6 +365,8 @@ impl Game<'_> {
             };
             self.update_dedicated_streaming();
             self.update_world();
+            // What plugins set in this level since its last tick.
+            self.apply_plugin_block_writes();
             result = if paused {
                 self.tick_lan(true);
                 Ok(())
@@ -371,6 +384,8 @@ impl Game<'_> {
             }
         }
         self.level_pass = Pass::default();
+        // The tick's end for plugins: joins, leaves, what players did, their tick.
+        self.tick_plugins();
         result?;
         self.close_idle_levels()
     }
