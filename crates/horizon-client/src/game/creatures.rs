@@ -655,6 +655,18 @@ impl Game<'_> {
                     None
                 } else {
                     let bound = bindings.get(&m.id).copied();
+                    // The player it was angry with is gone (left, died, another
+                    // level): its target is lost, and nobody else inherits it.
+                    if let Some(conn) = bound
+                        && !guests.iter().any(|g| g.0 == conn)
+                    {
+                        if m.ai.target == Some(Who::Player) {
+                            m.ai.target = None;
+                        }
+                        if m.ai.last_hurt_by == Some(Who::Player) {
+                            m.ai.last_hurt_by = None;
+                        }
+                    }
                     let conn = super::lan_mobs::player_for(m, w.player.as_ref(), &guests, bound);
                     match conn {
                         Some(conn) => {
@@ -701,6 +713,18 @@ impl Game<'_> {
                     gone.push((m.id, m.position, width, height));
                 }
                 if let Some(conn) = seen_guest {
+                    // A group alert (HurtByTargetGoal.alertOthers, a zombified
+                    // piglin's maybeAlertOthers) sets the others on this mob's
+                    // player: they answer to the same guest.
+                    for e in &events[from..] {
+                        if let MobEvent::SetTarget {
+                            mob,
+                            target: Who::Player,
+                        } = e
+                        {
+                            bindings.insert(*mob, conn);
+                        }
+                    }
                     // ShulkerBullet.finalTarget is the guest's entity: the
                     // bullet homes on it while the projectiles tick, where
                     // `Who::Player` is the host's own player.

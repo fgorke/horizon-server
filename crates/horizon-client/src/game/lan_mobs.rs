@@ -69,9 +69,12 @@ fn choose(
     bound: Option<u32>,
 ) -> Option<u32> {
     let targetable = |v: &PlayerView| v.alive && !v.creative && !v.spectator;
+    // The player a mob is angry with stays the one it sees, even while they
+    // can't be targeted (creative, spectator): its target goals then let go
+    // of them as vanilla's do, and no other player inherits the anger.
     if targeting
         && let Some(conn) = bound
-        && guests.iter().any(|(c, v)| *c == conn && targetable(v))
+        && guests.iter().any(|(c, _)| *c == conn)
     {
         return Some(conn);
     }
@@ -440,9 +443,13 @@ mod tests {
         let host = view(1.0, false);
         let guests = vec![(7, view(12.0, false))];
         assert_eq!(choose(MOB, true, Some(&host), &guests, Some(7)), Some(7));
-        // Gone creative: the mob looks again.
+        // Gone creative: the mob still sees them (and lets go), not the host.
         let guests = vec![(7, view(12.0, true))];
-        assert_eq!(choose(MOB, true, Some(&host), &guests, Some(7)), None);
+        assert_eq!(choose(MOB, true, Some(&host), &guests, Some(7)), Some(7));
+        // A creative guest a mob is angry with keeps the anger off the
+        // survival guest beside the mob.
+        let guests = vec![(7, view(12.0, true)), (8, view(2.0, false))];
+        assert_eq!(choose(MOB, true, None, &guests, Some(7)), Some(7));
         // Without a target the nearest player wins.
         let guests = vec![(7, view(12.0, false))];
         assert_eq!(choose(MOB, false, Some(&host), &guests, Some(7)), None);
