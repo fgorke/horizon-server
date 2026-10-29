@@ -23,6 +23,8 @@ Usage: horizon-server [--dir DIR] <command>
               Up or not, TPS, MSPT, players, RAM and CPU
   cmd COMMAND...
               Run a console command on the running server and print what it answers
+  console     Attach to the running server: its log as it comes, and each line typed runs as a
+              console command. `exit`, Ctrl-D or Ctrl-C leave it; the server keeps running
   logs [-f] [-n N]
               The last N lines of the log (default 50); -f follows it
   backup [NAME]
