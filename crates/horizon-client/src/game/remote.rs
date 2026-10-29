@@ -5456,9 +5456,13 @@ impl Game<'_> {
     /// the main hand's item, then the off hand's turn (its block, its item).
     /// The server does each packet's part with that packet's hand only.
     fn remote_use_hands(&mut self) {
-        // A successful Item.use always drops the hand (LocalPlayer.itemUsed).
+        // A successful Item.use drops the hand (`LocalPlayer.itemUsed`), but a
+        // bucket pouring its liquid only swings: the drop would read as a
+        // second animation before the placement swing.
         if self.remote_use_item(Hand::Main) {
-            self.heights.item_used(Hand::Main);
+            if !self.hand_holds_filled_bucket(Hand::Main) {
+                self.heights.item_used(Hand::Main);
+            }
             return;
         }
         // The off hand's turn: the entity again, or the block.
@@ -5470,9 +5474,17 @@ impl Game<'_> {
         if off_target {
             return;
         }
-        if self.remote_use_item(Hand::Off) {
+        if self.remote_use_item(Hand::Off) && !self.hand_holds_filled_bucket(Hand::Off) {
             self.heights.item_used(Hand::Off);
         }
+    }
+    /// Whether `hand` holds a bucket with contents, the liquid it pours.
+    fn hand_holds_filled_bucket(&self, hand: Hand) -> bool {
+        let stack = match hand {
+            Hand::Main => self.held(),
+            Hand::Off => self.offhand.as_ref(),
+        };
+        stack.is_some_and(|s| horizon_client::items::bucket_contents(&s.item).is_some())
     }
     /// `LivingEntity.updatingUsingItem` on a server client: an item held in
     /// use (`held_until_released`), and a consumable's eating animation and

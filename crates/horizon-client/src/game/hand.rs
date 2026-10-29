@@ -241,7 +241,13 @@ impl Game<'_> {
             (Some(a), Some(b)) => a.count != b.count || a.item != b.item || self.creative,
             _ => false,
         };
-        if (swung && spent) || (!using && self.using.is_some() && after.is_some()) {
+        // A bucket pouring its liquid already swings like a placement; the
+        // hand does not also drop to the bottom (`itemUsed`), which would be a
+        // second animation before the swing.
+        let poured = before
+            .as_ref()
+            .is_some_and(|s| horizon_client::items::bucket_contents(&s.item).is_some());
+        if !poured && ((swung && spent) || (!using && self.using.is_some() && after.is_some())) {
             self.heights.item_used(hand);
         }
         Ok(())
