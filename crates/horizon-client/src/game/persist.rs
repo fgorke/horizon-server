@@ -151,6 +151,9 @@ impl Game<'_> {
             for tag in tags {
                 let kind = entity_nbt::kind(&tag).unwrap_or_default();
                 let uuid = entity_nbt::uuid(&tag);
+                if uuid.is_some_and(|u| self.vehicle_by_uuid(u).is_some()) {
+                    continue;
+                }
                 if matches!(
                     kind.as_str(),
                     "minecraft:experience_orb"
@@ -368,8 +371,11 @@ impl Game<'_> {
     }
     /// A saved mob and, under `Passengers`, the mobs riding it.
     pub(super) fn load_mob(&mut self, tag: Tag, mount: Option<u32>) -> Option<u32> {
-        self.next_entity += 1;
         let uuid = entity_nbt::uuid(&tag);
+        if let Some(id) = uuid.and_then(|u| self.vehicle_by_uuid(u)) {
+            return Some(id);
+        }
+        self.next_entity += 1;
         // Structure mobs that generation left to finish: saves from before
         // they were finalized at placement, or a placement that could not.
         let mut tag = tag;
@@ -537,6 +543,76 @@ impl Game<'_> {
             i = j;
         }
         i
+    }
+    /// `RootVehicle.Attach` names the immediate mount, not the root of its tree.
+    pub(super) fn root_vehicle_uuid(&mut self, id: Option<u32>) -> Option<[i32; 4]> {
+        Some(self.uuid_for(id?))
+    }
+    /// The vehicle with this UUID, among the ones in the world.
+    pub(super) fn vehicle_by_uuid(&self, uuid: [i32; 4]) -> Option<u32> {
+        let id = *self
+            .persist
+            .uuids
+            .iter()
+            .find(|(_, u)| **u == uuid)
+            .map(|(id, _)| id)?;
+        let there = self.mobs.iter().any(|m| m.id == id && m.alive())
+            || self.boats.iter().any(|b| b.id == id)
+            || self.carts.iter().any(|c| c.id == id);
+        there.then_some(id)
+    }
+    /// Vanilla stores the root entity in the player's file, outside chunk entities.
+    /// Keep the raw wrapper until attachment succeeds, including unsupported trees.
+    pub(super) fn restore_saved_vehicle(
+        &mut self,
+        uuid: [i32; 4],
+        raw: Option<&Tag>,
+    ) -> Option<u32> {
+        if let Some(id) = self.vehicle_by_uuid(uuid) {
+            return Some(id);
+        }
+        let tag = raw?.get("RootVehicle")?.get("Entity")?.clone();
+        let root_uuid = entity_nbt::uuid(&tag)?;
+        let kind = entity_nbt::kind(&tag)?;
+        if !self.res.mob_types().contains_key(&kind)
+            && super::boats::any_boat_wood(&kind).is_none()
+            && super::minecarts::CartKind::from_id(&kind).is_none()
+        {
+            return None;
+        }
+        if self.vehicle_by_uuid(root_uuid).is_none() {
+            let at = entity_nbt::position(&tag)?;
+            let key = (
+                (at.x.floor() as i32).div_euclid(16),
+                (at.z.floor() as i32).div_euclid(16),
+            );
+            self.world.loaded_entities.push((key, vec![tag]));
+            self.spawn_loaded_entities();
+        }
+        self.vehicle_by_uuid(uuid)
+    }
+    /// `ServerPlayer.loadAndSpawnParentVehicle`: the ride the player's file
+    /// names, once the vehicle is in the world.
+    pub(super) fn restore_root_vehicle(&mut self) {
+        if self.serving.is_some()
+            || self.options.dedicated.is_some()
+            || self.riding.is_some()
+            || self.player.is_none()
+        {
+            return;
+        }
+        let Some(uuid) = self.pending_vehicle else {
+            return;
+        };
+        let raw = self.level.player_extra.clone();
+        let Some(id) = self.restore_saved_vehicle(uuid, raw.as_ref()) else {
+            return;
+        };
+        if let Some(Tag::Compound(p)) = &mut self.level.player_extra {
+            p.remove(&"RootVehicle".into());
+        }
+        self.pending_vehicle = None;
+        self.riding = Some(id);
     }
     /// A mob's entity tag with the mobs riding it under `Passengers`.
     pub(super) fn mob_tree_nbt(&mut self, i: usize) -> Tag {
