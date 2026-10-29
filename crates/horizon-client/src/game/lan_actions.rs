@@ -1916,6 +1916,48 @@ impl Game<'_> {
             );
             return;
         }
+        if words == ["spawn"] {
+            self.respawn_at_world_spawn(host, conn);
+            return;
+        }
+        if words[0] == "dimension" {
+            let op = host.hub.guest(conn).is_some_and(|g| g.permission >= 2);
+            let reply = match (op, words.get(1).copied(), words.get(2).copied()) {
+                (false, ..) => "§cDafür brauchst du OP.".to_owned(),
+                (true, Some(dim @ ("nether" | "end")), Some(state @ ("on" | "off"))) => {
+                    let open = state == "on";
+                    let ok = if dim == "nether" {
+                        host.commands.push(GuestCommand {
+                            conn,
+                            command: format!("gamerule allow_entering_nether_using_portals {open}"),
+                            permission: 4,
+                            integrated: false,
+                            quiet: true,
+                        });
+                        true
+                    } else {
+                        super::dimensions::set_end_open(&self.world_root, open)
+                    };
+                    match (ok, open) {
+                        (false, _) => "§cKonnte die Einstellung nicht speichern.".to_owned(),
+                        (true, true) => format!("§a{dim} ist jetzt offen."),
+                        (true, false) => format!("§c{dim} ist jetzt gesperrt."),
+                    }
+                }
+                _ => "§eBenutzung: /dimension <nether|end> <on|off>".to_owned(),
+            };
+            let content = horizon_client::lan::data::component_nbt(
+                &horizon_client::text::Text::legacy(&reply).component(),
+            );
+            host.hub.send_to(
+                conn,
+                &C::SystemChat(play::SystemChat {
+                    content,
+                    overlay: false,
+                }),
+            );
+            return;
+        }
         if words == ["tps"] {
             let content =
                 horizon_client::lan::data::component_nbt(&self.tps_reply(host).component());

@@ -2927,6 +2927,19 @@ fn with_builtin_commands(mods: &serde_json::Value) -> serde_json::Value {
         children
             .entry("tps")
             .or_insert_with(|| serde_json::json!({ "type": "literal", "executable": true }));
+        children
+            .entry("spawn")
+            .or_insert_with(|| serde_json::json!({ "type": "literal", "executable": true }));
+        let switch = serde_json::json!({ "type": "literal", "children": {
+            "on": { "type": "literal", "executable": true },
+            "off": { "type": "literal", "executable": true },
+        }});
+        children.entry("dimension").or_insert_with(|| {
+            serde_json::json!({ "type": "literal", "children": {
+                "nether": switch.clone(),
+                "end": switch,
+            }})
+        });
     }
     extra
 }

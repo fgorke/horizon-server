@@ -200,6 +200,22 @@ impl Game<'_> {
             return;
         }
         let (end_portal, gateway) = self.inside_end_portals(at, WIDTH, HEIGHT);
+        // /dimension end off: the End portal takes nobody in.
+        if end_portal && !riding && self.dim != Dim::End && !super::dimensions::end_open(&self.world_root) {
+            if self.portals.player.cooldown == 0 {
+                host.hub.send_to(
+                    conn,
+                    &C::SystemChat(play::SystemChat {
+                        content: horizon_client::lan::data::component_nbt(
+                            &horizon_client::text::Text::legacy("§cDas End ist deaktiviert.").component(),
+                        ),
+                        overlay: true,
+                    }),
+                );
+            }
+            self.portals.player.cooldown = 10;
+            return;
+        }
         if end_portal && !riding {
             // EndPortalBlock.entityInside: the first exit from the End shows the credits.
             if self.dim == Dim::End && !host.hub.guest(conn).is_some_and(|g| g.seen_credits) {
@@ -471,7 +487,7 @@ impl Game<'_> {
 
     /// TeleportTransition.missingRespawnBlock: the world spawn, in the
     /// Overworld.
-    fn respawn_at_world_spawn(&mut self, host: &mut LanHost, conn: u32) {
+    pub(super) fn respawn_at_world_spawn(&mut self, host: &mut LanHost, conn: u32) {
         let at = self.level.world_spawn.map_or(
             self.spawn.map_or([0.5, 80.0, 0.5], |s| [s.x, s.y, s.z]),
             |[x, y, z]| [f64::from(x) + 0.5, f64::from(y), f64::from(z) + 0.5],
