@@ -227,6 +227,10 @@ const ICONS = {
   gem:   [" ##### ", "#######", " ##### ", "  ###  ", "   #   ", "       ", "       "],
   coin:  ["  ###  ", " #   # ", "# ### #", "# #   #", "# ### #", " #   # ", "  ###  "],
   up:    ["   #   ", "  ###  ", " ##### ", "   #   ", "   #   ", "   #   ", "   #   "],
+  block: ["  ###  ", " #####", "#######", "### ###", "## # ##", "#  #  #", " ##### "],
+  totem: ["  ###  ", " # # # ", "  ###  ", "#######", "  ###  ", "  # #  ", " ## ## "],
+  book:  ["###### ", "#    ##", "# ## ##", "#    ##", "# ## ##", "#    ##", "###### "],
+  zzz:   ["   ####", "     # ", "    #  ", "#### ##", "  #    ", " #     ", "####   "],
 };
 const svg = (name, color) => `<svg viewBox="0 0 7 7" aria-hidden="true" shape-rendering="crispEdges">${
   ICONS[name].flatMap((r, y) => [...r].map((ch, x) => ch === "#" ? `<rect x="${x}" y="${y}" width="1" height="1" style="fill:${color}"/>` : "")).join("")}</svg>`;
@@ -248,6 +252,10 @@ const BOARDS = [
   { title: "Werkbankheld", sub: "Meiste Items hergestellt", bg: "var(--orange)", icon: "hammer", get: s => sum(s, "minecraft:crafted") },
   { title: "Feilscher", sub: "Meiste Trades mit Dorfbewohnern", bg: "var(--green)", icon: "coin", get: s => c(s, "traded_with_villager") },
   { title: "Flummi", sub: "Meiste Sprünge", bg: "var(--blue)", icon: "up", get: s => c(s, "jump") },
+  { title: "Baumeister", sub: "Meiste Blöcke platziert", bg: "var(--yellow)", icon: "block", get: s => placed(s) },
+  { title: "Zauberlehrling", sub: "Meiste Items verzaubert", bg: "var(--purple)", icon: "book", get: s => c(s, "enchant_item") },
+  { title: "Unsterblich", sub: "Meiste Totems verbraucht", bg: "var(--orange)", icon: "totem", get: s => totems(s) },
+  { title: "Schlafmütze", sub: "Längste AFK-Zeit", bg: "var(--night)", dark: true, icon: "zzz", get: (s, p) => afkTicks(p), show: playTime },
 ];
 
 let players = [];
@@ -261,6 +269,12 @@ let factSeed = Math.random();
 const c = (s, k) => ((s && s["minecraft:custom"]) || {})["minecraft:" + k] || 0;
 const item = (s, cat, k) => ((s && s[cat]) || {})["minecraft:" + k] || 0;
 const sum = (s, cat) => Object.values((s && s[cat]) || {}).reduce((a, b) => a + b, 0);
+// Blocks placed: the "used" count of every item that is a block (a block name in de_de.json).
+const placed = s => Object.entries((s && s["minecraft:used"]) || {})
+  .filter(([id]) => LANG["block.minecraft." + id.replace(/^minecraft:/, "")])
+  .reduce((a, [, v]) => a + v, 0);
+const totems = s => item(s, "minecraft:used", "totem_of_undying");
+const afkTicks = p => (p.afk || 0) * 20;
 const fmt = (n, d = 0) => Number(n).toLocaleString("de-DE", { maximumFractionDigits: d });
 const esc = t => String(t).replace(/[&<>"']/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
 const head = (p, size) => `<img class="head" src="skin/head/${encodeURIComponent(p.uuid)}" alt="" width="${size}" height="${size}" loading="lazy">`;
@@ -340,7 +354,7 @@ function onlineBand() {
 }
 
 function board(b) {
-  const ranked = players.map(p => ({ p, v: b.get(p.stats) })).filter(r => r.v > 0).sort((x, y) => y.v - x.v).slice(0, TOP);
+  const ranked = players.map(p => ({ p, v: b.get(p.stats, p) })).filter(r => r.v > 0).sort((x, y) => y.v - x.v).slice(0, TOP);
   const rows = ranked.map((r, i) => `<div class="row${i < 3 ? " top" : ""}">
       <span class="rank">${i + 1}</span>${head(r.p, 24)}
       <a href="${link(r.p)}">${esc(r.p.name)}</a><span class="v">${(b.show || fmt)(r.v)}</span></div>`).join("");
@@ -359,8 +373,12 @@ function overview() {
     </div></section>`;
 }
 
+// General statistics the player page leaves out.
+const HIDDEN = new Set(["talked_to_villager", "total_world_time", "walk_under_water_one_cm", "leave_game"].map(k => "minecraft:" + k));
+
 function tableRows(p) {
   const entries = Object.entries((p.stats && p.stats[tab]) || {})
+    .filter(([k]) => tab !== "minecraft:custom" || !HIDDEN.has(k))
     .map(([k, v]) => [k, v, nameOf(tab, k)])
     .filter(([, , name]) => name.toLowerCase().includes(query.toLowerCase()))
     .sort((a, b) => b[1] - a[1]);
@@ -377,17 +395,22 @@ function detail(p) {
   const deaths = c(s, "deaths");
   const facts = [
     [playTime(c(s, "play_time")), "Spielzeit"],
+    [playTime(afkTicks(p)), "Davon AFK"],
     [fmt(sum(s, "minecraft:mined")), "Abgebaut"],
+    [fmt(placed(s)), "Platziert"],
+    [fmt(sum(s, "minecraft:crafted")), "Hergestellt"],
     [fmt(c(s, "mob_kills")), "Mob-Kills"],
+    [fmt(c(s, "player_kills")), "Spieler-Kills"],
     [fmt(deaths), "Tode"],
     [deaths ? fmt(kills / deaths, 2) : fmt(kills), "K/D (PvP)"],
-    [fmt(sum(s, "minecraft:crafted")), "Hergestellt"],
-    [fmt(c(s, "player_kills")), "Spieler-Kills"],
+    [fmt(totems(s)), "Totems verbraucht"],
+    [fmt(c(s, "enchant_item")), "Verzaubert"],
     [fmt((c(s, "walk_one_cm") + c(s, "sprint_one_cm") + c(s, "crouch_one_cm")) / CM_PER_KM, 1) + " km", "Zu Fuß"],
     [fmt(c(s, "aviate_one_cm") / CM_PER_KM, 1) + " km", "Elytra"],
     [fmt(c(s, "jump")), "Sprünge"],
+    [fmt(c(s, "traded_with_villager")), "Trades"],
   ];
-  const tabs = Object.keys(CAT).map(k => `<button type="button" class="tab${k === tab ? " on" : ""}" data-tab="${k}">${CAT[k]}<small>${Object.keys((s && s[k]) || {}).length}</small></button>`).join("");
+  const tabs = Object.keys(CAT).map(k => `<button type="button" class="tab${k === tab ? " on" : ""}" data-tab="${k}">${CAT[k]}<small>${Object.keys((s && s[k]) || {}).filter(id => k !== "minecraft:custom" || !HIDDEN.has(id)).length}</small></button>`).join("");
   return `<section class="band teal"><div class="wrap profile">
       <img src="skin/body/${encodeURIComponent(p.uuid)}" alt="Skin von ${esc(p.name)}" width="160" height="360">
       <div><a class="back" href="#/">← Alle Stats</a>

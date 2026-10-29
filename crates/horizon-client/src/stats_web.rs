@@ -35,6 +35,10 @@ pub struct LivePlayer {
 #[derive(Default)]
 struct State {
     live: BTreeMap<String, LivePlayer>,
+    /// Seconds each player (dashed UUID) has been away from the keyboard.
+    afk: BTreeMap<String, u64>,
+    /// Where `afk` is kept.
+    afk_path: PathBuf,
     /// The block, item, entity and statistic names of de_de.json, as JSON.
     lang: String,
     /// (`head`/`body`, uuid): when fetched, the PNG.
@@ -50,7 +54,13 @@ impl StatsWeb {
     /// `usercache`.
     pub fn start(port: u16, world: PathBuf, usercache: PathBuf, lang: &Path) -> std::io::Result<Self> {
         let listener = TcpListener::bind(("0.0.0.0", port))?;
+        let afk_path = world.join("horizon-afk.json");
         let state = Arc::new(Mutex::new(State {
+            afk: std::fs::read(&afk_path)
+                .ok()
+                .and_then(|b| serde_json::from_slice(&b).ok())
+                .unwrap_or_default(),
+            afk_path,
             lang: names_of(lang),
             ..State::default()
         }));
@@ -88,6 +98,20 @@ impl StatsWeb {
     /// An online player's counters now; the others are read from disk.
     pub fn set_player(&self, uuid: u128, player: LivePlayer) {
         self.lock().live.insert(dashed(uuid), player);
+    }
+
+    /// Seconds a player has been away, added up.
+    pub fn add_afk(&self, uuid: u128, seconds: u64) {
+        *self.lock().afk.entry(dashed(uuid)).or_default() += seconds;
+    }
+
+    /// Writes the AFK times to their file.
+    pub fn save_afk(&self) {
+        let state = self.lock();
+        let text = serde_json::to_string_pretty(&state.afk).unwrap_or_default();
+        if let Err(e) = std::fs::write(&state.afk_path, text) {
+            log::warn!("stats page: {}: {e}", state.afk_path.display());
+        }
     }
 
     /// The player left: their file is up to date again.
@@ -160,13 +184,13 @@ fn players(state: &State, world: &Path, usercache: &Path) -> Value {
                 .map(|v| v["stats"].clone())
                 .unwrap_or_else(|| json!({}));
             let name = names.get(&uuid).cloned().unwrap_or_else(|| uuid[..8].to_owned());
-            out.insert(uuid.clone(), json!({ "uuid": uuid, "name": name, "online": false, "stats": stats }));
+            out.insert(uuid.clone(), json!({ "uuid": uuid, "name": name, "online": false, "stats": stats, "afk": state.afk.get(&uuid).copied().unwrap_or(0) }));
         }
     }
     for (uuid, p) in &state.live {
         out.insert(
             uuid.clone(),
-            json!({ "uuid": uuid, "name": p.name, "online": true, "stats": p.stats }),
+            json!({ "uuid": uuid, "name": p.name, "online": true, "stats": p.stats, "afk": state.afk.get(uuid).copied().unwrap_or(0) }),
         );
     }
     Value::Array(out.into_values().collect())
