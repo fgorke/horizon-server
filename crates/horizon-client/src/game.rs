@@ -1962,6 +1962,10 @@ struct Game<'a> {
     /// Block events (position, b0, b1, state) and entity events (id, event,
     /// position) for the guests.
     lan_block_events: Vec<([i32; 3], i32, i32, u32)>,
+    /// How many of the level's logged block changes came before this tick's
+    /// block events: the last tick's entities and block entities ran after the
+    /// hub, and vanilla sends what they changed at that tick's end.
+    lan_changes_before_events: usize,
     lan_entity_events: Vec<(i32, i8, [f64; 3])>,
     /// Successful crits (attacking guest, hit entity), queued while the hub is taken.
     lan_critical_hits: Vec<(Option<u32>, i32, bool)>,
@@ -5703,6 +5707,7 @@ impl Game<'_> {
         // items, popped crops) moves on the tick it appears, as in vanilla.
         horizon_client::spans::time("tick_local_hand", || self.tick_local_hand())?;
         horizon_client::spans::time("postprocess_chunks", || self.postprocess_chunks())?;
+        self.lan_changes_before_events = self.world.block_log.as_ref().map_or(0, Vec::len);
         if running {
             horizon_client::spans::time("tick_blocks", || self.tick_blocks())?;
         }
@@ -14570,6 +14575,7 @@ impl<'a> Game<'a> {
             lan_songs: Vec::new(),
             lan_cushion_breaks: Vec::new(),
             lan_block_events: Vec::new(),
+            lan_changes_before_events: 0,
             lan_entity_events: Vec::new(),
             lan_critical_hits: Vec::new(),
             lan_kinetic_hits: Vec::new(),

@@ -76,6 +76,7 @@ pub(super) struct Parked {
     lid_openers: HashMap<(i32, i32, i32), i32>,
     lan_events: Vec<(i32, [i32; 3], i32, Option<u32>)>,
     lan_block_events: Vec<([i32; 3], i32, i32, u32)>,
+    lan_changes_before_events: usize,
     lan_entity_events: Vec<(i32, i8, [f64; 3])>,
     lan_critical_hits: Vec<(Option<u32>, i32, bool)>,
     /// Only the per-level parts of these are used (`swap_level`).
@@ -176,6 +177,7 @@ impl Game<'_> {
             lid_openers: HashMap::new(),
             lan_events: Vec::new(),
             lan_block_events: Vec::new(),
+            lan_changes_before_events: 0,
             lan_entity_events: Vec::new(),
             lan_critical_hits: Vec::new(),
             anims: Default::default(),
@@ -230,6 +232,7 @@ impl Game<'_> {
         swap(&mut self.lid_openers, &mut p.lid_openers);
         swap(&mut self.lan_events, &mut p.lan_events);
         swap(&mut self.lan_block_events, &mut p.lan_block_events);
+        swap(&mut self.lan_changes_before_events, &mut p.lan_changes_before_events);
         swap(&mut self.lan_entity_events, &mut p.lan_entity_events);
         swap(&mut self.lan_critical_hits, &mut p.lan_critical_hits);
         let (a, b) = (&mut self.be_anims, &mut p.anims);

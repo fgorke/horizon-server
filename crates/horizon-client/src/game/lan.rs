@@ -1600,7 +1600,14 @@ impl Game<'_> {
             // `runBlockEvents`' broadcast precedes the tick's block changes
             // (`ChunkHolder.broadcastChanges` in `tick_level` below): the
             // guest re-runs a piston's `triggerEvent` while its level still
-            // has the blocks as they were before the move.
+            // has the blocks as they were before the move. What changed
+            // before the events ran (the last tick's TNT, falling blocks and
+            // block entities, sent at that tick's end in vanilla) goes first,
+            // or the guest would move blocks an explosion already removed.
+            let before = std::mem::take(&mut self.lan_changes_before_events);
+            if has_guests && before > 0 {
+                host.hub.flush_block_changes(&mut self.world, before);
+            }
             for (pos, b0, b1, state) in std::mem::take(&mut self.lan_block_events) {
                 host.hub.block_event(pos, b0, b1, state);
             }

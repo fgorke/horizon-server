@@ -1523,6 +1523,17 @@ impl Hub {
         }
     }
 
+    /// Sends the first `count` logged block changes now; the rest go out with
+    /// the tick's other changes.
+    pub fn flush_block_changes(&mut self, world: &mut World, count: usize) {
+        let Some(log) = world.block_log.as_mut() else {
+            return;
+        };
+        let rest = log.split_off(count.min(log.len()));
+        self.broadcast_block_changes(world);
+        world.block_log = Some(rest);
+    }
+
     fn broadcast_block_changes(&mut self, world: &mut World) {
         let Some(log) = world.block_log.as_mut() else {
             return;
