@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="de">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -160,7 +160,7 @@ footer { background: var(--ink); color: var(--cream); padding: 26px 0; font: 400
   <nav class="nav" aria-label="Navigation"><a class="on" href="#/">Stats</a></nav>
 </div></div>
 <main id="view" aria-live="polite"></main>
-<footer><div class="wrap"><span id="world-foot">Server</span> · Statistiken live vom Server</div></footer>
+<footer><div class="wrap"><span id="world-foot">Server</span> · <span id="foot"></span></div></footer>
 <script>
 "use strict";
 const CM_PER_KM = 100000;
@@ -169,49 +169,127 @@ const TICKS_PER_DAY = TICKS_PER_HOUR * 24;
 const POLL_MS = 5000;
 const TOP = 10;
 
-const CAT = {
-  "minecraft:custom": "Allgemein",
-  "minecraft:mined": "Abgebaut",
-  "minecraft:used": "Benutzt",
-  "minecraft:crafted": "Hergestellt",
-  "minecraft:broken": "Verbraucht",
-  "minecraft:picked_up": "Aufgehoben",
-  "minecraft:dropped": "Fallengelassen",
-  "minecraft:killed": "Getötet",
-  "minecraft:killed_by": "Getötet von",
+// The page's words, by language: English, and German for a server whose language file is de_*.
+const TEXT = {
+  en: {
+    locale: "en-US",
+    foot: "Live statistics from the server",
+    cat: {
+      "minecraft:custom": "General", "minecraft:mined": "Mined", "minecraft:used": "Used",
+      "minecraft:crafted": "Crafted", "minecraft:broken": "Broken", "minecraft:picked_up": "Picked up",
+      "minecraft:dropped": "Dropped", "minecraft:killed": "Killed", "minecraft:killed_by": "Killed by",
+    },
+    // General statistics take their names from the language file.
+    custom: {},
+    facts: {
+      traded_with_villager: v => `has traded with villagers ${fmt(v)} times.`,
+      jump: v => `has jumped ${fmt(v)} times.`,
+      deaths: v => `has died ${fmt(v)} times.`,
+      open_chest: v => `has opened ${fmt(v)} chests.`,
+      aviate_one_cm: v => `has flown ${fmt(v / CM_PER_KM, 1)} km with an elytra.`,
+      fish_caught: v => `has caught ${fmt(v)} fish.`,
+      animals_bred: v => `has bred ${fmt(v)} animals.`,
+      sleep_in_bed: v => `has slept in a bed ${fmt(v)} times.`,
+      eat_cake_slice: v => `has eaten ${fmt(v)} slices of cake.`,
+      fall_one_cm: v => `has fallen ${fmt(v / 100)} blocks in all.`,
+      swim_one_cm: v => `has swum ${fmt(v / CM_PER_KM, 2)} km.`,
+      enchant_item: v => `has enchanted ${fmt(v)} items.`,
+      mob_kills: v => `has killed ${fmt(v)} mobs.`,
+      damage_taken: v => `has taken ${fmt(v / 20)} hearts of damage.`,
+    },
+    boards: {
+      play: ["Couch Potato", "Most time played"], mined: ["Mining Co.", "Most blocks mined"],
+      diamonds: ["Diamond Fever", "Diamond ore mined"], mobs: ["Monster Hunter", "Most mobs killed"],
+      pvp: ["Bounty Hunter", "Most players killed"], deaths: ["Regular in the Afterlife", "Most deaths"],
+      walk: ["Wanderer", "Farthest on foot"], elytra: ["Sky Rider", "Farthest with an elytra"],
+      damage: ["Heavy Hitter", "Most damage dealt"], crafted: ["Crafting Hero", "Most items crafted"],
+      trades: ["Haggler", "Most villager trades"], jumps: ["Bouncy", "Most jumps"],
+      placed: ["Master Builder", "Most blocks placed"], enchants: ["Apprentice Mage", "Most items enchanted"],
+      totems: ["Undying", "Most totems used"], afk: ["Sleepyhead", "Longest AFK time"],
+    },
+    days: "d", hours: "h",
+    kicker: "Live from the server",
+    lead: "Who is on right now, who plays the most, who dies the most and who digs up the most diamonds.",
+    online: n => `Server online · ${n} players on · as of`,
+    unreachable: "Server unreachable",
+    tiles: ["Online", "Players", "Hours played", "Deaths"],
+    didYouKnow: "Did you know?", another: "Another one",
+    onlineNow: "Online now", nobodyOnline: "Nobody is online right now.",
+    nobodyYet: "Nobody yet.",
+    boardsTitle: "Leaderboards", boardsSub: `Top ${TOP} · click a name for the full player page`,
+    nothing: "Nothing found.",
+    detail: ["Time played", "Of it AFK", "Mined", "Placed", "Crafted", "Mob kills", "Player kills", "Deaths",
+      "K/D (PvP)", "Totems used", "Enchanted", "On foot", "Elytra", "Jumps", "Trades"],
+    skinOf: name => `${name}'s skin`, back: "← All stats", player: "Player",
+    allStats: "All statistics", search: "Search…", filter: "Filter entries",
+  },
+  de: {
+    locale: "de-DE",
+    foot: "Statistiken live vom Server",
+    cat: {
+      "minecraft:custom": "Allgemein", "minecraft:mined": "Abgebaut", "minecraft:used": "Benutzt",
+      "minecraft:crafted": "Hergestellt", "minecraft:broken": "Verbraucht", "minecraft:picked_up": "Aufgehoben",
+      "minecraft:dropped": "Fallengelassen", "minecraft:killed": "Getötet", "minecraft:killed_by": "Getötet von",
+    },
+    custom: {
+      play_time: "Spielzeit", deaths: "Tode", mob_kills: "Mob-Kills", player_kills: "Spieler-Kills",
+      jump: "Sprünge", damage_dealt: "Schaden ausgeteilt", damage_taken: "Schaden erhalten",
+      walk_one_cm: "Gelaufen", sprint_one_cm: "Gesprintet", crouch_one_cm: "Geschlichen",
+      swim_one_cm: "Geschwommen", fall_one_cm: "Gefallen", fly_one_cm: "Geflogen", aviate_one_cm: "Mit Elytra geflogen",
+      boat_one_cm: "Boot gefahren", horse_one_cm: "Geritten", minecart_one_cm: "Lore gefahren",
+      climb_one_cm: "Geklettert", walk_on_water_one_cm: "Auf Wasser gelaufen",
+      time_since_death: "Zeit seit letztem Tod", time_since_rest: "Zeit seit letztem Schlaf",
+      sneak_time: "Schleichzeit", open_chest: "Truhen geöffnet",
+      open_enderchest: "Endertruhen geöffnet", drop: "Items gedroppt", sleep_in_bed: "Im Bett geschlafen",
+      traded_with_villager: "Mit Dorfbewohnern gehandelt", enchant_item: "Items verzaubert", fish_caught: "Fische gefangen",
+      animals_bred: "Tiere gezüchtet", eat_cake_slice: "Kuchenstücke gegessen", interact_with_crafting_table: "Werkbank benutzt",
+      interact_with_furnace: "Ofen benutzt", interact_with_anvil: "Amboss benutzt", raid_win: "Überfälle gewonnen",
+      bell_ring: "Glocke geläutet", target_hit: "Zielblock getroffen", play_record: "Schallplatten abgespielt",
+    },
+    facts: {
+      traded_with_villager: v => `hat ${fmt(v)} Mal mit Dorfbewohnern gehandelt.`,
+      jump: v => `ist ${fmt(v)} Mal gesprungen.`,
+      deaths: v => `ist schon ${fmt(v)} Mal gestorben.`,
+      open_chest: v => `hat ${fmt(v)} Truhen aufgemacht.`,
+      aviate_one_cm: v => `ist ${fmt(v / CM_PER_KM, 1)} km mit der Elytra geflogen.`,
+      fish_caught: v => `hat ${fmt(v)} Fische geangelt.`,
+      animals_bred: v => `hat ${fmt(v)} Tiere gezüchtet.`,
+      sleep_in_bed: v => `hat ${fmt(v)} Mal im Bett geschlafen.`,
+      eat_cake_slice: v => `hat ${fmt(v)} Stück Kuchen gegessen.`,
+      fall_one_cm: v => `ist insgesamt ${fmt(v / 100)} Blöcke tief gefallen.`,
+      swim_one_cm: v => `ist ${fmt(v / CM_PER_KM, 2)} km geschwommen.`,
+      enchant_item: v => `hat ${fmt(v)} Items verzaubert.`,
+      mob_kills: v => `hat ${fmt(v)} Mobs erledigt.`,
+      damage_taken: v => `hat ${fmt(v / 20)} Herzen Schaden eingesteckt.`,
+    },
+    boards: {
+      play: ["Sitzfleisch", "Meiste Spielzeit"], mined: ["Bergbau AG", "Meiste Blöcke abgebaut"],
+      diamonds: ["Diamantenfieber", "Diamanterz abgebaut"], mobs: ["Monsterschreck", "Meiste Mobs erledigt"],
+      pvp: ["Kopfgeldjäger", "Meiste Spieler erledigt"], deaths: ["Stammgast im Jenseits", "Meiste Tode"],
+      walk: ["Wandervogel", "Weiteste Strecke zu Fuß"], elytra: ["Himmelsstürmer", "Weiteste Strecke mit Elytra"],
+      damage: ["Schlagkraft", "Meisten Schaden ausgeteilt"], crafted: ["Werkbankheld", "Meiste Items hergestellt"],
+      trades: ["Feilscher", "Meiste Trades mit Dorfbewohnern"], jumps: ["Flummi", "Meiste Sprünge"],
+      placed: ["Baumeister", "Meiste Blöcke platziert"], enchants: ["Zauberlehrling", "Meiste Items verzaubert"],
+      totems: ["Unsterblich", "Meiste Totems verbraucht"], afk: ["Schlafmütze", "Längste AFK-Zeit"],
+    },
+    days: "T", hours: "Std",
+    kicker: "Live vom Server",
+    lead: "Wer ist gerade drauf, wer spielt am meisten, wer stirbt am häufigsten und wer gräbt die meisten Diamanten aus.",
+    online: n => `Server online · ${n} Spieler drauf · Stand`,
+    unreachable: "Server nicht erreichbar",
+    tiles: ["Online", "Spieler", "Stunden gespielt", "Tode"],
+    didYouKnow: "Wusstest du?", another: "Noch einer",
+    onlineNow: "Gerade online", nobodyOnline: "Gerade ist niemand online.",
+    nobodyYet: "Noch niemand.",
+    boardsTitle: "Bestenlisten", boardsSub: `Top ${TOP} · Name anklicken für die ganze Spielerseite`,
+    nothing: "Nichts gefunden.",
+    detail: ["Spielzeit", "Davon AFK", "Abgebaut", "Platziert", "Hergestellt", "Mob-Kills", "Spieler-Kills", "Tode",
+      "K/D (PvP)", "Totems verbraucht", "Verzaubert", "Zu Fuß", "Elytra", "Sprünge", "Trades"],
+    skinOf: name => `Skin von ${name}`, back: "← Alle Stats", player: "Spieler",
+    allStats: "Alle Statistiken", search: "Suchen…", filter: "Einträge filtern",
+  },
 };
-const CUSTOM = {
-  play_time: "Spielzeit", deaths: "Tode", mob_kills: "Mob-Kills", player_kills: "Spieler-Kills",
-  jump: "Sprünge", damage_dealt: "Schaden ausgeteilt", damage_taken: "Schaden erhalten",
-  walk_one_cm: "Gelaufen", sprint_one_cm: "Gesprintet", crouch_one_cm: "Geschlichen",
-  swim_one_cm: "Geschwommen", fall_one_cm: "Gefallen", fly_one_cm: "Geflogen", aviate_one_cm: "Mit Elytra geflogen",
-  boat_one_cm: "Boot gefahren", horse_one_cm: "Geritten", minecart_one_cm: "Lore gefahren",
-  climb_one_cm: "Geklettert", walk_on_water_one_cm: "Auf Wasser gelaufen", walk_under_water_one_cm: "Unter Wasser gelaufen",
-  leave_game: "Spiel verlassen", time_since_death: "Zeit seit letztem Tod", time_since_rest: "Zeit seit letztem Schlaf",
-  sneak_time: "Schleichzeit", total_world_time: "Zeit in der Welt", open_chest: "Truhen geöffnet",
-  open_enderchest: "Endertruhen geöffnet", drop: "Items gedroppt", sleep_in_bed: "Im Bett geschlafen",
-  traded_with_villager: "Mit Dorfbewohnern gehandelt", enchant_item: "Items verzaubert", fish_caught: "Fische gefangen",
-  animals_bred: "Tiere gezüchtet", eat_cake_slice: "Kuchenstücke gegessen", interact_with_crafting_table: "Werkbank benutzt",
-  interact_with_furnace: "Ofen benutzt", interact_with_anvil: "Amboss benutzt", raid_win: "Überfälle gewonnen",
-  bell_ring: "Glocke geläutet", target_hit: "Zielblock getroffen", play_record: "Schallplatten abgespielt",
-};
-// Facts for the "Wusstest du?" box: key, sentence after the name.
-const FACTS = [
-  ["traded_with_villager", v => `hat ${fmt(v)} Mal mit Dorfbewohnern gehandelt.`],
-  ["jump", v => `ist ${fmt(v)} Mal gesprungen.`],
-  ["deaths", v => `ist schon ${fmt(v)} Mal gestorben.`],
-  ["open_chest", v => `hat ${fmt(v)} Truhen aufgemacht.`],
-  ["aviate_one_cm", v => `ist ${fmt(v / CM_PER_KM, 1)} km mit der Elytra geflogen.`],
-  ["fish_caught", v => `hat ${fmt(v)} Fische geangelt.`],
-  ["animals_bred", v => `hat ${fmt(v)} Tiere gezüchtet.`],
-  ["sleep_in_bed", v => `hat ${fmt(v)} Mal im Bett geschlafen.`],
-  ["eat_cake_slice", v => `hat ${fmt(v)} Stück Kuchen gegessen.`],
-  ["fall_one_cm", v => `ist insgesamt ${fmt(v / 100)} Blöcke tief gefallen.`],
-  ["swim_one_cm", v => `ist ${fmt(v / CM_PER_KM, 2)} km geschwommen.`],
-  ["enchant_item", v => `hat ${fmt(v)} Items verzaubert.`],
-  ["mob_kills", v => `hat ${fmt(v)} Mobs erledigt.`],
-  ["damage_taken", v => `hat ${fmt(v / 20)} Herzen Schaden eingesteckt.`],
-];
+let T = TEXT.en;
 
 // 7x7 pixel icons, "#" = filled.
 const ICONS = {
@@ -235,27 +313,28 @@ const ICONS = {
 const svg = (name, color) => `<svg viewBox="0 0 7 7" aria-hidden="true" shape-rendering="crispEdges">${
   ICONS[name].flatMap((r, y) => [...r].map((ch, x) => ch === "#" ? `<rect x="${x}" y="${y}" width="1" height="1" style="fill:${color}"/>` : "")).join("")}</svg>`;
 
+// The boards; their titles are in TEXT[..].boards.
 const BOARDS = [
-  { title: "Sitzfleisch", sub: "Meiste Spielzeit", bg: "var(--blue)", icon: "clock", get: s => c(s, "play_time"), show: playTime },
-  { title: "Bergbau AG", sub: "Meiste Blöcke abgebaut", bg: "var(--yellow)", icon: "pick", get: s => sum(s, "minecraft:mined") },
-  { title: "Diamantenfieber", sub: "Diamanterz abgebaut", bg: "var(--teal)", icon: "gem",
+  { id: "play", bg: "var(--blue)", icon: "clock", get: s => c(s, "play_time"), show: playTime },
+  { id: "mined", bg: "var(--yellow)", icon: "pick", get: s => sum(s, "minecraft:mined") },
+  { id: "diamonds", bg: "var(--teal)", icon: "gem",
     get: s => item(s, "minecraft:mined", "diamond_ore") + item(s, "minecraft:mined", "deepslate_diamond_ore") },
-  { title: "Monsterschreck", sub: "Meiste Mobs erledigt", bg: "var(--green)", icon: "sword", get: s => c(s, "mob_kills") },
-  { title: "Kopfgeldjäger", sub: "Meiste Spieler erledigt", bg: "var(--orange)", icon: "cross", get: s => c(s, "player_kills") },
-  { title: "Stammgast im Jenseits", sub: "Meiste Tode", bg: "var(--night)", dark: true, icon: "skull", get: s => c(s, "deaths") },
-  { title: "Wandervogel", sub: "Weiteste Strecke zu Fuß", bg: "var(--pink)", icon: "boot",
+  { id: "mobs", bg: "var(--green)", icon: "sword", get: s => c(s, "mob_kills") },
+  { id: "pvp", bg: "var(--orange)", icon: "cross", get: s => c(s, "player_kills") },
+  { id: "deaths", bg: "var(--night)", dark: true, icon: "skull", get: s => c(s, "deaths") },
+  { id: "walk", bg: "var(--pink)", icon: "boot",
     get: s => (c(s, "walk_one_cm") + c(s, "sprint_one_cm") + c(s, "crouch_one_cm")) / CM_PER_KM, show: v => fmt(v, 1) + " km" },
-  { title: "Himmelsstürmer", sub: "Weiteste Strecke mit Elytra", bg: "var(--purple)", icon: "wing",
+  { id: "elytra", bg: "var(--purple)", icon: "wing",
     get: s => c(s, "aviate_one_cm") / CM_PER_KM, show: v => fmt(v, 1) + " km" },
-  { title: "Schlagkraft", sub: "Meisten Schaden ausgeteilt", bg: "var(--red)", icon: "heart",
+  { id: "damage", bg: "var(--red)", icon: "heart",
     get: s => c(s, "damage_dealt") / 20, show: v => fmt(v) + " ♥" },
-  { title: "Werkbankheld", sub: "Meiste Items hergestellt", bg: "var(--orange)", icon: "hammer", get: s => sum(s, "minecraft:crafted") },
-  { title: "Feilscher", sub: "Meiste Trades mit Dorfbewohnern", bg: "var(--green)", icon: "coin", get: s => c(s, "traded_with_villager") },
-  { title: "Flummi", sub: "Meiste Sprünge", bg: "var(--blue)", icon: "up", get: s => c(s, "jump") },
-  { title: "Baumeister", sub: "Meiste Blöcke platziert", bg: "var(--yellow)", icon: "block", get: s => placed(s) },
-  { title: "Zauberlehrling", sub: "Meiste Items verzaubert", bg: "var(--purple)", icon: "book", get: s => c(s, "enchant_item") },
-  { title: "Unsterblich", sub: "Meiste Totems verbraucht", bg: "var(--orange)", icon: "totem", get: s => totems(s) },
-  { title: "Schlafmütze", sub: "Längste AFK-Zeit", bg: "var(--night)", dark: true, icon: "zzz", get: (s, p) => afkTicks(p), show: playTime },
+  { id: "crafted", bg: "var(--orange)", icon: "hammer", get: s => sum(s, "minecraft:crafted") },
+  { id: "trades", bg: "var(--green)", icon: "coin", get: s => c(s, "traded_with_villager") },
+  { id: "jumps", bg: "var(--blue)", icon: "up", get: s => c(s, "jump") },
+  { id: "placed", bg: "var(--yellow)", icon: "block", get: s => placed(s) },
+  { id: "enchants", bg: "var(--purple)", icon: "book", get: s => c(s, "enchant_item") },
+  { id: "totems", bg: "var(--orange)", icon: "totem", get: s => totems(s) },
+  { id: "afk", bg: "var(--night)", dark: true, icon: "zzz", get: (s, p) => afkTicks(p), show: playTime },
 ];
 
 let players = [];
@@ -269,22 +348,22 @@ let factSeed = Math.random();
 const c = (s, k) => ((s && s["minecraft:custom"]) || {})["minecraft:" + k] || 0;
 const item = (s, cat, k) => ((s && s[cat]) || {})["minecraft:" + k] || 0;
 const sum = (s, cat) => Object.values((s && s[cat]) || {}).reduce((a, b) => a + b, 0);
-// Blocks placed: the "used" count of every item that is a block (a block name in de_de.json).
+// Blocks placed: the "used" count of every item that is a block (a block name in the language file).
 const placed = s => Object.entries((s && s["minecraft:used"]) || {})
   .filter(([id]) => LANG["block.minecraft." + id.replace(/^minecraft:/, "")])
   .reduce((a, [, v]) => a + v, 0);
 const totems = s => item(s, "minecraft:used", "totem_of_undying");
 const afkTicks = p => (p.afk || 0) * 20;
-const fmt = (n, d = 0) => Number(n).toLocaleString("de-DE", { maximumFractionDigits: d });
+const fmt = (n, d = 0) => Number(n).toLocaleString(T.locale, { maximumFractionDigits: d });
 const esc = t => String(t).replace(/[&<>"']/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
 const head = (p, size) => `<img class="head" src="skin/head/${encodeURIComponent(p.uuid)}" alt="" width="${size}" height="${size}" loading="lazy">`;
 const link = p => `#/${encodeURIComponent(p.uuid)}`;
 const human = id => id.replace(/^minecraft:/, "").split("_").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
-// German names from the server's de_de.json (block., item., entity., stat.).
+// Names from the server's language file (block., item., entity., stat.).
 let LANG = {};
 function nameOf(cat, id) {
   const k = id.replace(/^minecraft:/, "");
-  if (cat === "minecraft:custom") return CUSTOM[k] || LANG["stat.minecraft." + k] || human(id);
+  if (cat === "minecraft:custom") return T.custom[k] || LANG["stat.minecraft." + k] || human(id);
   const order = cat === "minecraft:killed" || cat === "minecraft:killed_by"
     ? ["entity", "item", "block"]
     : ["item", "block", "entity"];
@@ -298,7 +377,7 @@ function nameOf(cat, id) {
 function playTime(ticks) {
   const d = Math.floor(ticks / TICKS_PER_DAY);
   const h = Math.floor((ticks % TICKS_PER_DAY) / TICKS_PER_HOUR);
-  return d ? `${d} T ${h} Std` : `${fmt(ticks / TICKS_PER_HOUR, 1)} Std`;
+  return d ? `${d} ${T.days} ${h} ${T.hours}` : `${fmt(ticks / TICKS_PER_HOUR, 1)} ${T.hours}`;
 }
 
 function customValue(key, v) {
@@ -311,12 +390,12 @@ function customValue(key, v) {
 
 function header() {
   const online = players.filter(p => p.online).length;
-  const when = lastUpdate ? new Date(lastUpdate).toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "–";
+  const when = lastUpdate ? new Date(lastUpdate).toLocaleTimeString(T.locale, { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "–";
   return `<section class="band teal"><div class="wrap">
-      <div class="kicker">Live vom Server</div>
+      <div class="kicker">${T.kicker}</div>
       <h1>Stats</h1>
-      <p class="lead">Wer ist gerade drauf, wer spielt am meisten, wer stirbt am häufigsten und wer gräbt die meisten Diamanten aus.</p>
-      <div class="status${reachable ? "" : " off"}"><i></i>${reachable ? `Server online · ${online} Spieler drauf · Stand ${when}` : "Server nicht erreichbar"}</div>
+      <p class="lead">${T.lead}</p>
+      <div class="status${reachable ? "" : " off"}"><i></i>${reachable ? `${T.online(online)} ${when}` : T.unreachable}</div>
     </div></section>`;
 }
 
@@ -324,23 +403,21 @@ function tiles() {
   const online = players.filter(p => p.online).length;
   const hours = players.reduce((a, p) => a + c(p.stats, "play_time"), 0) / TICKS_PER_HOUR;
   const deaths = players.reduce((a, p) => a + c(p.stats, "deaths"), 0);
+  const values = [online, players.length, fmt(hours), fmt(deaths)];
   return `<section class="band dark"><div class="wrap tiles">
-      <div class="tile"><b>${online}</b><span>Online</span></div>
-      <div class="tile"><b>${players.length}</b><span>Spieler</span></div>
-      <div class="tile"><b>${fmt(hours)}</b><span>Stunden gespielt</span></div>
-      <div class="tile"><b>${fmt(deaths)}</b><span>Tode</span></div>
+      ${values.map((v, i) => `<div class="tile"><b>${v}</b><span>${T.tiles[i]}</span></div>`).join("")}
     </div></section>`;
 }
 
 function fact() {
   const pool = [];
-  for (const p of players) for (const [k, say] of FACTS) { const v = c(p.stats, k); if (v > 0) pool.push([p, say(v)]); }
+  for (const p of players) for (const [k, say] of Object.entries(T.facts)) { const v = c(p.stats, k); if (v > 0) pool.push([p, say(v)]); }
   if (!pool.length) return "";
   const [p, text] = pool[Math.floor(factSeed * pool.length) % pool.length];
   return `<section class="band yellow"><div class="wrap"><div class="box fact">
-      <div><div class="kicker">Wusstest du?</div>
+      <div><div class="kicker">${T.didYouKnow}</div>
       <div class="text">${head(p, 26)}<span><a href="${link(p)}">${esc(p.name)}</a> ${esc(text)}</span></div></div>
-      <button class="btn" id="nextfact" type="button">Noch einer</button>
+      <button class="btn" id="nextfact" type="button">${T.another}</button>
     </div></div></section>`;
 }
 
@@ -348,27 +425,28 @@ function onlineBand() {
   const on = players.filter(p => p.online).sort((a, b) => c(b.stats, "play_time") - c(a.stats, "play_time"));
   const chips = on.map(p => `<a class="chip" href="${link(p)}">${head(p, 28)}${esc(p.name)}<small>${fmt(c(p.stats, "play_time") / TICKS_PER_HOUR)} h</small></a>`).join("");
   return `<section class="band green"><div class="wrap">
-      <h2 class="sec-title"><i></i>Gerade online (${on.length})</h2>
-      <div class="chips">${chips || '<p class="empty">Gerade ist niemand online.</p>'}</div>
+      <h2 class="sec-title"><i></i>${T.onlineNow} (${on.length})</h2>
+      <div class="chips">${chips || `<p class="empty">${T.nobodyOnline}</p>`}</div>
     </div></section>`;
 }
 
 function board(b) {
+  const [title, sub] = T.boards[b.id];
   const ranked = players.map(p => ({ p, v: b.get(p.stats, p) })).filter(r => r.v > 0).sort((x, y) => y.v - x.v).slice(0, TOP);
   const rows = ranked.map((r, i) => `<div class="row${i < 3 ? " top" : ""}">
       <span class="rank">${i + 1}</span>${head(r.p, 24)}
       <a href="${link(r.p)}">${esc(r.p.name)}</a><span class="v">${(b.show || fmt)(r.v)}</span></div>`).join("");
   return `<article class="board${b.dark ? " dark" : ""}" style="background:${b.bg}">
       <header><span class="ico">${svg(b.icon, b.dark ? "#16120f" : b.bg)}</span>
-      <div><h3>${esc(b.title)}</h3><p>${esc(b.sub)}</p></div></header>
-      ${rows || '<p class="empty">Noch niemand.</p>'}
+      <div><h3>${esc(title)}</h3><p>${esc(sub)}</p></div></header>
+      ${rows || `<p class="empty">${T.nobodyYet}</p>`}
     </article>`;
 }
 
 function overview() {
   return header() + tiles() + fact() + onlineBand() +
     `<section class="band cream"><div class="wrap">
-      <div class="boards-head"><h2>Bestenlisten</h2><p>Top ${TOP} · Name anklicken für die ganze Spielerseite</p></div>
+      <div class="boards-head"><h2>${T.boardsTitle}</h2><p>${T.boardsSub}</p></div>
       <div class="boards">${BOARDS.map(board).join("")}</div>
     </div></section>`;
 }
@@ -382,7 +460,7 @@ function tableRows(p) {
     .map(([k, v]) => [k, v, nameOf(tab, k)])
     .filter(([, , name]) => name.toLowerCase().includes(query.toLowerCase()))
     .sort((a, b) => b[1] - a[1]);
-  if (!entries.length) return '<p class="empty">Nichts gefunden.</p>';
+  if (!entries.length) return `<p class="empty">${T.nothing}</p>`;
   const max = entries[0][1] || 1;
   return `<div class="table">${entries.map(([k, v, name]) => `<div class="trow"><span>${esc(name)}</span>
       <span class="bar"><span style="width:${Math.max(2, (v / max) * 100).toFixed(1)}%"></span></span>
@@ -393,35 +471,35 @@ function detail(p) {
   const s = p.stats;
   const kills = c(s, "player_kills");
   const deaths = c(s, "deaths");
-  const facts = [
-    [playTime(c(s, "play_time")), "Spielzeit"],
-    [playTime(afkTicks(p)), "Davon AFK"],
-    [fmt(sum(s, "minecraft:mined")), "Abgebaut"],
-    [fmt(placed(s)), "Platziert"],
-    [fmt(sum(s, "minecraft:crafted")), "Hergestellt"],
-    [fmt(c(s, "mob_kills")), "Mob-Kills"],
-    [fmt(c(s, "player_kills")), "Spieler-Kills"],
-    [fmt(deaths), "Tode"],
-    [deaths ? fmt(kills / deaths, 2) : fmt(kills), "K/D (PvP)"],
-    [fmt(totems(s)), "Totems verbraucht"],
-    [fmt(c(s, "enchant_item")), "Verzaubert"],
-    [fmt((c(s, "walk_one_cm") + c(s, "sprint_one_cm") + c(s, "crouch_one_cm")) / CM_PER_KM, 1) + " km", "Zu Fuß"],
-    [fmt(c(s, "aviate_one_cm") / CM_PER_KM, 1) + " km", "Elytra"],
-    [fmt(c(s, "jump")), "Sprünge"],
-    [fmt(c(s, "traded_with_villager")), "Trades"],
+  const values = [
+    playTime(c(s, "play_time")),
+    playTime(afkTicks(p)),
+    fmt(sum(s, "minecraft:mined")),
+    fmt(placed(s)),
+    fmt(sum(s, "minecraft:crafted")),
+    fmt(c(s, "mob_kills")),
+    fmt(kills),
+    fmt(deaths),
+    deaths ? fmt(kills / deaths, 2) : fmt(kills),
+    fmt(totems(s)),
+    fmt(c(s, "enchant_item")),
+    fmt((c(s, "walk_one_cm") + c(s, "sprint_one_cm") + c(s, "crouch_one_cm")) / CM_PER_KM, 1) + " km",
+    fmt(c(s, "aviate_one_cm") / CM_PER_KM, 1) + " km",
+    fmt(c(s, "jump")),
+    fmt(c(s, "traded_with_villager")),
   ];
-  const tabs = Object.keys(CAT).map(k => `<button type="button" class="tab${k === tab ? " on" : ""}" data-tab="${k}">${CAT[k]}<small>${Object.keys((s && s[k]) || {}).filter(id => k !== "minecraft:custom" || !HIDDEN.has(id)).length}</small></button>`).join("");
+  const tabs = Object.keys(T.cat).map(k => `<button type="button" class="tab${k === tab ? " on" : ""}" data-tab="${k}">${T.cat[k]}<small>${Object.keys((s && s[k]) || {}).filter(id => k !== "minecraft:custom" || !HIDDEN.has(id)).length}</small></button>`).join("");
   return `<section class="band teal"><div class="wrap profile">
-      <img src="skin/body/${encodeURIComponent(p.uuid)}" alt="Skin von ${esc(p.name)}" width="160" height="360">
-      <div><a class="back" href="#/">← Alle Stats</a>
-        <div class="kicker">Spieler <span class="badge${p.online ? " on" : ""}"><i></i>${p.online ? "online" : "offline"}</span></div>
+      <img src="skin/body/${encodeURIComponent(p.uuid)}" alt="${esc(T.skinOf(p.name))}" width="160" height="360">
+      <div><a class="back" href="#/">${T.back}</a>
+        <div class="kicker">${T.player} <span class="badge${p.online ? " on" : ""}"><i></i>${p.online ? "online" : "offline"}</span></div>
         <h1>${esc(p.name)}</h1></div>
     </div></section>
-    <section class="band dark"><div class="wrap ptiles">${facts.map(([v, k]) => `<div class="tile"><b>${v}</b><span>${k}</span></div>`).join("")}</div></section>
+    <section class="band dark"><div class="wrap ptiles">${values.map((v, i) => `<div class="tile"><b>${v}</b><span>${T.detail[i]}</span></div>`).join("")}</div></section>
     <section class="band cream"><div class="wrap">
-      <h2>Alle Statistiken</h2>
+      <h2>${T.allStats}</h2>
       <div class="tabs" role="tablist">${tabs}</div>
-      <input class="filter" id="filter" placeholder="Suchen…" value="${esc(query)}" aria-label="Einträge filtern">
+      <input class="filter" id="filter" placeholder="${T.search}" value="${esc(query)}" aria-label="${T.filter}">
       <div id="rows">${tableRows(p)}</div>
     </div></section>`;
 }
@@ -458,20 +536,23 @@ async function load() {
     if (reachable) { reachable = false; render(); }
   }
 }
+
+const getJson = url => fetch(url).then(r => r.ok ? r.json() : {}).catch(() => ({}));
 window.addEventListener("hashchange", () => { query = ""; tab = "minecraft:custom"; render(); window.scrollTo(0, 0); });
-// The world's name, for the header, the footer and the tab.
-fetch("api/info").then(r => r.ok ? r.json() : {}).catch(() => ({})).then(info => {
-  if (!info || !info.world) return;
-  document.title = `Stats · ${info.world}`;
-  document.getElementById("world").textContent = info.world;
-  document.getElementById("world-foot").textContent = info.world;
-});
-fetch("api/lang").then(r => r.ok ? r.json() : {}).catch(() => ({})).then(names => {
+// The world's name and language first, so the page renders once in its own words.
+Promise.all([getJson("api/info"), getJson("api/lang")]).then(([info, names]) => {
   LANG = names || {};
-  if (players.length) render();
+  if (info && /^de/.test(info.lang || "")) T = TEXT.de;
+  document.documentElement.lang = T.locale.slice(0, 2);
+  document.getElementById("foot").textContent = T.foot;
+  if (info && info.world) {
+    document.title = `Stats · ${info.world}`;
+    document.getElementById("world").textContent = info.world;
+    document.getElementById("world-foot").textContent = info.world;
+  }
+  load();
+  setInterval(load, POLL_MS);
 });
-load();
-setInterval(load, POLL_MS);
 </script>
 </body>
 </html>

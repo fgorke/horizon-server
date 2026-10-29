@@ -27,7 +27,7 @@ Everything upstream Horizon's dedicated server does, plus:
 | Spawn elytra | `/spawnelytra pos1` and `pos2` mark a region: falling or jumping off inside it starts a glide without an elytra, `F` boosts once, no fall damage on landing. Made for a spawn island in the sky |
 | Dimensions | `/dimension nether on\|off` and `/dimension end on\|off` close or open the Nether and the End |
 | Voice chat | A server for the [Simple Voice Chat](https://modrinth.com/plugin/simple-voice-chat) mod: proximity voice, whispering, and groups (normal, open, isolated, with passwords) |
-| Stats page | A live web page with every player's statistics, top-10 boards and a page per player in German, AFK time included |
+| Stats page | A live web page with every player's statistics, top-10 boards and a page per player, AFK time included, in English or German |
 | Server tools | `/tps` (tick rate, MSPT, players, loaded chunks); `horizon-server console` attaches to a running server |
 | Fixes | Ender pearls through End gateways; a neutral mob stays angry at the player who provoked it only; the hurt sound reaches the other players once; PvP death messages name the attacker; no TNT ghost blocks; `x_rotation`/`y_rotation` in selectors; shulker box tooltips; guests' deaths, jumps and crafted items are counted |
 
@@ -38,6 +38,8 @@ Everything upstream Horizon's dedicated server does, plus:
 | 25565 | TCP | The game | `server-port` in `server.toml` |
 | 24454 | UDP | Simple Voice Chat | `HORIZON_VOICE_PORT` |
 | 8100 | TCP | The stats page (`http://<server>:8100`) | `HORIZON_STATS_PORT` |
+
+The stats page speaks English; `HORIZON_STATS_LANG=de_de` (any game language code) switches its item, block and mob names, and its own words to German for `de_*`.
 
 Open the ones you use in your firewall. The voice chat server starts when the first player with the mod joins; the stats page starts with the server.
 

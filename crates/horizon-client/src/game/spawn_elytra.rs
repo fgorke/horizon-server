@@ -50,7 +50,7 @@ impl Game<'_> {
         let (op, at, yaw, pitch) = (g.permission >= 2, g.position, g.yaw, g.pitch);
         let dimension = g.dimension.clone();
         if !op {
-            chat(host, conn, "§cDafür brauchst du OP.", false);
+            chat(host, conn, "§cYou need to be an operator for that.", false);
             return;
         }
         let block = at.map(|c| c.floor() as i32);
@@ -65,7 +65,7 @@ impl Game<'_> {
                         pitch,
                     });
                 }),
-                format!("§aSpawn gesetzt: {:.1} {:.1} {:.1}", at[0], at[1], at[2]),
+                format!("§aSpawn set: {:.1} {:.1} {:.1}", at[0], at[1], at[2]),
             ),
             ["spawnelytra", corner @ ("pos1" | "pos2")] => (
                 spawn_config::change(&root, |c| {
@@ -81,7 +81,7 @@ impl Game<'_> {
                         c.pos2 = Some(block);
                     }
                 }),
-                format!("§a{corner} gesetzt: {} {} {}", block[0], block[1], block[2]),
+                format!("§a{corner} set: {} {} {}", block[0], block[1], block[2]),
             ),
             ["spawnelytra", "off"] => (
                 spawn_config::change(&root, |c| {
@@ -89,12 +89,12 @@ impl Game<'_> {
                     c.pos1 = None;
                     c.pos2 = None;
                 }),
-                "§eSpawn-Elytra-Region gelöscht.".to_owned(),
+                "§eSpawn elytra region removed.".to_owned(),
             ),
             ["spawnelytra"] => {
                 let corners = spawn_config::read(&root, |c| (c.pos1, c.pos2));
                 let show = |p: Option<[i32; 3]>| {
-                    p.map_or("nicht gesetzt".to_owned(), |p| format!("{} {} {}", p[0], p[1], p[2]))
+                    p.map_or("not set".to_owned(), |p| format!("{} {} {}", p[0], p[1], p[2]))
                 };
                 let reply = format!(
                     "§ePos1: {} §7| §ePos2: {} §7(/spawnelytra pos1|pos2|off)",
@@ -103,9 +103,9 @@ impl Game<'_> {
                 );
                 (true, reply)
             }
-            _ => (true, "§eBenutzung: /spawnelytra <pos1|pos2|off>".to_owned()),
+            _ => (true, "§eUsage: /spawnelytra <pos1|pos2|off>".to_owned()),
         };
-        let reply = if saved { reply } else { "§cKonnte horizon-spawn.json nicht schreiben.".to_owned() };
+        let reply = if saved { reply } else { "§cCould not write horizon-spawn.json.".to_owned() };
         chat(host, conn, &reply, false);
     }
 
@@ -153,7 +153,7 @@ impl Game<'_> {
             }));
         }
         if started {
-            chat(host, conn, "§bDrücke F für einen Boost", true);
+            chat(host, conn, "§bPress F for a boost", true);
         }
     }
 
@@ -168,13 +168,13 @@ impl Game<'_> {
         };
         if (0..3).any(|k| (g.position[k] - from[k]).abs() > STILL) {
             g.spawn_countdown = None;
-            chat(host, conn, "§cTeleport abgebrochen, du hast dich bewegt.", true);
+            chat(host, conn, "§cTeleport cancelled: you moved.", true);
             return;
         }
         if left > 0 {
             g.spawn_countdown = Some((left - 1, from));
             if left % 20 == 0 {
-                let text = format!("§eTeleport in {} s, nicht bewegen", left / 20);
+                let text = format!("§eTeleport in {} s, don't move", left / 20);
                 chat(host, conn, &text, true);
             }
             return;
@@ -184,7 +184,7 @@ impl Game<'_> {
             Some(p) => self.teleport_to_spawn(host, conn, &p),
             None => self.respawn_at_world_spawn(host, conn),
         }
-        chat(host, conn, "§aTeleportiert.", true);
+        chat(host, conn, "§aTeleported.", true);
     }
 
     /// To the /setspawn spot: a plain teleport in the player's level, a

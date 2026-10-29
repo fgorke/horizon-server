@@ -207,7 +207,7 @@ impl Game<'_> {
                     conn,
                     &C::SystemChat(play::SystemChat {
                         content: horizon_client::lan::data::component_nbt(
-                            &horizon_client::text::Text::legacy("§cDas End ist deaktiviert.").component(),
+                            &horizon_client::text::Text::legacy("§cThe End is closed.").component(),
                         ),
                         overlay: true,
                     }),

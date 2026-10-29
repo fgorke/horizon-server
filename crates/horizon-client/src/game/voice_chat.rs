@@ -128,7 +128,7 @@ impl Game<'_> {
                 };
                 if version != voice::COMPATIBILITY_VERSION {
                     let text = format!(
-                        "§cVoice Chat: deine Mod-Version passt nicht zum Server (Server {}, du {}).",
+                        "§cVoice chat: your mod version doesn't match the server's (server {}, yours {}).",
                         voice::COMPATIBILITY_VERSION,
                         version
                     );
@@ -136,7 +136,7 @@ impl Game<'_> {
                     return;
                 }
                 let Some(server) = server() else {
-                    chat(host, conn, "§cVoice Chat ist auf dem Server gerade nicht verfügbar.");
+                    chat(host, conn, "§cVoice chat isn't available on this server right now.");
                     return;
                 };
                 let secret = match server.add(uuid) {

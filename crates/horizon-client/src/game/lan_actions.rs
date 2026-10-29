@@ -1928,7 +1928,7 @@ impl Game<'_> {
         if words[0] == "dimension" {
             let op = host.hub.guest(conn).is_some_and(|g| g.permission >= 2);
             let reply = match (op, words.get(1).copied(), words.get(2).copied()) {
-                (false, ..) => "§cDafür brauchst du OP.".to_owned(),
+                (false, ..) => "§cYou need to be an operator for that.".to_owned(),
                 (true, Some(dim @ ("nether" | "end")), Some(state @ ("on" | "off"))) => {
                     let open = state == "on";
                     let ok = if dim == "nether" {
@@ -1944,12 +1944,12 @@ impl Game<'_> {
                         super::dimensions::set_end_open(&self.world_root, open)
                     };
                     match (ok, open) {
-                        (false, _) => "§cKonnte die Einstellung nicht speichern.".to_owned(),
-                        (true, true) => format!("§a{dim} ist jetzt offen."),
-                        (true, false) => format!("§c{dim} ist jetzt gesperrt."),
+                        (false, _) => "§cCould not save the setting.".to_owned(),
+                        (true, true) => format!("§aThe {dim} is now open."),
+                        (true, false) => format!("§cThe {dim} is now closed."),
                     }
                 }
-                _ => "§eBenutzung: /dimension <nether|end> <on|off>".to_owned(),
+                _ => "§eUsage: /dimension <nether|end> <on|off>".to_owned(),
             };
             let content = horizon_client::lan::data::component_nbt(
                 &horizon_client::text::Text::legacy(&reply).component(),

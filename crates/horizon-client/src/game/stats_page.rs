@@ -26,7 +26,12 @@ fn web(world: &std::path::Path, resources: &std::path::Path) -> Option<&'static 
             .unwrap_or(stats_web::PORT);
         // The server's folder holds the world and usercache.json.
         let usercache = world.parent().unwrap_or(std::path::Path::new("")).join("usercache.json");
-        let lang = resources.join("assets/minecraft/lang/de_de.json");
+        // The page's language: a game language code, en_us unless HORIZON_STATS_LANG says otherwise.
+        let code = std::env::var("HORIZON_STATS_LANG")
+            .ok()
+            .filter(|c| !c.is_empty() && c.chars().all(|ch| ch.is_ascii_lowercase() || ch == '_'))
+            .unwrap_or_else(|| "en_us".to_owned());
+        let lang = resources.join(format!("assets/minecraft/lang/{code}.json"));
         match StatsWeb::start(port, world.to_path_buf(), usercache, &lang) {
             Ok(w) => Some(w),
             Err(e) => {

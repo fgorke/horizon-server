@@ -39,9 +39,9 @@ struct State {
     afk: BTreeMap<String, u64>,
     /// Where `afk` is kept.
     afk_path: PathBuf,
-    /// `{"world": <the world folder's name>}`.
+    /// `{"world": <the world folder's name>, "lang": <the language code>}`.
     info: String,
-    /// The block, item, entity and statistic names of de_de.json, as JSON.
+    /// The block, item, entity and statistic names of the language file, as JSON.
     lang: String,
     /// (`head`/`body`, uuid): when fetched, the PNG.
     skins: HashMap<(&'static str, String), (Instant, Vec<u8>)>,
@@ -64,7 +64,11 @@ impl StatsWeb {
                 .unwrap_or_default(),
             afk_path,
             lang: names_of(lang),
-            info: json!({ "world": world.file_name().map(|n| n.to_string_lossy().into_owned()) }).to_string(),
+            info: json!({
+                "world": world.file_name().map(|n| n.to_string_lossy().into_owned()),
+                "lang": lang.file_stem().map(|n| n.to_string_lossy().into_owned()),
+            })
+            .to_string(),
             ..State::default()
         }));
         let shared = Arc::clone(&state);
