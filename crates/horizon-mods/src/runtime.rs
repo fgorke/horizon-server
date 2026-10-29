@@ -135,6 +135,15 @@ const STORAGE_MAX_KEYS: usize = 64;
 const STORAGE_WRITE_BUDGET: u64 = 1 << 20;
 
 /// What mods may read of the game, copied once per tick by the game.
+/// A player's look and permission level, beside [`ServerPlayer`] (which a WIT record fixes).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PlayerLook {
+    pub id: String,
+    pub yaw: f32,
+    pub pitch: f32,
+    pub permission: u8,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct Snapshot {
     pub player: Option<Player>,
@@ -155,6 +164,8 @@ pub struct Snapshot {
     pub font_widths: Arc<[f32]>,
     /// The players on the server, for server mods.
     pub players: Vec<ServerPlayer>,
+    /// Their looks and permission levels (`players.rotation`, `players.permission`).
+    pub player_looks: Vec<PlayerLook>,
     /// The first block along the player's view within [`RAYCAST_MAX`] and
     /// its distance from the eye, for `game.raycast`; the game works it out
     /// only while a mod calls it ([`Mods::wants_raycast`]).
@@ -219,6 +230,12 @@ pub enum Output {
     },
     /// `players.broadcast`: a line after the mod's name, to every player.
     Broadcast { name: String, text: String },
+    /// `players.action-bar`: a line above the player's hotbar, `§` colour codes kept.
+    ActionBar {
+        name: String,
+        player: String,
+        text: String,
+    },
     /// `players.teleport`: the player with this id to a position in a dimension.
     Teleport {
         name: String,
@@ -1575,7 +1592,10 @@ impl State {
             .filter(|o| {
                 matches!(
                     o,
-                    Output::Chat { .. } | Output::Tell { .. } | Output::Broadcast { .. }
+                    Output::Chat { .. }
+                        | Output::Tell { .. }
+                        | Output::Broadcast { .. }
+                        | Output::ActionBar { .. }
                 )
             })
             .count();
@@ -1683,6 +1703,22 @@ impl players::Host for State {
             pitch,
         });
         true
+    }
+    fn rotation(&mut self, player: String) -> Option<(f32, f32)> {
+        let look = self.snapshot.player_looks.iter().find(|l| l.id == player)?;
+        Some((look.yaw, look.pitch))
+    }
+    fn permission(&mut self, player: String) -> Option<u8> {
+        let look = self.snapshot.player_looks.iter().find(|l| l.id == player)?;
+        Some(look.permission)
+    }
+    fn action_bar(&mut self, player: String, text: String) -> bool {
+        self.snapshot.players.iter().any(|p| p.id == player)
+            && self.say(|name| Output::ActionBar {
+                name,
+                player,
+                text: clip(text),
+            })
     }
 }
 /// A key a mod registered (capability `input`).

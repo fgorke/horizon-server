@@ -8,6 +8,15 @@ A plugin is a server mod (`docs/mods.md`, "Server mods"): the same manifest, the
 same `cargo horizon-mod` tooling. Horizon Server runs every one it finds in `plugins/`; there is no
 switch to turn one off but taking its file out.
 
+## Official plugins
+
+Each release carries them, signed with the server (`horizon-plugin-<id>.hmod` among the
+release's files); their source is in [`plugins/`](../plugins).
+
+| Plugin | What |
+| --- | --- |
+| [`spawn`](../plugins/spawn/src/lib.rs) | `/setspawn` (operators) sets the spawn spot where you stand, looking where you look; `/spawn` (everyone) takes you there after 5 seconds standing still, the seconds left in the action bar; moving cancels it |
+
 ## Install one
 
 1. Make a folder for it in `plugins/` next to the world folder (the server makes `plugins/` on its
@@ -47,7 +56,7 @@ imports an interface its capabilities don't cover.
 | --- | --- | --- |
 | always | `log` | Lines in the server's log |
 | `storage` | `storage` | A key-value store of its own (4 MiB), kept across restarts in `plugins/<id>/data/` |
-| `players` | `players` | Who is online (id, name, position, dimension, game mode, health); `tell`, `broadcast`; `teleport(player, dimension, x, y, z, yaw, pitch)` |
+| `players` | `players` | Who is online (id, name, position, dimension, game mode, health); `rotation(player)`, `permission(player)`; `tell`, `broadcast`, `action-bar(player, text)` (with `§` colour codes); `teleport(player, dimension, x, y, z, yaw, pitch)` |
 | `world` | `world` | Blocks and biomes of the loaded chunks; `set-blocks`, made as `/setblock` makes them |
 | `command` | `command` | `run(line)`, `run-quiet(lines)`: vanilla commands, run as the server console (permission level 4) at the tick's end |
 
@@ -108,7 +117,7 @@ Without it the server still starts, and logs a warning if `plugins/` holds any.
 
 ## Roadmap
 
-- Spawn, spawn elytra, the stats page and voice chat move out of the server into plugins of their
-  own, one by one.
+- Spawn elytra, the stats page and voice chat move out of the server into plugins of their own,
+  one by one, as `spawn` did.
 - Capabilities for HTTP and UDP, limited to the hosts and ports a manifest names.
 - Later, in a repository of its own: a bridge that runs Bukkit plugins.

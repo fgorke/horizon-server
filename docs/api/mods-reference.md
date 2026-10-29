@@ -666,6 +666,9 @@ Capability `players`, server mods only (manifest `api = "0.3"`, experimental): t
 | `tell` | `func(player: string, text: string) -> bool` | A system message to one player, after the mod's name; false when no player with that id is online. Up to 8 messages per call. |
 | `broadcast` | `func(text: string)` | A system message to every player and the server's log, after the mod's name. Counts toward the same 8 per call. |
 | `teleport` | `func(player: string, dimension: string, x: f64, y: f64, z: f64, yaw: f32, pitch: f32) -> bool` | Moves a player as `/execute in <dimension> run tp` does: to `x y z` in `dimension` (`minecraft:overworld`, ...), facing `yaw` and `pitch`, after this call returns. False when no player with that id is online, the dimension is unknown or a number isn't finite. Up to 8 per call. |
+| `rotation` | `func(player: string) -> option<tuple<f32, f32>>` | Where a player looks: yaw and pitch in degrees, as of this call; none when no player with that id is online. |
+| `permission` | `func(player: string) -> option<u8>` | A player's permission level, 0 to 4 (operators have `op-permission-level`, 4 by default); none when not online. |
+| `action-bar` | `func(player: string, text: string) -> bool` | A line above a player's hotbar (the action bar), with `§` colour codes and not after the mod's name; false when not online. Counts toward the 8 messages per call. |
 
 ## `world`
 

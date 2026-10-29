@@ -671,6 +671,16 @@ interface players {
     /// is online, the dimension is unknown or a number isn't finite. Up to
     /// 8 per call.
     teleport: func(player: string, dimension: string, x: f64, y: f64, z: f64, yaw: f32, pitch: f32) -> bool;
+    /// Where a player looks: yaw and pitch in degrees, as of this call;
+    /// none when no player with that id is online.
+    rotation: func(player: string) -> option<tuple<f32, f32>>;
+    /// A player's permission level, 0 to 4 (operators have
+    /// `op-permission-level`, 4 by default); none when not online.
+    permission: func(player: string) -> option<u8>;
+    /// A line above a player's hotbar (the action bar), with `§` colour
+    /// codes and not after the mod's name; false when not online. Counts
+    /// toward the 8 messages per call.
+    action-bar: func(player: string, text: string) -> bool;
 }
 
 /// Capability `world`, server mods only (manifest `api = "0.3"`,

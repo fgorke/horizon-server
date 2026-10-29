@@ -25,6 +25,7 @@ members = [
     "crates/horizon-relay",
     "crates/horizon-mod-sdk",
     "crates/horizon-mods",
+    "plugins/spawn",
     "crates/horizon-mods/tests/guest",
     "crates/horizon-mods/tests/ui_guest",
     "crates/cargo-horizon-mod",

@@ -262,6 +262,10 @@ fn play(path: &Path, report: &mut Report) -> Result<(), String> {
             Output::Chat { text, .. } => format!("chat: {text}"),
             Output::Tell { text, .. } => format!("tell: {text}"),
             Output::Broadcast { text, .. } => format!("broadcast: {text}"),
+            Output::ActionBar { text, .. } => format!("action bar: {text}"),
+            Output::Teleport { dimension, at, .. } => {
+                format!("teleported to {} {} {} in {dimension}", at[0], at[1], at[2])
+            }
             Output::Feedback { text, error } | Output::Reply { text, error, .. } => {
                 format!("{}: {text}", if error { "error" } else { "feedback" })
             }

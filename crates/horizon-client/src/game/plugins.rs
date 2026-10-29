@@ -160,14 +160,7 @@ fn plugin_paths(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
 /// A command name plugins may not take: vanilla's, and this server's own.
 #[cfg_attr(not(feature = "plugins"), allow(dead_code))]
 fn reserved_command(name: &str) -> bool {
-    const OWN: [&str; 6] = [
-        "spawn",
-        "setspawn",
-        "spawnelytra",
-        "dimension",
-        "tps",
-        "list",
-    ];
+    const OWN: [&str; 4] = ["spawnelytra", "dimension", "tps", "list"];
     let d = horizon_command::vanilla::game_dispatcher();
     OWN.contains(&name)
         || d.nodes[0]
@@ -185,8 +178,8 @@ mod run {
         text::{self, Text},
     };
     use horizon_mods::{
-        ArgumentKind, BlockPos, GameMode, Output, ServerCommand, ServerPlayer, Snapshot, Status,
-        WorldView,
+        ArgumentKind, BlockPos, GameMode, Output, PlayerLook, ServerCommand, ServerPlayer,
+        Snapshot, Status, WorldView,
     };
     use horizon_protocol::packets::play::{self, Clientbound as C};
     use horizon_world::registry::{BlockRegistry, BlockStateId};
@@ -337,6 +330,21 @@ mod run {
             .collect()
     }
 
+    /// Their looks and permission levels.
+    fn player_looks(host: &LanHost) -> Vec<PlayerLook> {
+        host.hub
+            .guests
+            .iter()
+            .filter(|g| g.placed)
+            .map(|g| PlayerLook {
+                id: uuid_string(g.uuid),
+                yaw: g.yaw,
+                pitch: g.pitch,
+                permission: g.permission,
+            })
+            .collect()
+    }
+
     impl Game<'_> {
         /// Reads `plugins/` and starts every plugin there, logging each.
         fn start_plugins(&mut self) {
@@ -420,6 +428,7 @@ mod run {
             let players = server_players(host);
             self.plugins.mods.set_snapshot(Snapshot {
                 players: players.clone(),
+                player_looks: player_looks(host),
                 ..Snapshot::default()
             });
             self.lend_world();
@@ -511,6 +520,7 @@ mod run {
             };
             self.plugins.mods.set_snapshot(Snapshot {
                 players,
+                player_looks: player_looks(host),
                 ..Snapshot::default()
             });
             self.lend_world();
@@ -587,8 +597,9 @@ mod run {
             }
         }
 
-        /// Sends a plugin's line to the player with this id, as a system message.
-        fn tell_plugin_player(host: &mut LanHost, id: &str, line: &Text) {
+        /// Sends a plugin's line to the player with this id, as a system message (in the action
+        /// bar with `overlay`).
+        fn tell_plugin_player(host: &mut LanHost, id: &str, line: &Text, overlay: bool) {
             let to = host
                 .hub
                 .guests
@@ -599,7 +610,7 @@ mod run {
                     conn,
                     &C::SystemChat(play::SystemChat {
                         content: component_nbt(&line.component()),
-                        overlay: false,
+                        overlay,
                     }),
                 );
             }
@@ -616,7 +627,7 @@ mod run {
             for output in self.plugins.mods.drain() {
                 match output {
                     Output::Tell { name, player, text } => {
-                        Self::tell_plugin_player(host, &player, &named(&name, text));
+                        Self::tell_plugin_player(host, &player, &named(&name, text), false);
                     }
                     Output::Reply {
                         player,
@@ -629,13 +640,13 @@ mod run {
                         } else {
                             line
                         };
-                        Self::tell_plugin_player(host, &player, &line);
+                        Self::tell_plugin_player(host, &player, &line, false);
                     }
                     Output::Broadcast { name, text } => {
                         super::super::dedicated::log("INFO", &format!("[{name}] {text}"));
                         let line = named(&name, text);
                         for p in server_players(host) {
-                            Self::tell_plugin_player(host, &p.id, &line);
+                            Self::tell_plugin_player(host, &p.id, &line, false);
                         }
                     }
                     Output::SetBlocks {
@@ -663,6 +674,9 @@ mod run {
                     }
                     Output::Chat { name, text } => {
                         super::super::dedicated::log("INFO", &format!("[{name}] {text}"));
+                    }
+                    Output::ActionBar { player, text, .. } => {
+                        Self::tell_plugin_player(host, &player, &Text::legacy(&text), true);
                     }
                     Output::Teleport {
                         name: _,

@@ -1,19 +1,14 @@
-//! /spawn, /setspawn and spawn elytra. /spawn waits [`COUNTDOWN`] ticks with
-//! the player standing still (looking around is fine), then takes them to the
-//! spot an operator set with /setspawn, or to the world spawn. In the region
+//! Spawn elytra (/spawn and /setspawn are the `spawn` plugin's, plugins/spawn).
+//! In the region
 //! an operator set with /spawnelytra pos1|pos2 a survival player who falls off
 //! (or double-jumps) glides without an elytra, boosts once with the
 //! swap-hands key and lands without fall damage; the glide goes on past the
 //! region until the player lands.
 
-use super::{Dim, Game, lan::LanHost, server_travel::LevelTeleport, spawn_config};
+use super::{Game, lan::LanHost, spawn_config};
 use horizon_core::geometry::Vec3;
 use horizon_protocol::packets::play::{self, Clientbound as C};
 
-/// /spawn's wait, in ticks.
-const COUNTDOWN: u32 = 100;
-/// How far the player may drift during the wait before it is cancelled.
-const STILL: f64 = 0.1;
 /// The fall, in blocks, after which a player in the region starts gliding:
 /// more than a jump's.
 const FALL: f64 = 1.5;
@@ -42,16 +37,12 @@ fn chat(host: &LanHost, conn: u32, text: &str, overlay: bool) {
 }
 
 impl Game<'_> {
-    /// /spawn, /setspawn and /spawnelytra [pos1|pos2|off] from a guest.
+    /// /spawnelytra [pos1|pos2|off] from a guest.
     pub(super) fn spawn_command(&mut self, host: &mut LanHost, conn: u32, words: &[&str]) {
         let Some(g) = host.hub.guest_mut(conn) else {
             return;
         };
-        if words == ["spawn"] {
-            g.spawn_countdown = Some((COUNTDOWN, g.position));
-            return;
-        }
-        let (op, at, yaw, pitch) = (g.permission >= 2, g.position, g.yaw, g.pitch);
+        let (op, at) = (g.permission >= 2, g.position);
         let dimension = g.dimension.clone();
         if !op {
             chat(host, conn, "§cYou need to be an operator for that.", false);
@@ -60,17 +51,6 @@ impl Game<'_> {
         let block = at.map(|c| c.floor() as i32);
         let root = self.world_root.clone();
         let (saved, reply) = match words {
-            ["setspawn"] => (
-                spawn_config::change(&root, |c| {
-                    c.spawn = Some(spawn_config::SpawnPoint {
-                        dimension,
-                        at,
-                        yaw,
-                        pitch,
-                    });
-                }),
-                format!("§aSpawn set: {:.1} {:.1} {:.1}", at[0], at[1], at[2]),
-            ),
             ["spawnelytra", corner @ ("pos1" | "pos2")] => (
                 spawn_config::change(&root, |c| {
                     if c.region_dimension.as_deref() != Some(dimension.as_str()) {
@@ -119,12 +99,11 @@ impl Game<'_> {
         chat(host, conn, &reply, false);
     }
 
-    /// Once a tick for a guest, before its glide tick: /spawn's countdown,
-    /// then spawn elytra (a glide the fall or double jump in the region
+    /// Once a tick for a guest, before its glide tick: spawn elytra (a glide
+    /// the fall or double jump in the region
     /// starts, no fall damage while it lasts or on its landing, and the
     /// fly-jump allowed only in the region and not while gliding).
     pub(super) fn spawn_elytra_tick(&mut self, host: &mut LanHost, conn: u32) {
-        self.spawn_countdown_tick(host, conn);
         let root = self.world_root.clone();
         let Some(g) = host.hub.guest_mut(conn) else {
             return;
@@ -165,63 +144,6 @@ impl Game<'_> {
         if started {
             chat(host, conn, "§bPress F for a boost", true);
         }
-    }
-
-    /// /spawn's wait: the seconds left in the action bar, cancelled by a
-    /// move, and at its end the teleport.
-    fn spawn_countdown_tick(&mut self, host: &mut LanHost, conn: u32) {
-        let Some(g) = host.hub.guest_mut(conn) else {
-            return;
-        };
-        let Some((left, from)) = g.spawn_countdown else {
-            return;
-        };
-        if (0..3).any(|k| (g.position[k] - from[k]).abs() > STILL) {
-            g.spawn_countdown = None;
-            chat(host, conn, "§cTeleport cancelled: you moved.", true);
-            return;
-        }
-        if left > 0 {
-            g.spawn_countdown = Some((left - 1, from));
-            if left % 20 == 0 {
-                let text = format!("§eTeleport in {} s, don't move", left / 20);
-                chat(host, conn, &text, true);
-            }
-            return;
-        }
-        g.spawn_countdown = None;
-        match spawn_config::read(&self.world_root, |c| c.spawn.clone()) {
-            Some(p) => self.teleport_to_spawn(host, conn, &p),
-            None => self.respawn_at_world_spawn(host, conn),
-        }
-        chat(host, conn, "§aTeleported.", true);
-    }
-
-    /// To the /setspawn spot: a plain teleport in the player's level, a
-    /// level change into another.
-    fn teleport_to_spawn(&mut self, host: &mut LanHost, conn: u32, p: &spawn_config::SpawnPoint) {
-        let Some(i) = host.hub.guests.iter().position(|g| g.conn == conn) else {
-            return;
-        };
-        let g = &mut host.hub.guests[i];
-        if g.dimension != p.dimension {
-            self.level_teleports.push(LevelTeleport {
-                conn,
-                dim: Dim::from_id(&p.dimension),
-                at: p.at,
-                rotation: Some([p.yaw, p.pitch]),
-            });
-            self.run_level_teleports(host);
-            return;
-        }
-        g.yaw = p.yaw;
-        g.pitch = p.pitch;
-        g.vehicle = None;
-        if let Some(m) = g.motion.as_mut() {
-            m.fall_distance = 0.0;
-            m.velocity = Vec3::new(0.0, 0.0, 0.0);
-        }
-        host.hub.teleport(i, Some(p.at));
     }
 
     /// The swap-hands key during a spawn glide: the one boost along the look,

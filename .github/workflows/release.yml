@@ -71,10 +71,22 @@ jobs:
           need=$(objdump -T "$folder/horizon-engine" | grep -o 'GLIBC_[0-9.]*' | sort -V | tail -1)
           echo "horizon-engine needs $need"
           cd dist && tar czf "$ASSET" "$FOLDER" && ls -l "$ASSET"
+      - name: The plugins (plugins/*), tested, as horizon-plugin-<id>.hmod
+        run: |
+          set -euo pipefail
+          rustup target add wasm32-unknown-unknown
+          cargo install --locked --quiet --path crates/cargo-horizon-mod --root target/tools
+          for dir in plugins/*/; do
+            (cd "$dir" && ../../target/tools/bin/cargo-horizon-mod horizon-mod test)
+          done
+          for f in target/horizon-mod/*.hmod; do cp "$f" "dist/horizon-plugin-$(basename "$f")"; done
+          ls -l dist/horizon-plugin-*.hmod
       - uses: actions/upload-artifact@v4
         with:
           name: unsigned
-          path: dist/${{ env.ASSET }}
+          path: |
+            dist/${{ env.ASSET }}
+            dist/horizon-plugin-*.hmod
           if-no-files-found: error
           retention-days: 3
 
@@ -99,7 +111,7 @@ jobs:
         env:
           RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
           RELEASE_SIGNING_KEY_NEXT: ${{ secrets.RELEASE_SIGNING_KEY_NEXT }}
-        run: bash tools/ci/sign_release.sh "$TAG" "dist/$ASSET"
+        run: bash tools/ci/sign_release.sh "$TAG" "dist/$ASSET" dist/horizon-plugin-*.hmod
       - uses: actions/upload-artifact@v4
         with:
           name: signed
@@ -130,5 +142,5 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           prerelease=$([[ "$TAG" == *-* ]] && echo --prerelease || true)
-          gh release create "$TAG" dist/"$ASSET" dist/SHA256SUMS dist/SHA256SUMS.sig \
+          gh release create "$TAG" dist/"$ASSET" dist/horizon-plugin-*.hmod dist/SHA256SUMS dist/SHA256SUMS.sig \
             --title "Horizon Server $TAG" --generate-notes --verify-tag $prerelease

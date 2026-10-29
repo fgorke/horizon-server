@@ -23,7 +23,8 @@ Everything upstream Horizon's dedicated server does, plus:
 
 | Area | What |
 | --- | --- |
-| Spawn | `/setspawn` (operators) sets the spawn spot; `/spawn` (everyone) takes you there after a 5 second countdown in the action bar that moving cancels |
+| Plugins | Sandboxed WebAssembly plugins anyone can write ([docs/plugins.md](docs/plugins.md)); the official ones come with each release |
+| Spawn | Plugin [`spawn`](plugins/spawn): `/setspawn` (operators) sets the spawn spot; `/spawn` (everyone) takes you there after a 5 second countdown in the action bar that moving cancels |
 | Spawn elytra | `/spawnelytra pos1` and `pos2` mark a region: falling or jumping off inside it starts a glide without an elytra, `F` boosts once, no fall damage on landing. Made for a spawn island in the sky |
 | Dimensions | `/dimension nether on\|off` and `/dimension end on\|off` close or open the Nether and the End |
 | Voice chat | A server for the [Simple Voice Chat](https://modrinth.com/plugin/simple-voice-chat) mod: proximity voice, whispering, and groups (normal, open, isolated, with passwords) |
@@ -55,14 +56,14 @@ Open the ones you use in your firewall. The voice chat server starts when the fi
 
 | Command | Who | What |
 | --- | --- | --- |
-| `/spawn` | Everyone | Teleport to the spawn after 5 seconds standing still |
-| `/setspawn` | Operators | The spawn spot is where you stand, looking where you look |
+| `/spawn` | Everyone | Teleport to the spawn after 5 seconds standing still (plugin `spawn`) |
+| `/setspawn` | Operators | The spawn spot is where you stand, looking where you look (plugin `spawn`) |
 | `/spawnelytra pos1` / `pos2` | Operators | The corners of the spawn elytra region, at your feet |
 | `/spawnelytra off` | Operators | Remove the region; `/spawnelytra` alone shows it |
 | `/dimension nether\|end on\|off` | Operators | Open or close a dimension |
 | `/tps` | Everyone | Tick rate, MSPT, players and loaded chunks |
 
-The settings these commands write live next to the world: `horizon-spawn.json` (spawn and region), `horizon-dimensions.json` (the End) and `horizon-afk.json` (AFK times). The Nether switch is the vanilla game rule `allow_entering_nether_using_portals`.
+The settings these commands write live next to the world: `horizon-spawn.json` (the spawn elytra region), `horizon-dimensions.json` (the End) and `horizon-afk.json` (AFK times). The Nether switch is the vanilla game rule `allow_entering_nether_using_portals`.
 
 ## Host it
 

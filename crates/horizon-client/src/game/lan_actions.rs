@@ -1925,7 +1925,7 @@ impl Game<'_> {
             );
             return;
         }
-        if words == ["spawn"] || words == ["setspawn"] || words[0] == "spawnelytra" {
+        if words[0] == "spawnelytra" {
             self.spawn_command(host, conn, &words);
             return;
         }

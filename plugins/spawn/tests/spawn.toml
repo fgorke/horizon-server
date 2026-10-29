@@ -1,0 +1,65 @@
+# /setspawn needs an operator; /spawn waits 5 seconds standing still, then teleports.
+
+[[step]]
+join = "Alex"
+expect.commands = ["spawn", "setspawn"]
+
+[[step]]
+command = "spawn"
+expect.error = "No spawn is set yet: an operator sets it with /setspawn"
+
+[[step]]
+command = "setspawn"
+expect.error = "You need to be an operator for that."
+
+[[step]]
+player = { x = 10.5, y = 70.0, z = -3.5, yaw = 90.0, pitch = 10.0, permission = 2 }
+command = "setspawn"
+expect.feedback = "Spawn set: 10.5 70.0 -3.5"
+
+# Back at the start, everyone may ask; the wait shows its seconds in the action bar.
+[[step]]
+player = { x = 0.5, y = 64.0, z = 0.5, permission = 0 }
+command = "spawn"
+
+[[step]]
+ticks = 1
+expect.action-bar = ["Alex: §eTeleport in 5 s, don't move"]
+
+[[step]]
+ticks = 100
+expect.action-bar = [
+    "Alex: §eTeleport in 4 s, don't move",
+    "Alex: §eTeleport in 3 s, don't move",
+    "Alex: §eTeleport in 2 s, don't move",
+    "Alex: §eTeleport in 1 s, don't move",
+    "Alex: §aTeleported.",
+]
+expect.teleported = ["Alex: minecraft:overworld 10.5 70 -3.5"]
+
+# Moving cancels it; looking around doesn't.
+[[step]]
+command = "spawn"
+
+[[step]]
+player = { yaw = 180.0 }
+ticks = 1
+expect.action-bar = ["Alex: §eTeleport in 5 s, don't move"]
+
+[[step]]
+player = { x = 12.0 }
+ticks = 1
+expect.action-bar = ["Alex: §cTeleport cancelled: you moved."]
+
+[[step]]
+ticks = 100
+expect.teleported = []
+
+# The spot stays across a restart.
+[[step]]
+reload = true
+command = "spawn"
+
+[[step]]
+ticks = 101
+expect.teleported = ["Alex: minecraft:overworld 10.5 70 -3.5"]

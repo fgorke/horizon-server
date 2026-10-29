@@ -1,6 +1,7 @@
 //! The server's spawn settings, kept in `horizon-spawn.json` in the world
-//! folder: the spot /spawn leads to (/setspawn) and the spawn elytra region
-//! (/spawnelytra pos1|pos2). Read once and cached; every change is written.
+//! folder: the spawn elytra region (/spawnelytra pos1|pos2), and the spot
+//! /spawn led to before the `spawn` plugin took it over (read, kept, unused).
+//! Read once and cached; every change is written.
 
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};

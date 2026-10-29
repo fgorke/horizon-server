@@ -8,7 +8,8 @@
 //! test written in TOML, `tests/<name>.toml` in the mod's folder: steps, each
 //! saying what happens and what the mod must have shown by then.
 use crate::{
-    BlockPos, Clock, Corner, GameMode, Mods, Output, Panel, Player, ServerPlayer, Snapshot, Status,
+    BlockPos, Clock, Corner, GameMode, Mods, Output, Panel, Player, PlayerLook, ServerPlayer,
+    Snapshot, Status,
 };
 use serde::Deserialize;
 use std::{
@@ -26,6 +27,8 @@ pub struct TestGame {
     pub clock: Option<Clock>,
     /// The players on the server, for a server mod, in join order.
     pub players: Vec<ServerPlayer>,
+    /// Their looks and permission levels, by id.
+    pub looks: Vec<PlayerLook>,
     /// Every name that joined, for their id.
     names: Vec<String>,
     tick: u64,
@@ -117,6 +120,7 @@ impl TestGame {
                 day_time: 0,
             }),
             players: Vec::new(),
+            looks: Vec::new(),
             names: Vec::new(),
             tick: 0,
             world: Default::default(),
@@ -147,6 +151,7 @@ impl TestGame {
             player: self.player.clone(),
             clock: self.clock,
             players: self.players.clone(),
+            player_looks: self.looks.clone(),
             // The GUI of a 1280 x 720 window at scale 3, as the trial run's.
             gui_size: (427.0, 240.0),
             ..Snapshot::default()
@@ -212,6 +217,12 @@ impl TestGame {
             health: p.health,
         };
         self.players.push(player.clone());
+        if !self.looks.iter().any(|l| l.id == player.id) {
+            self.looks.push(PlayerLook {
+                id: player.id.clone(),
+                ..PlayerLook::default()
+            });
+        }
         self.snapshot();
         self.mods.player_joined(&player);
         player
@@ -307,8 +318,8 @@ pub struct Script {
 }
 
 /// Fields of the player to change; the others keep their values. A server
-/// mod's players have no `yaw`, `pitch` or `food`, and a client mod's player
-/// no `game-mode`.
+/// mod's players have no `food`, and a client mod's player no `game-mode` or
+/// `permission` (0 to 4; a player joins with 0).
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct PlayerSet {
@@ -321,6 +332,7 @@ pub struct PlayerSet {
     food: Option<u32>,
     dimension: Option<String>,
     game_mode: Option<Mode>,
+    permission: Option<u8>,
 }
 
 /// `players.game-mode` as a script spells it.
@@ -414,6 +426,11 @@ pub struct Expect {
     /// `players.broadcast`, in order.
     told: Option<Vec<String>>,
     broadcast: Option<Vec<String>>,
+    /// Server mods: every `players.action-bar` as `"Name: text"`, in order.
+    action_bar: Option<Vec<String>>,
+    /// Server mods: every `players.teleport` as `"Name: dimension x y z"`, in
+    /// order; the player is moved there for the next steps.
+    teleported: Option<Vec<String>>,
     /// The panel's lines (`[]`: no panel) and its corner.
     panel: Option<Vec<String>>,
     corner: Option<String>,
@@ -460,7 +477,12 @@ impl PlayerSet {
             p.dimension.clone_from(d);
         }
     }
-    fn apply_server(&self, p: &mut ServerPlayer) {
+    fn apply_server(&self, p: &mut ServerPlayer, look: Option<&mut PlayerLook>) {
+        if let Some(l) = look {
+            l.yaw = self.yaw.unwrap_or(l.yaw);
+            l.pitch = self.pitch.unwrap_or(l.pitch);
+            l.permission = self.permission.unwrap_or(l.permission);
+        }
         let set = |to: &mut f64, v: Option<f64>| *to = v.unwrap_or(*to);
         set(&mut p.x, self.x);
         set(&mut p.y, self.y);
@@ -555,7 +577,11 @@ impl Step {
         };
         if let Some(set) = &self.player {
             match actor {
-                Some(i) => set.apply_server(&mut game.players[i]),
+                Some(i) => {
+                    let id = game.players[i].id.clone();
+                    let look = game.looks.iter_mut().find(|l| l.id == id);
+                    set.apply_server(&mut game.players[i], look);
+                }
                 None => set.apply(game.player.get_or_insert_with(default_player)),
             }
         }
@@ -606,6 +632,44 @@ impl Step {
                 }
             }
         }
+        let name = |players: &[ServerPlayer], id: &str| {
+            let p = players.iter().find(|p| p.id == id);
+            p.map_or(id.to_owned(), |p| p.name.clone())
+        };
+        let mut teleported = Vec::new();
+        for o in &out {
+            if let Output::Teleport {
+                player,
+                dimension,
+                at,
+                yaw,
+                pitch,
+                ..
+            } = o
+            {
+                let [x, y, z] = *at;
+                teleported.push(format!(
+                    "{}: {dimension} {x} {y} {z}",
+                    name(&game.players, player)
+                ));
+                if let Some(p) = game.players.iter_mut().find(|p| p.id == *player) {
+                    (p.x, p.y, p.z) = (x, y, z);
+                    p.dimension.clone_from(dimension);
+                }
+                if let Some(l) = game.looks.iter_mut().find(|l| l.id == *player) {
+                    (l.yaw, l.pitch) = (*yaw, *pitch);
+                }
+            }
+        }
+        let action_bar: Vec<String> = out
+            .iter()
+            .filter_map(|o| match o {
+                Output::ActionBar { player, text, .. } => {
+                    Some(format!("{}: {text}", name(&game.players, player)))
+                }
+                _ => None,
+            })
+            .collect();
         let stopped = out.iter().find_map(|o| match o {
             Output::Stopped { reason, .. } => Some(reason.as_str()),
             _ => None,
@@ -675,6 +739,12 @@ impl Step {
                 })
                 .collect();
             same("broadcast", want, &got)?;
+        }
+        if let Some(want) = &e.action_bar {
+            same("action-bar", want, &action_bar)?;
+        }
+        if let Some(want) = &e.teleported {
+            same("teleported", want, &teleported)?;
         }
         if let Some(want) = &e.feedback {
             same("feedback", &Some(want.clone()), &feedback(false))?;

@@ -54,7 +54,7 @@ jobs:
       - name: Clippy (server build)
         run: >-
           cargo clippy --release --locked -p horizon-client --no-default-features --features plugins --lib --bins
-          -p horizon-server -p horizon-prepare -p horizon-mods -- -D warnings
+          -p horizon-server -p horizon-prepare -p horizon-mods -p cargo-horizon-mod -- -D warnings
       - name: Tests
         run: |
           cargo test --release --locked -p horizon-client --no-default-features --features plugins --lib
@@ -66,3 +66,11 @@ jobs:
         run: |
           cargo build --release --locked -p horizon-client --no-default-features --features plugins --bin horizon-client
           cargo build --release --locked -p horizon-server --bin horizon-server -p horizon-prepare --bin horizon-prepare
+      - name: The plugins build and pass their tests
+        run: |
+          set -euo pipefail
+          rustup target add wasm32-unknown-unknown
+          cargo install --locked --quiet --path crates/cargo-horizon-mod --root target/tools
+          for dir in plugins/*/; do
+            (cd "$dir" && ../../target/tools/bin/cargo-horizon-mod horizon-mod test)
+          done
