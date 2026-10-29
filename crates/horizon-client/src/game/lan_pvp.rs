@@ -172,6 +172,26 @@ impl Game<'_> {
         })
     }
 
+    /// The attacking player's entity id and display name (`attacker`: the
+    /// guest's connection, none for the host), for the victim's death message.
+    fn pvp_attacker(
+        &self,
+        host: &LanHost,
+        attacker: Option<u32>,
+    ) -> Option<(u32, horizon_client::text::Text)> {
+        match attacker {
+            Some(conn) => {
+                let g = host.hub.guest(conn)?;
+                Some((g.entity_id as u32, self.player_text(&g.name, g.uuid)))
+            }
+            None if self.options.dedicated.is_none() => Some((
+                host.host_entity as u32,
+                horizon_client::text::Text::literal(super::chat::PLAYER_NAME),
+            )),
+            None => None,
+        }
+    }
+
     /// The guests by connection, with their entity ids.
     pub(super) fn lan_guest_entities(&self) -> Vec<(u32, u32)> {
         self.lan.as_ref().map_or_else(Vec::new, |host| {
@@ -278,7 +298,11 @@ impl Game<'_> {
         }
         // Player.attack: the hurt (with its knockback away from the
         // attacker), then causeExtraKnockback along the attacker's yaw.
+        let attacker = self.pvp_attacker(host, s.attacker);
         let land = |g: &mut Self| {
+            if let Some((id, name)) = &attacker {
+                g.note_named_attacker("minecraft:player_attack", *id, name.clone());
+            }
             g.combat.player_attacker = Some((s.from, s.disable_blocking));
             let hurt = g.mob_hits_player(s.amount, s.from, "minecraft:player_attack");
             g.combat.player_attacker = None;
@@ -465,7 +489,11 @@ impl Game<'_> {
             }
         }
         let (xd, zd) = sweep.knockback;
+        let attacker = self.pvp_attacker(host, sweep.attacker);
         let land = |g: &mut Self| {
+            if let Some((id, name)) = &attacker {
+                g.note_named_attacker("minecraft:player_attack", *id, name.clone());
+            }
             let hurt = g.mob_hits_player(sweep.damage, sweep.from, "minecraft:player_attack");
             if hurt {
                 g.knock_back_player(0.4, xd, zd);
