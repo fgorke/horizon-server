@@ -780,6 +780,37 @@ fn network_stack(
                 horizon_protocol::item::Component::Stacks(contents),
             ));
         }
+        // ItemContainerContents (a shulker box's items, for its tooltip): a
+        // list up to the last filled slot, each slot an optional
+        // ItemStackTemplate, as item_sync's container_tag reads it.
+        if !d.container.is_empty() {
+            let len = d
+                .container
+                .iter()
+                .map(|(slot, _)| usize::from(*slot) + 1)
+                .max()
+                .unwrap_or(0)
+                .min(256);
+            let mut w = horizon_protocol::buf::Writer::new();
+            w.varint(len as i32);
+            for i in 0..len {
+                let item = d
+                    .container
+                    .iter()
+                    .find(|(slot, _)| usize::from(*slot) == i)
+                    .and_then(|(_, item)| network_stack(item_id, synced_id, &Some(item.clone())));
+                w.bool(item.is_some());
+                if let Some(item) = &item {
+                    <horizon_protocol::item::Template as horizon_protocol::buf::Codec<_>>::write(
+                        item, &mut w,
+                    );
+                }
+            }
+            stack.added.push((
+                horizon_protocol::item::component::CONTAINER,
+                horizon_protocol::item::Component::Raw(w.data),
+            ));
+        }
         // The books a lectern shows and a guest reads.
         if !d.writable_pages.is_empty() {
             stack.added.push((
