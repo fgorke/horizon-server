@@ -1,6 +1,6 @@
 //! The stats page of a dedicated server (`horizon_client::stats_web`), on
-//! port 8100 (`HORIZON_STATS_PORT` to change it): started with the first
-//! guest tick, and given each online guest's counters once a second.
+//! port 8100 (`HORIZON_STATS_PORT` to change it): started with the
+//! server's first tick, and given each online guest's counters once a second.
 
 use super::{Game, lan::LanHost};
 use horizon_client::stats_web::{self, LivePlayer, StatsWeb};
@@ -27,6 +27,11 @@ fn web(world: &std::path::Path) -> Option<&'static StatsWeb> {
         }
     })
     .as_ref()
+}
+
+/// Starts the page, once.
+pub(super) fn start(world: &std::path::Path) {
+    web(world);
 }
 
 /// A guest left: the page reads their saved file from now on.
