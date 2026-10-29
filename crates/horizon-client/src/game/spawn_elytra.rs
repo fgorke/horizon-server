@@ -6,7 +6,7 @@
 //! swap-hands key and lands without fall damage; the glide goes on past the
 //! region until the player lands.
 
-use super::{Game, lan::LanHost, lan_actions::GuestCommand, spawn_config};
+use super::{Dim, Game, lan::LanHost, server_travel::LevelTeleport, spawn_config};
 use horizon_core::geometry::Vec3;
 use horizon_protocol::packets::play::{self, Clientbound as C};
 
@@ -181,19 +181,37 @@ impl Game<'_> {
         }
         g.spawn_countdown = None;
         match spawn_config::read(&self.world_root, |c| c.spawn.clone()) {
-            Some(p) => host.commands.push(GuestCommand {
-                conn,
-                command: format!(
-                    "execute in {} run tp @s {} {} {} {} {}",
-                    p.dimension, p.at[0], p.at[1], p.at[2], p.yaw, p.pitch
-                ),
-                permission: 4,
-                integrated: false,
-                quiet: true,
-            }),
+            Some(p) => self.teleport_to_spawn(host, conn, &p),
             None => self.respawn_at_world_spawn(host, conn),
         }
         chat(host, conn, "§aTeleportiert.", true);
+    }
+
+    /// To the /setspawn spot: a plain teleport in the player's level, a
+    /// level change into another.
+    fn teleport_to_spawn(&mut self, host: &mut LanHost, conn: u32, p: &spawn_config::SpawnPoint) {
+        let Some(i) = host.hub.guests.iter().position(|g| g.conn == conn) else {
+            return;
+        };
+        let g = &mut host.hub.guests[i];
+        if g.dimension != p.dimension {
+            self.level_teleports.push(LevelTeleport {
+                conn,
+                dim: Dim::from_id(&p.dimension),
+                at: p.at,
+                rotation: Some([p.yaw, p.pitch]),
+            });
+            self.run_level_teleports(host);
+            return;
+        }
+        g.yaw = p.yaw;
+        g.pitch = p.pitch;
+        g.vehicle = None;
+        if let Some(m) = g.motion.as_mut() {
+            m.fall_distance = 0.0;
+            m.velocity = Vec3::new(0.0, 0.0, 0.0);
+        }
+        host.hub.teleport(i, Some(p.at));
     }
 
     /// The swap-hands key during a spawn glide: the one boost along the look,
