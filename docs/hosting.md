@@ -44,13 +44,13 @@ plan are in [docs/server.md](https://github.com/horizon-rust/horizon/blob/main/d
 Linux (x86-64) and macOS (Apple Silicon):
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/horizon-rust/horizon/main/packaging/server/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/fgorke/horizon-server/main/packaging/server/install.sh | sh
 ```
 
 Windows (x64), in PowerShell:
 
 ```powershell
-irm https://raw.githubusercontent.com/horizon-rust/horizon/main/packaging/server/install.ps1 | iex
+irm https://raw.githubusercontent.com/fgorke/horizon-server/main/packaging/server/install.ps1 | iex
 ```
 
 The script downloads the current Horizon Nightly for your computer from GitHub (the only build Horizon ships;
@@ -311,7 +311,7 @@ No image is published: build one from the repository. The image holds none of Mi
 folder you prepared (step 2) read-only.
 
 ```sh
-git clone https://github.com/horizon-rust/horizon && cd horizon
+git clone https://github.com/fgorke/horizon-server && cd horizon-server
 docker build -f packaging/server/Dockerfile -t horizon-server .
 
 docker run -d --name horizon -p 25565:25565 --stop-timeout 180 \
@@ -366,4 +366,4 @@ For more than 50 active players, give it more cores.
   open in your firewall. On a tailnet, use the server's tailnet address.
 - **It keeps restarting**: `horizon-server status` shows the last crash and `horizon-server logs -n 200` the log
   before it. Crash reports are in `crash-reports/`.
-- Report problems at <https://github.com/horizon-rust/horizon/issues>, with the end of the log.
+- Report problems at <https://github.com/fgorke/horizon-server/issues>, with the end of the log.

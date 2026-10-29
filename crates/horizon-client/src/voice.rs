@@ -341,19 +341,31 @@ pub struct Group {
 pub fn parse_create_group(data: &[u8]) -> Option<Group> {
     let mut r = Reader(data);
     let name = r.utf(MAX_GROUP_NAME)?;
-    let password = if r.bool()? { Some(r.utf(MAX_GROUP_NAME)?) } else { None };
+    let password = if r.bool()? {
+        Some(r.utf(MAX_GROUP_NAME)?)
+    } else {
+        None
+    };
     let kind = GroupKind::from_short(r.short()?);
     if !valid_group_text(&name) || password.as_deref().is_some_and(|p| !valid_group_text(p)) {
         return None;
     }
-    Some(Group { name, password, kind })
+    Some(Group {
+        name,
+        password,
+        kind,
+    })
 }
 
 /// `JoinGroupPacket` (`voicechat:set_group`): the group and the password.
 pub fn parse_join_group(data: &[u8]) -> Option<(u128, Option<String>)> {
     let mut r = Reader(data);
     let group = r.uuid()?;
-    let password = if r.bool()? { Some(r.utf(MAX_PASSWORD)?) } else { None };
+    let password = if r.bool()? {
+        Some(r.utf(MAX_PASSWORD)?)
+    } else {
+        None
+    };
     Some((group, password))
 }
 
@@ -544,7 +556,12 @@ impl VoiceServer {
     pub fn cleanup_groups(&self) -> Vec<u128> {
         let mut clients = self.lock();
         let used: Vec<u128> = clients.0.values().filter_map(|c| c.group).collect();
-        let empty: Vec<u128> = clients.1.keys().copied().filter(|g| !used.contains(g)).collect();
+        let empty: Vec<u128> = clients
+            .1
+            .keys()
+            .copied()
+            .filter(|g| !used.contains(g))
+            .collect();
         for id in &empty {
             clients.1.remove(id);
         }
@@ -553,7 +570,11 @@ impl VoiceServer {
 
     /// The groups there are.
     pub fn groups(&self) -> Vec<(u128, Group)> {
-        self.lock().1.iter().map(|(id, g)| (*id, g.clone())).collect()
+        self.lock()
+            .1
+            .iter()
+            .map(|(id, g)| (*id, g.clone()))
+            .collect()
     }
 
     pub fn remove(&self, player: u128) {
@@ -585,7 +606,11 @@ impl VoiceServer {
     /// The players with a secret, whether they turned voice chat off, and
     /// their group.
     pub fn players(&self) -> Vec<(u128, bool, Option<u128>)> {
-        self.lock().0.iter().map(|(u, c)| (*u, c.disabled, c.group)).collect()
+        self.lock()
+            .0
+            .iter()
+            .map(|(u, c)| (*u, c.disabled, c.group))
+            .collect()
     }
 }
 
@@ -713,9 +738,19 @@ fn handle(clients: &mut Clients, data: &[u8], from: SocketAddr) -> Vec<(SocketAd
 
 /// `Server.processGroupPacket`: a `GroupSoundPacket` for every other
 /// member of the group, wherever they are.
-fn group_voice(clients: &Clients, player: u128, group: u128, opus: &[u8], sequence: i64) -> Vec<(SocketAddr, Vec<u8>)> {
+fn group_voice(
+    clients: &Clients,
+    player: u128,
+    group: u128,
+    opus: &[u8],
+    sequence: i64,
+) -> Vec<(SocketAddr, Vec<u8>)> {
     let mut body = Writer::default();
-    body.uuid(player).uuid(player).bytes(opus).long(sequence).byte(0);
+    body.uuid(player)
+        .uuid(player)
+        .bytes(opus)
+        .long(sequence)
+        .byte(0);
     clients
         .0
         .iter()
@@ -736,7 +771,11 @@ fn proximity(
     let Some(sender) = clients.0.get(&player) else {
         return Vec::new();
     };
-    let distance = if whispering { WHISPER_DISTANCE } else { DISTANCE };
+    let distance = if whispering {
+        WHISPER_DISTANCE
+    } else {
+        DISTANCE
+    };
     let range = distance + 1.0;
     let mut body = Writer::default();
     body.uuid(player)
@@ -754,14 +793,18 @@ fn proximity(
         // isolated group's members hear no one else.
         if c.group.is_some()
             && (c.group == sender.group
-                || c.group.and_then(|g| clients.1.get(&g)).is_some_and(|g| g.kind == GroupKind::Isolated))
+                || c.group
+                    .and_then(|g| clients.1.get(&g))
+                    .is_some_and(|g| g.kind == GroupKind::Isolated))
         {
             continue;
         }
         let Some(to) = c.address else {
             continue;
         };
-        let d2: f64 = (0..3).map(|k| (c.position[k] - sender.position[k]).powi(2)).sum();
+        let d2: f64 = (0..3)
+            .map(|k| (c.position[k] - sender.position[k]).powi(2))
+            .sum();
         if c.dimension != sender.dimension || d2 > range * range {
             continue;
         }
@@ -775,7 +818,10 @@ mod tests {
     use super::*;
 
     fn hex(s: &str) -> Vec<u8> {
-        (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap()).collect()
+        (0..s.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+            .collect()
     }
 
     #[test]
@@ -783,7 +829,10 @@ mod tests {
         // McGrew & Viega, "The Galois/Counter Mode of Operation", test cases 2 and 3.
         let gcm = Gcm::new(&[0; 16]);
         let sealed = gcm.seal(&[0; 12], &[0; 16]);
-        assert_eq!(sealed[12..], hex("0388dace60b6a392f328c2b971b2fe78ab6e47d42cec13bdf53a67b21257bddf")[..]);
+        assert_eq!(
+            sealed[12..],
+            hex("0388dace60b6a392f328c2b971b2fe78ab6e47d42cec13bdf53a67b21257bddf")[..]
+        );
         let key: [u8; 16] = hex("feffe9928665731c6d6a8f9467308308").try_into().unwrap();
         let iv: [u8; 12] = hex("cafebabefacedbaddecaf888").try_into().unwrap();
         let plain = hex(
@@ -810,7 +859,9 @@ mod tests {
         let mut plain = vec![kind];
         plain.extend_from_slice(body);
         let mut w = Writer::default();
-        w.byte(MAGIC).uuid(player).bytes(&gcm.seal(&[7; 12], &plain));
+        w.byte(MAGIC)
+            .uuid(player)
+            .bytes(&gcm.seal(&[7; 12], &plain));
         w.0
     }
 
@@ -854,7 +905,11 @@ mod tests {
         join(&mut clients, c, [3; 16], addr(3), [100.0, 64.0, 0.0]);
         let mut mic = Writer::default();
         mic.bytes(&[9, 9, 9]).long(42).bool(false);
-        let out = handle(&mut clients, &client_packet(a, &[1; 16], 0x1, &mic.0), addr(1));
+        let out = handle(
+            &mut clients,
+            &client_packet(a, &[1; 16], 0x1, &mic.0),
+            addr(1),
+        );
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].0, addr(2));
         let got = server_packet(&[2; 16], &out[0].1);
@@ -868,13 +923,31 @@ mod tests {
         // Whispering reaches 24 blocks: b at 30 is out.
         let mut mic = Writer::default();
         mic.bytes(&[1]).long(43).bool(true);
-        let out = handle(&mut clients, &client_packet(a, &[1; 16], 0x1, &mic.0), addr(1));
+        let out = handle(
+            &mut clients,
+            &client_packet(a, &[1; 16], 0x1, &mic.0),
+            addr(1),
+        );
         assert!(out.is_empty());
         // A packet from another address, or with the wrong secret, is dropped.
         let mut mic = Writer::default();
         mic.bytes(&[1]).long(44).bool(false);
-        assert!(handle(&mut clients, &client_packet(a, &[1; 16], 0x1, &mic.0), addr(9)).is_empty());
-        assert!(handle(&mut clients, &client_packet(a, &[5; 16], 0x1, &mic.0), addr(1)).is_empty());
+        assert!(
+            handle(
+                &mut clients,
+                &client_packet(a, &[1; 16], 0x1, &mic.0),
+                addr(9)
+            )
+            .is_empty()
+        );
+        assert!(
+            handle(
+                &mut clients,
+                &client_packet(a, &[5; 16], 0x1, &mic.0),
+                addr(1)
+            )
+            .is_empty()
+        );
     }
 
     #[test]
@@ -886,13 +959,26 @@ mod tests {
         join(&mut clients, b, [2; 16], addr(2), [5000.0, 64.0, 0.0]);
         join(&mut clients, c, [3; 16], addr(3), [10.0, 64.0, 0.0]);
         let mut group = |kind| {
-            clients.1.insert(7, Group { name: "g".into(), password: None, kind });
+            clients.1.insert(
+                7,
+                Group {
+                    name: "g".into(),
+                    password: None,
+                    kind,
+                },
+            );
             clients.0.get_mut(&a).unwrap().group = Some(7);
             clients.0.get_mut(&b).unwrap().group = Some(7);
             let mut mic = Writer::default();
             mic.bytes(&[1]).long(1).bool(false);
-            let mut to: Vec<SocketAddr> =
-                handle(&mut clients, &client_packet(a, &[1; 16], 0x1, &mic.0), addr(1)).into_iter().map(|o| o.0).collect();
+            let mut to: Vec<SocketAddr> = handle(
+                &mut clients,
+                &client_packet(a, &[1; 16], 0x1, &mic.0),
+                addr(1),
+            )
+            .into_iter()
+            .map(|o| o.0)
+            .collect();
             to.sort();
             to
         };
@@ -901,10 +987,24 @@ mod tests {
         // Open: c nearby too.
         assert_eq!(group(GroupKind::Open), vec![addr(2), addr(3)]);
         // c talking: an isolated group's a doesn't hear it.
-        clients.1.insert(7, Group { name: "g".into(), password: None, kind: GroupKind::Isolated });
+        clients.1.insert(
+            7,
+            Group {
+                name: "g".into(),
+                password: None,
+                kind: GroupKind::Isolated,
+            },
+        );
         let mut mic = Writer::default();
         mic.bytes(&[1]).long(2).bool(false);
-        assert!(handle(&mut clients, &client_packet(c, &[3; 16], 0x1, &mic.0), addr(3)).is_empty());
+        assert!(
+            handle(
+                &mut clients,
+                &client_packet(c, &[3; 16], 0x1, &mic.0),
+                addr(3)
+            )
+            .is_empty()
+        );
     }
 
     #[test]
@@ -913,7 +1013,11 @@ mod tests {
         w.utf("Bau").bool(true).utf("pw").short(1);
         assert_eq!(
             parse_create_group(&w.0),
-            Some(Group { name: "Bau".into(), password: Some("pw".into()), kind: GroupKind::Open })
+            Some(Group {
+                name: "Bau".into(),
+                password: Some("pw".into()),
+                kind: GroupKind::Open
+            })
         );
         let mut w = Writer::default();
         w.utf(" leer").bool(false).short(0);
@@ -921,12 +1025,19 @@ mod tests {
         let mut w = Writer::default();
         w.uuid(9).bool(false);
         assert_eq!(parse_join_group(&w.0), Some((9, None)));
-        let g = Group { name: "Bau".into(), password: None, kind: GroupKind::Isolated };
+        let g = Group {
+            name: "Bau".into(),
+            password: None,
+            kind: GroupKind::Isolated,
+        };
         let p = add_group_payload(9, &g);
         let mut r = Reader(&p);
         assert_eq!(r.uuid(), Some(9));
         assert_eq!(r.utf(24).as_deref(), Some("Bau"));
-        assert_eq!((r.bool(), r.bool(), r.bool(), r.short()), (Some(false), Some(false), Some(false), Some(2)));
+        assert_eq!(
+            (r.bool(), r.bool(), r.bool(), r.short()),
+            (Some(false), Some(false), Some(false), Some(2))
+        );
         assert_eq!(joined_group_payload(None, true), vec![0, 1]);
     }
 

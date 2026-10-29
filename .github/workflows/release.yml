@@ -1,0 +1,134 @@
+name: release
+# A release for every tag vX.Y.Z pushed (or by hand for an existing tag): the Linux x86_64 server build as
+# horizon-server-linux-x86_64.tar.gz, with SHA256SUMS signed by the `release` environment's RELEASE_SIGNING_KEY,
+# which `horizon-server update` and install.sh check against crates/horizon-release-sign/release-keys.txt.
+#   git tag v0.3.0 && git push origin v0.3.0
+# The data exporters (Horizon's own Java classes, compiled against Minecraft's jars, which never come near this
+# repository) are taken from upstream Horizon's release named by EXPORTERS_FROM, after checking its checksums.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: The tag to release (it must exist)
+        required: true
+permissions:
+  contents: read
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+env:
+  TAG: ${{ inputs.tag || github.ref_name }}
+  EXPORTERS_FROM: ${{ vars.EXPORTERS_FROM || 'nightly' }}
+  ASSET: horizon-server-linux-x86_64.tar.gz
+  FOLDER: horizon-server-linux-x86_64
+  HORIZON_TELEMETRY_URL: "off"
+
+jobs:
+  build:
+    # Ubuntu 22.04's glibc (2.35): the binaries run on Debian 12, Ubuntu 22.04 and newer.
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+          persist-credentials: false
+      - name: The tag is a version
+        run: |
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || { echo "::error::$TAG is not vX.Y.Z"; exit 1; }
+          echo "HORIZON_VERSION=${TAG#v}" >> "$GITHUB_ENV"
+      - name: Rust and the ALSA and udev headers
+        run: |
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends libasound2-dev libudev-dev
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+      - name: Build the engine (headless), horizon-server and horizon-prepare
+        run: |
+          cargo build --release --locked -p horizon-client --no-default-features --bin horizon-client
+          cargo build --release --locked -p horizon-server --bin horizon-server -p horizon-prepare --bin horizon-prepare
+      - name: The exporters, from upstream Horizon's ${{ env.EXPORTERS_FROM }} release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p upstream && cd upstream
+          gh release download "$EXPORTERS_FROM" -R horizon-rust/horizon -p "$ASSET" -p SHA256SUMS
+          grep "  $ASSET\$" SHA256SUMS | sha256sum -c -
+          tar -xzf "$ASSET"
+          test -f "$FOLDER/exporters/manifest.json"
+          rm -rf ../exporters && cp -R "$FOLDER/exporters" ../exporters
+      - name: Package
+        run: |
+          set -euo pipefail
+          cargo run --release --locked -p xtask -- package-server target/release/horizon-client "dist/$FOLDER"
+          cp LICENSE THIRD_PARTY_NOTICES.md README.md "dist/$FOLDER/"
+          folder="dist/$FOLDER"
+          python3 tools/check_imports.py --server "$folder/horizon-engine" "$folder/horizon-server" "$folder/horizon-prepare"
+          "$folder/horizon-engine" --help | grep -q -- '--resources'
+          [[ "$("$folder/horizon-server" --version)" == "horizon-server $HORIZON_VERSION" ]]
+          need=$(objdump -T "$folder/horizon-engine" | grep -o 'GLIBC_[0-9.]*' | sort -V | tail -1)
+          echo "horizon-engine needs $need"
+          cd dist && tar czf "$ASSET" "$FOLDER" && ls -l "$ASSET"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: unsigned
+          path: dist/${{ env.ASSET }}
+          if-no-files-found: error
+          retention-days: 3
+
+  sign:
+    # Holds the private key: runs only tools/ci/sign_release.sh (sha256sum and OpenSSL) on what build made.
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: release
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+          persist-credentials: false
+          sparse-checkout: tools/ci/sign_release.sh
+          sparse-checkout-cone-mode: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: unsigned
+          path: dist
+      - name: Sign SHA256SUMS
+        env:
+          RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
+          RELEASE_SIGNING_KEY_NEXT: ${{ secrets.RELEASE_SIGNING_KEY_NEXT }}
+        run: bash tools/ci/sign_release.sh "$TAG" "dist/$ASSET"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: signed
+          path: dist/
+          if-no-files-found: error
+          retention-days: 3
+
+  publish:
+    needs: sign
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: signed
+          path: dist
+      - name: Check it as horizon-server update will
+        run: |
+          rustup toolchain install stable --profile minimal && rustup default stable
+          cargo run --release --locked -p horizon-release-sign -- verify --tag "$TAG" --publishing dist
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          prerelease=$([[ "$TAG" == *-* ]] && echo --prerelease || true)
+          gh release create "$TAG" dist/"$ASSET" dist/SHA256SUMS dist/SHA256SUMS.sig \
+            --title "Horizon Server $TAG" --generate-notes --verify-tag $prerelease

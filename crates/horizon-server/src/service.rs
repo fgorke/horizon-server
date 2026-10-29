@@ -76,7 +76,7 @@ pub fn systemd_unit(program: &Path, dir: &Path, user: Option<&str>) -> String {
     format!(
         "[Unit]
 Description=Horizon server in {dir}
-Documentation=https://github.com/horizon-rust/horizon/blob/main/docs/server.md
+Documentation=https://github.com/fgorke/horizon-server/blob/main/docs/hosting.md
 Wants=network-online.target
 After=network-online.target
 

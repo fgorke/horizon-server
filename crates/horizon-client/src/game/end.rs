@@ -1486,7 +1486,10 @@ impl Game<'_> {
         // ThrownEnderpearl: through a gateway it takes its owner along.
         let mut pearls: Vec<(u32, BlockPos)> = Vec::new();
         for p in &self.creatures.projectiles {
-            if !matches!(p.kind, horizon_client::projectiles::ProjectileKind::EnderPearl) {
+            if !matches!(
+                p.kind,
+                horizon_client::projectiles::ProjectileKind::EnderPearl
+            ) {
                 continue;
             }
             let found = horizon_client::end_gateway::swept_gateway(
@@ -1622,7 +1625,10 @@ impl Game<'_> {
         let mut i = 0;
         while i < self.end.pearls.len() {
             let target = self.end.pearls[i].2;
-            let chunk = ((target.x.floor() as i32) >> 4, (target.z.floor() as i32) >> 4);
+            let chunk = (
+                (target.x.floor() as i32) >> 4,
+                (target.z.floor() as i32) >> 4,
+            );
             if !self.world.chunks.contains_key(&chunk) {
                 i += 1;
                 continue;

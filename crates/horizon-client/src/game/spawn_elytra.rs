@@ -23,7 +23,11 @@ const BOOST: f64 = 2.0;
 /// The unit look vector of a yaw and pitch in degrees (Entity.calculateViewVector).
 fn look(yaw: f32, pitch: f32) -> [f64; 3] {
     let (yaw, pitch) = (f64::from(yaw).to_radians(), f64::from(pitch).to_radians());
-    [-yaw.sin() * pitch.cos(), -pitch.sin(), yaw.cos() * pitch.cos()]
+    [
+        -yaw.sin() * pitch.cos(),
+        -pitch.sin(),
+        yaw.cos() * pitch.cos(),
+    ]
 }
 
 fn chat(host: &LanHost, conn: u32, text: &str, overlay: bool) {
@@ -94,7 +98,9 @@ impl Game<'_> {
             ["spawnelytra"] => {
                 let corners = spawn_config::read(&root, |c| (c.pos1, c.pos2));
                 let show = |p: Option<[i32; 3]>| {
-                    p.map_or("not set".to_owned(), |p| format!("{} {} {}", p[0], p[1], p[2]))
+                    p.map_or("not set".to_owned(), |p| {
+                        format!("{} {} {}", p[0], p[1], p[2])
+                    })
                 };
                 let reply = format!(
                     "§ePos1: {} §7| §ePos2: {} §7(/spawnelytra pos1|pos2|off)",
@@ -105,7 +111,11 @@ impl Game<'_> {
             }
             _ => (true, "§eUsage: /spawnelytra <pos1|pos2|off>".to_owned()),
         };
-        let reply = if saved { reply } else { "§cCould not write horizon-spawn.json.".to_owned() };
+        let reply = if saved {
+            reply
+        } else {
+            "§cCould not write horizon-spawn.json.".to_owned()
+        };
         chat(host, conn, &reply, false);
     }
 

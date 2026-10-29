@@ -95,7 +95,12 @@ fn broadcast(host: &LanHost, server: &VoiceServer, channel: &str, data: Vec<u8>)
 /// `ServerGroupManager.cleanupGroups`: the empty groups go, for everyone.
 fn cleanup_groups(host: &LanHost, server: &VoiceServer) {
     for id in server.cleanup_groups() {
-        broadcast(host, server, "voicechat:remove_group", voice::remove_group_payload(id));
+        broadcast(
+            host,
+            server,
+            "voicechat:remove_group",
+            voice::remove_group_payload(id),
+        );
     }
 }
 
@@ -109,7 +114,12 @@ pub(super) fn guest_left(host: &LanHost, uuid: u128) {
         return;
     }
     server.remove(uuid);
-    broadcast(host, server, "voicechat:remove_state", voice::remove_state_payload(uuid));
+    broadcast(
+        host,
+        server,
+        "voicechat:remove_state",
+        voice::remove_state_payload(uuid),
+    );
     cleanup_groups(host, server);
 }
 
@@ -117,7 +127,13 @@ impl Game<'_> {
     /// A `voicechat:` payload from a guest: the secret request
     /// (`ServerVoiceEvents`, then `initializePlayerConnection`) or a state
     /// change (`PlayerStateManager.onUpdateStatePacket`).
-    pub(super) fn voice_payload(&mut self, host: &mut LanHost, conn: u32, channel: &str, data: &[u8]) {
+    pub(super) fn voice_payload(
+        &mut self,
+        host: &mut LanHost,
+        conn: u32,
+        channel: &str,
+        data: &[u8],
+    ) {
         let Some(uuid) = host.hub.guest(conn).map(|g| g.uuid) else {
             return;
         };
@@ -136,7 +152,11 @@ impl Game<'_> {
                     return;
                 }
                 let Some(server) = server() else {
-                    chat(host, conn, "§cVoice chat isn't available on this server right now.");
+                    chat(
+                        host,
+                        conn,
+                        "§cVoice chat isn't available on this server right now.",
+                    );
                     return;
                 };
                 let secret = match server.add(uuid) {
@@ -146,48 +166,87 @@ impl Game<'_> {
                         return;
                     }
                 };
-                host.hub.send_to(conn, &payload("minecraft:register", voice::register_payload()));
                 host.hub.send_to(
                     conn,
-                    &payload("voicechat:secret", voice::secret_payload(&secret, server.port(), uuid)),
+                    &payload("minecraft:register", voice::register_payload()),
                 );
-                let states: Vec<PlayerState> =
-                    voice_players(host, server).into_iter().map(|(_, s)| s).collect();
-                host.hub.send_to(conn, &payload("voicechat:states", voice::states_payload(&states)));
+                host.hub.send_to(
+                    conn,
+                    &payload(
+                        "voicechat:secret",
+                        voice::secret_payload(&secret, server.port(), uuid),
+                    ),
+                );
+                let states: Vec<PlayerState> = voice_players(host, server)
+                    .into_iter()
+                    .map(|(_, s)| s)
+                    .collect();
+                host.hub.send_to(
+                    conn,
+                    &payload("voicechat:states", voice::states_payload(&states)),
+                );
                 // ServerGroupManager.onPlayerCompatibilityCheckSucceeded.
                 for (id, group) in server.groups() {
-                    host.hub.send_to(conn, &payload("voicechat:add_group", voice::add_group_payload(id, &group)));
+                    host.hub.send_to(
+                        conn,
+                        &payload("voicechat:add_group", voice::add_group_payload(id, &group)),
+                    );
                 }
                 broadcast_state(host, server, uuid);
             }
             "voicechat:create_group" => {
-                let (Some(group), Some(server)) =
-                    (voice::parse_create_group(data), SERVER.get().and_then(Option::as_ref))
-                else {
+                let (Some(group), Some(server)) = (
+                    voice::parse_create_group(data),
+                    SERVER.get().and_then(Option::as_ref),
+                ) else {
                     return;
                 };
                 let Some(id) = server.create_group(uuid, group.clone()) else {
                     return;
                 };
-                broadcast(host, server, "voicechat:add_group", voice::add_group_payload(id, &group));
-                host.hub.send_to(conn, &payload("voicechat:joined_group", voice::joined_group_payload(Some(id), false)));
+                broadcast(
+                    host,
+                    server,
+                    "voicechat:add_group",
+                    voice::add_group_payload(id, &group),
+                );
+                host.hub.send_to(
+                    conn,
+                    &payload(
+                        "voicechat:joined_group",
+                        voice::joined_group_payload(Some(id), false),
+                    ),
+                );
                 broadcast_state(host, server, uuid);
                 cleanup_groups(host, server);
             }
             "voicechat:set_group" => {
-                let (Some((id, password)), Some(server)) =
-                    (voice::parse_join_group(data), SERVER.get().and_then(Option::as_ref))
-                else {
+                let (Some((id, password)), Some(server)) = (
+                    voice::parse_join_group(data),
+                    SERVER.get().and_then(Option::as_ref),
+                ) else {
                     return;
                 };
                 match server.join_group(uuid, id, password.as_deref()) {
                     Ok(()) => {
-                        host.hub.send_to(conn, &payload("voicechat:joined_group", voice::joined_group_payload(Some(id), false)));
+                        host.hub.send_to(
+                            conn,
+                            &payload(
+                                "voicechat:joined_group",
+                                voice::joined_group_payload(Some(id), false),
+                            ),
+                        );
                         broadcast_state(host, server, uuid);
                         cleanup_groups(host, server);
                     }
                     Err(true) => {
-                        host.hub.send_to(conn, &payload("voicechat:joined_group", voice::joined_group_payload(None, true)));
+                        host.hub.send_to(
+                            conn,
+                            &payload(
+                                "voicechat:joined_group",
+                                voice::joined_group_payload(None, true),
+                            ),
+                        );
                     }
                     Err(false) => {}
                 }
@@ -197,14 +256,21 @@ impl Game<'_> {
                     return;
                 };
                 server.leave_group(uuid);
-                host.hub.send_to(conn, &payload("voicechat:joined_group", voice::joined_group_payload(None, false)));
+                host.hub.send_to(
+                    conn,
+                    &payload(
+                        "voicechat:joined_group",
+                        voice::joined_group_payload(None, false),
+                    ),
+                );
                 broadcast_state(host, server, uuid);
                 cleanup_groups(host, server);
             }
             "voicechat:update_state" => {
-                let (Some(disabled), Some(server)) =
-                    (voice::parse_update_state(data), SERVER.get().and_then(Option::as_ref))
-                else {
+                let (Some(disabled), Some(server)) = (
+                    voice::parse_update_state(data),
+                    SERVER.get().and_then(Option::as_ref),
+                ) else {
                     return;
                 };
                 server.set_disabled(uuid, disabled);

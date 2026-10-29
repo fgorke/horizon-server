@@ -201,7 +201,11 @@ impl Game<'_> {
         }
         let (end_portal, gateway) = self.inside_end_portals(at, WIDTH, HEIGHT);
         // /dimension end off: the End portal takes nobody in.
-        if end_portal && !riding && self.dim != Dim::End && !super::dimensions::end_open(&self.world_root) {
+        if end_portal
+            && !riding
+            && self.dim != Dim::End
+            && !super::dimensions::end_open(&self.world_root)
+        {
             if self.portals.player.cooldown == 0 {
                 host.hub.send_to(
                     conn,

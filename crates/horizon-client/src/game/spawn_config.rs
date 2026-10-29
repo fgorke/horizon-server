@@ -30,7 +30,8 @@ impl SpawnConfig {
     /// Whether `at` in `dimension` is in the spawn elytra region (both
     /// corners' blocks included).
     pub(super) fn in_region(&self, dimension: &str, at: [f64; 3]) -> bool {
-        let (Some(a), Some(b), Some(dim)) = (self.pos1, self.pos2, self.region_dimension.as_deref())
+        let (Some(a), Some(b), Some(dim)) =
+            (self.pos1, self.pos2, self.region_dimension.as_deref())
         else {
             return false;
         };
@@ -93,7 +94,9 @@ fn load(root: &Path) -> SpawnConfig {
 
 /// The settings of the world at `root`.
 pub(super) fn read<R>(root: &Path, f: impl FnOnce(&SpawnConfig) -> R) -> R {
-    let mut cache = CACHE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut cache = CACHE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     if cache.as_ref().is_none_or(|(r, _)| r != root) {
         *cache = Some((root.to_path_buf(), load(root)));
     }
@@ -106,8 +109,9 @@ pub(super) fn change(root: &Path, f: impl FnOnce(&mut SpawnConfig)) -> bool {
     let mut next = read(root, Clone::clone);
     f(&mut next);
     let body = serde_json::to_string_pretty(&next.to_json()).unwrap_or_default();
-    *CACHE.lock().unwrap_or_else(std::sync::PoisonError::into_inner) =
-        Some((root.to_path_buf(), next));
+    *CACHE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some((root.to_path_buf(), next));
     match std::fs::write(root.join(FILE), body) {
         Ok(()) => true,
         Err(e) => {

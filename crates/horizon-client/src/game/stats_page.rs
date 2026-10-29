@@ -25,7 +25,10 @@ fn web(world: &std::path::Path, resources: &std::path::Path) -> Option<&'static 
             .and_then(|p| p.parse().ok())
             .unwrap_or(stats_web::PORT);
         // The server's folder holds the world and usercache.json.
-        let usercache = world.parent().unwrap_or(std::path::Path::new("")).join("usercache.json");
+        let usercache = world
+            .parent()
+            .unwrap_or(std::path::Path::new(""))
+            .join("usercache.json");
         // The page's language: a game language code, en_us unless HORIZON_STATS_LANG says otherwise.
         let code = std::env::var("HORIZON_STATS_LANG")
             .ok()
@@ -61,7 +64,10 @@ pub(super) fn guest_left(uuid: u128) {
 /// [`AFK_AFTER`], one a second after).
 fn afk_seconds(conn: u32, at: [f64; 3], yaw: f32, pitch: f32) -> u64 {
     let mut still = STILL.lock().unwrap_or_else(PoisonError::into_inner);
-    let entry = still.get_or_insert_with(HashMap::new).entry(conn).or_insert((at, yaw, pitch, 0));
+    let entry = still
+        .get_or_insert_with(HashMap::new)
+        .entry(conn)
+        .or_insert((at, yaw, pitch, 0));
     if entry.0 != at || entry.1 != yaw || entry.2 != pitch {
         *entry = (at, yaw, pitch, 0);
         return 0;

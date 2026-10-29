@@ -54,7 +54,12 @@ pub struct StatsWeb {
 impl StatsWeb {
     /// Binds the port and serves `world`'s statistics, with the names from
     /// `usercache`.
-    pub fn start(port: u16, world: PathBuf, usercache: PathBuf, lang: &Path) -> std::io::Result<Self> {
+    pub fn start(
+        port: u16,
+        world: PathBuf,
+        usercache: PathBuf,
+        lang: &Path,
+    ) -> std::io::Result<Self> {
         let listener = TcpListener::bind(("0.0.0.0", port))?;
         let afk_path = world.join("horizon-afk.json");
         let state = Arc::new(Mutex::new(State {
@@ -72,28 +77,36 @@ impl StatsWeb {
             ..State::default()
         }));
         let shared = Arc::clone(&state);
-        std::thread::Builder::new().name("stats web".into()).spawn(move || {
-            let (world, usercache) = (Arc::new(world), Arc::new(usercache));
-            for stream in listener.incoming() {
-                let s = match stream {
-                    Ok(s) => s,
-                    Err(e) => {
-                        log::debug!("stats web: accept: {e}");
-                        continue;
+        std::thread::Builder::new()
+            .name("stats web".into())
+            .spawn(move || {
+                let (world, usercache) = (Arc::new(world), Arc::new(usercache));
+                for stream in listener.incoming() {
+                    let s = match stream {
+                        Ok(s) => s,
+                        Err(e) => {
+                            log::debug!("stats web: accept: {e}");
+                            continue;
+                        }
+                    };
+                    // A skin fetch takes a while: the other requests don't wait for it.
+                    let (shared, world, usercache) = (
+                        Arc::clone(&shared),
+                        Arc::clone(&world),
+                        Arc::clone(&usercache),
+                    );
+                    let spawned = std::thread::Builder::new()
+                        .name("stats web request".into())
+                        .spawn(move || {
+                            if let Err(e) = serve(s, &shared, &world, &usercache) {
+                                log::debug!("stats web: {e}");
+                            }
+                        });
+                    if let Err(e) = spawned {
+                        log::warn!("stats web: no thread for a request: {e}");
                     }
-                };
-                // A skin fetch takes a while: the other requests don't wait for it.
-                let (shared, world, usercache) = (Arc::clone(&shared), Arc::clone(&world), Arc::clone(&usercache));
-                let spawned = std::thread::Builder::new().name("stats web request".into()).spawn(move || {
-                    if let Err(e) = serve(s, &shared, &world, &usercache) {
-                        log::debug!("stats web: {e}");
-                    }
-                });
-                if let Err(e) = spawned {
-                    log::warn!("stats web: no thread for a request: {e}");
                 }
-            }
-        })?;
+            })?;
         log::info!("Stats page at port {port}");
         Ok(StatsWeb { state })
     }
@@ -130,7 +143,12 @@ impl StatsWeb {
 /// The names the page shows from a language file: blocks, items,
 /// entities and statistics (`{}` without the file).
 fn names_of(lang: &Path) -> String {
-    const KINDS: [&str; 4] = ["block.minecraft.", "item.minecraft.", "entity.minecraft.", "stat.minecraft."];
+    const KINDS: [&str; 4] = [
+        "block.minecraft.",
+        "item.minecraft.",
+        "entity.minecraft.",
+        "stat.minecraft.",
+    ];
     let all: BTreeMap<String, Value> = std::fs::read(lang)
         .ok()
         .and_then(|b| serde_json::from_slice(&b).ok())
@@ -140,7 +158,9 @@ fn names_of(lang: &Path) -> String {
         // `block.minecraft.x` and not its sub-keys (`.desc`, `.beds`).
         .filter(|(k, v)| {
             v.is_string()
-                && KINDS.iter().any(|p| k.strip_prefix(p).is_some_and(|rest| !rest.contains('.')))
+                && KINDS
+                    .iter()
+                    .any(|p| k.strip_prefix(p).is_some_and(|rest| !rest.contains('.')))
         })
         .collect();
     Value::Object(names).to_string()
@@ -149,13 +169,24 @@ fn names_of(lang: &Path) -> String {
 /// A dashed lowercase UUID, as the stats files are named.
 pub fn dashed(uuid: u128) -> String {
     let h = format!("{uuid:032x}");
-    format!("{}-{}-{}-{}-{}", &h[0..8], &h[8..12], &h[12..16], &h[16..20], &h[20..32])
+    format!(
+        "{}-{}-{}-{}-{}",
+        &h[0..8],
+        &h[8..12],
+        &h[12..16],
+        &h[16..20],
+        &h[20..32]
+    )
 }
 
 fn is_uuid(s: &str) -> bool {
     s.len() == 36
         && s.chars().enumerate().all(|(i, c)| {
-            if [8, 13, 18, 23].contains(&i) { c == '-' } else { c.is_ascii_hexdigit() }
+            if [8, 13, 18, 23].contains(&i) {
+                c == '-'
+            } else {
+                c.is_ascii_hexdigit()
+            }
         })
 }
 
@@ -168,7 +199,12 @@ fn names(usercache: &Path) -> BTreeMap<String, String> {
     };
     entries
         .iter()
-        .filter_map(|e| Some((e["uuid"].as_str()?.to_lowercase(), e["name"].as_str()?.to_owned())))
+        .filter_map(|e| {
+            Some((
+                e["uuid"].as_str()?.to_lowercase(),
+                e["name"].as_str()?.to_owned(),
+            ))
+        })
         .collect()
 }
 
@@ -179,7 +215,11 @@ fn players(state: &State, world: &Path, usercache: &Path) -> Value {
     if let Ok(dir) = std::fs::read_dir(world.join("players").join("stats")) {
         for entry in dir.flatten() {
             let path = entry.path();
-            let Some(uuid) = path.file_stem().and_then(|s| s.to_str()).map(str::to_lowercase) else {
+            let Some(uuid) = path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .map(str::to_lowercase)
+            else {
                 continue;
             };
             if !is_uuid(&uuid) || state.live.contains_key(&uuid) {
@@ -190,7 +230,10 @@ fn players(state: &State, world: &Path, usercache: &Path) -> Value {
                 .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
                 .map(|v| v["stats"].clone())
                 .unwrap_or_else(|| json!({}));
-            let name = names.get(&uuid).cloned().unwrap_or_else(|| uuid[..8].to_owned());
+            let name = names
+                .get(&uuid)
+                .cloned()
+                .unwrap_or_else(|| uuid[..8].to_owned());
             out.insert(uuid.clone(), json!({ "uuid": uuid, "name": name, "online": false, "stats": stats, "afk": state.afk.get(&uuid).copied().unwrap_or(0) }));
         }
     }
@@ -207,7 +250,11 @@ fn players(state: &State, world: &Path, usercache: &Path) -> Value {
 /// `body`).
 fn skin(state: &Mutex<State>, kind: &'static str, uuid: &str) -> Option<Vec<u8>> {
     let key = (kind, uuid.to_owned());
-    if let Some((at, png)) = state.lock().unwrap_or_else(PoisonError::into_inner).skins.get(&key)
+    if let Some((at, png)) = state
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .skins
+        .get(&key)
         && at.elapsed() < SKIN_TTL
     {
         return Some(png.clone());
@@ -247,7 +294,11 @@ fn skin(state: &Mutex<State>, kind: &'static str, uuid: &str) -> Option<Vec<u8>>
 }
 
 fn respond(s: &mut TcpStream, status: &str, kind: &str, body: &[u8]) -> std::io::Result<()> {
-    let cache = if kind == "image/png" { "public, max-age=3600" } else { "no-store" };
+    let cache = if kind == "image/png" {
+        "public, max-age=3600"
+    } else {
+        "no-store"
+    };
     let head = format!(
         "HTTP/1.1 {status}\r\nContent-Type: {kind}\r\nContent-Length: {}\r\n\
          Cache-Control: {cache}\r\nX-Content-Type-Options: nosniff\r\n\
@@ -258,7 +309,12 @@ fn respond(s: &mut TcpStream, status: &str, kind: &str, body: &[u8]) -> std::io:
     s.write_all(body)
 }
 
-fn serve(mut s: TcpStream, state: &Mutex<State>, world: &Path, usercache: &Path) -> std::io::Result<()> {
+fn serve(
+    mut s: TcpStream,
+    state: &Mutex<State>,
+    world: &Path,
+    usercache: &Path,
+) -> std::io::Result<()> {
     s.set_read_timeout(Some(Duration::from_secs(2)))?;
     s.set_write_timeout(Some(Duration::from_secs(5)))?;
     let mut buf = Vec::new();
@@ -279,7 +335,11 @@ fn serve(mut s: TcpStream, state: &Mutex<State>, world: &Path, usercache: &Path)
     }
     let path = path.split('?').next().unwrap_or("");
     for kind in ["head", "body"] {
-        if let Some(uuid) = path.strip_prefix("/skin/").and_then(|p| p.strip_prefix(kind)).and_then(|p| p.strip_prefix('/')) {
+        if let Some(uuid) = path
+            .strip_prefix("/skin/")
+            .and_then(|p| p.strip_prefix(kind))
+            .and_then(|p| p.strip_prefix('/'))
+        {
             let uuid = uuid.to_lowercase();
             if !is_uuid(&uuid) {
                 return respond(&mut s, "404 Not Found", "text/plain", b"not found");
@@ -291,13 +351,26 @@ fn serve(mut s: TcpStream, state: &Mutex<State>, world: &Path, usercache: &Path)
         }
     }
     match path {
-        "/" | "/index.html" => respond(&mut s, "200 OK", "text/html; charset=utf-8", PAGE.as_bytes()),
+        "/" | "/index.html" => respond(
+            &mut s,
+            "200 OK",
+            "text/html; charset=utf-8",
+            PAGE.as_bytes(),
+        ),
         "/api/info" => {
-            let body = state.lock().unwrap_or_else(PoisonError::into_inner).info.clone();
+            let body = state
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .info
+                .clone();
             respond(&mut s, "200 OK", "application/json", body.as_bytes())
         }
         "/api/lang" => {
-            let body = state.lock().unwrap_or_else(PoisonError::into_inner).lang.clone();
+            let body = state
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .lang
+                .clone();
             respond(&mut s, "200 OK", "application/json", body.as_bytes())
         }
         "/api/stats" => {
@@ -305,7 +378,12 @@ fn serve(mut s: TcpStream, state: &Mutex<State>, world: &Path, usercache: &Path)
                 let state = state.lock().unwrap_or_else(PoisonError::into_inner);
                 players(&state, world, usercache)
             };
-            respond(&mut s, "200 OK", "application/json", body.to_string().as_bytes())
+            respond(
+                &mut s,
+                "200 OK",
+                "application/json",
+                body.to_string().as_bytes(),
+            )
         }
         _ => respond(&mut s, "404 Not Found", "text/plain", b"not found"),
     }
@@ -339,8 +417,17 @@ mod tests {
         std::fs::write(&cache, json!([{ "uuid": a, "name": "Ann" }]).to_string()).unwrap();
         let mut state = State::default();
         let mut live = BTreeMap::new();
-        live.insert("minecraft:custom".to_owned(), BTreeMap::from([("minecraft:deaths".to_owned(), 5)]));
-        state.live.insert(b.clone(), LivePlayer { name: "Bob".into(), stats: live });
+        live.insert(
+            "minecraft:custom".to_owned(),
+            BTreeMap::from([("minecraft:deaths".to_owned(), 5)]),
+        );
+        state.live.insert(
+            b.clone(),
+            LivePlayer {
+                name: "Bob".into(),
+                stats: live,
+            },
+        );
         let got = players(&state, &dir, &cache);
         let got = got.as_array().unwrap();
         assert_eq!(got.len(), 2);

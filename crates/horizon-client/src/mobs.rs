@@ -2488,7 +2488,10 @@ impl Mob {
         v
     }
     pub fn has_effect(&self, effect: &str) -> bool {
-        self.extra.effects.iter().any(|e| e.0 == effect)
+        // add_effect stores the namespaced id; either spelling finds it.
+        let bare = |id: &str| id.strip_prefix("minecraft:").unwrap_or(id).to_owned();
+        let effect = bare(effect);
+        self.extra.effects.iter().any(|e| bare(e.0) == effect)
     }
     /// `LivingEntity.isCurrentlyGlowing`: the Glowing effect or the `Glowing` tag (on a
     /// server's client, `glowing` holds shared flag 6 instead).

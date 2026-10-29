@@ -174,7 +174,9 @@ pub fn console(dir: &Path) -> Result<(), String> {
         println!("{}", line.as_str().unwrap_or_default());
     }
     let mut next = reply["next"].as_u64().unwrap_or(0);
-    println!("-- Attached: type console commands. `exit` or Ctrl-D leaves; the server keeps running.");
+    println!(
+        "-- Attached: type console commands. `exit` or Ctrl-D leaves; the server keeps running."
+    );
     signals::install();
     let typed = typed_lines();
     while signals::requests() == 0 {
