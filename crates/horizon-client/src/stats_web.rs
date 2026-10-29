@@ -39,6 +39,8 @@ struct State {
     afk: BTreeMap<String, u64>,
     /// Where `afk` is kept.
     afk_path: PathBuf,
+    /// `{"world": <the world folder's name>}`.
+    info: String,
     /// The block, item, entity and statistic names of de_de.json, as JSON.
     lang: String,
     /// (`head`/`body`, uuid): when fetched, the PNG.
@@ -62,6 +64,7 @@ impl StatsWeb {
                 .unwrap_or_default(),
             afk_path,
             lang: names_of(lang),
+            info: json!({ "world": world.file_name().map(|n| n.to_string_lossy().into_owned()) }).to_string(),
             ..State::default()
         }));
         let shared = Arc::clone(&state);
@@ -285,6 +288,10 @@ fn serve(mut s: TcpStream, state: &Mutex<State>, world: &Path, usercache: &Path)
     }
     match path {
         "/" | "/index.html" => respond(&mut s, "200 OK", "text/html; charset=utf-8", PAGE.as_bytes()),
+        "/api/info" => {
+            let body = state.lock().unwrap_or_else(PoisonError::into_inner).info.clone();
+            respond(&mut s, "200 OK", "application/json", body.as_bytes())
+        }
         "/api/lang" => {
             let body = state.lock().unwrap_or_else(PoisonError::into_inner).lang.clone();
             respond(&mut s, "200 OK", "application/json", body.as_bytes())

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Stats · Winterprojekt</title>
+<title>Stats</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Silkscreen:wght@400;700&family=Press+Start+2P&family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,600;12..96,800&display=swap" rel="stylesheet">
@@ -156,11 +156,11 @@ footer { background: var(--ink); color: var(--cream); padding: 26px 0; font: 400
 </head>
 <body>
 <div class="topbar"><div class="wrap">
-  <a class="brand" href="#/"><i></i>Winterprojekt</a>
+  <a class="brand" href="#/"><i></i><span id="world">Server</span></a>
   <nav class="nav" aria-label="Navigation"><a class="on" href="#/">Stats</a></nav>
 </div></div>
 <main id="view" aria-live="polite"></main>
-<footer><div class="wrap">Winterprojekt · Statistiken live vom Server</div></footer>
+<footer><div class="wrap"><span id="world-foot">Server</span> · Statistiken live vom Server</div></footer>
 <script>
 "use strict";
 const CM_PER_KM = 100000;
@@ -459,6 +459,13 @@ async function load() {
   }
 }
 window.addEventListener("hashchange", () => { query = ""; tab = "minecraft:custom"; render(); window.scrollTo(0, 0); });
+// The world's name, for the header, the footer and the tab.
+fetch("api/info").then(r => r.ok ? r.json() : {}).catch(() => ({})).then(info => {
+  if (!info || !info.world) return;
+  document.title = `Stats · ${info.world}`;
+  document.getElementById("world").textContent = info.world;
+  document.getElementById("world-foot").textContent = info.world;
+});
 fetch("api/lang").then(r => r.ok ? r.json() : {}).catch(() => ({})).then(names => {
   LANG = names || {};
   if (players.length) render();
