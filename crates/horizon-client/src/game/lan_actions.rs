@@ -2639,6 +2639,7 @@ impl Game<'_> {
             .unwrap_or(0.0);
         self.spawn_elytra_tick(host, conn);
         self.voice_tick(host, conn);
+        self.stats_page_tick(host, conn);
         self.guest_glide_tick(host, conn, fell);
         let Some(g) = host.hub.guest_mut(conn) else {
             return;

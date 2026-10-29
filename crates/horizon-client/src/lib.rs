@@ -112,6 +112,7 @@ pub mod ticket_levels;
 pub mod title;
 pub mod toasts;
 pub mod ui_theme;
+pub mod stats_web;
 pub mod vanillagen;
 pub mod voice;
 pub mod win_screen;
