@@ -647,6 +647,13 @@ impl Game<'_> {
                         return None;
                     }
                 }
+                // x_rotation tests the pitch, y_rotation the yaw.
+                let [yaw, pitch] = self.target_rotation(t);
+                if s.x_rotation.is_some_and(|r| !rotation_in_range(r, pitch))
+                    || s.y_rotation.is_some_and(|r| !rotation_in_range(r, yaw))
+                {
+                    return None;
+                }
                 let d2 = (p[0] - origin[0]).powi(2)
                     + (p[1] - origin[1]).powi(2)
                     + (p[2] - origin[2]).powi(2);
@@ -3265,6 +3272,32 @@ impl Game<'_> {
 }
 
 /// Split at a separator outside brackets, braces and quotes.
+/// `Mth.wrapDegrees(float)`: the angle in [-180, 180).
+fn wrap_degrees(angle: f32) -> f32 {
+    let mut a = angle % 360.0;
+    if a >= 180.0 {
+        a -= 360.0;
+    }
+    if a < -180.0 {
+        a += 360.0;
+    }
+    a
+}
+
+/// `EntitySelectorParser.createRotationPredicate`: the range's ends (0 and
+/// 359 when left out) and the angle are wrapped; a minimum above the maximum
+/// is a range across the wrap.
+fn rotation_in_range(range: horizon_client::command::args::DoubleRange, angle: f32) -> bool {
+    let min = wrap_degrees(range.0.map_or(0.0, |v| v as f32));
+    let max = wrap_degrees(range.1.map_or(359.0, |v| v as f32));
+    let angle = wrap_degrees(angle);
+    if min > max {
+        angle >= min || angle <= max
+    } else {
+        angle >= min && angle <= max
+    }
+}
+
 fn split_top_level(s: &str, sep: char) -> Vec<&str> {
     let mut out = Vec::new();
     let (mut depth, mut quote, mut escaped, mut start) = (0i32, None::<char>, false, 0);
@@ -3292,4 +3325,37 @@ fn split_top_level(s: &str, sep: char) -> Vec<&str> {
     }
     out.push(&s[start..]);
     out
+}
+
+#[cfg(test)]
+mod rotation_range_tests {
+    use super::rotation_in_range;
+
+    #[test]
+    fn plain_range_holds_its_ends() {
+        assert!(rotation_in_range((Some(-45.0), Some(45.0)), 0.0));
+        assert!(rotation_in_range((Some(-45.0), Some(45.0)), 45.0));
+        assert!(!rotation_in_range((Some(-45.0), Some(45.0)), 90.0));
+    }
+
+    #[test]
+    fn angles_and_ends_wrap() {
+        // 350 is -10 after wrapping.
+        assert!(rotation_in_range((Some(-45.0), Some(45.0)), 350.0));
+        // 170..-170 crosses the wrap: 180 and -175 are in, 0 is not.
+        assert!(rotation_in_range((Some(170.0), Some(-170.0)), 180.0));
+        assert!(rotation_in_range((Some(170.0), Some(-170.0)), -175.0));
+        assert!(!rotation_in_range((Some(170.0), Some(-170.0)), 0.0));
+    }
+
+    #[test]
+    fn open_ends_default_to_zero_and_359() {
+        // ..90: from 0 to 90.
+        assert!(rotation_in_range((None, Some(90.0)), 30.0));
+        assert!(!rotation_in_range((None, Some(90.0)), -30.0));
+        // 90..: 359 wraps to -1, so the range crosses the wrap.
+        assert!(rotation_in_range((Some(90.0), None), 120.0));
+        assert!(rotation_in_range((Some(90.0), None), -90.0));
+        assert!(!rotation_in_range((Some(90.0), None), 0.0));
+    }
 }
