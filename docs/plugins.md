@@ -16,6 +16,9 @@ release's files); their source is in [`plugins/`](../plugins).
 | Plugin | What |
 | --- | --- |
 | [`spawn`](../plugins/spawn/src/lib.rs) | `/setspawn` (operators) sets the spawn spot where you stand, looking where you look; `/spawn` (everyone) takes you there after 5 seconds standing still, the seconds left in the action bar; moving cancels it |
+| [`elytra`](../plugins/elytra/src/lib.rs) | Spawn elytra: in the region an operator marks with `/spawnelytra pos1` and `pos2`, survival players who fall or double-jump glide without an elytra, boost once with `F` and land without fall damage |
+| [`stats`](../plugins/stats/src/lib.rs) | A web page on port 8100 (`data/port`) with every player's statistics, live for the players online, and their time away from the keyboard; its language in `data/lang` (`en_us`, `de_de`, ...) |
+| [`voice`](../plugins/voice/src/lib.rs) | A server for the [Simple Voice Chat](https://modrinth.com/plugin/simple-voice-chat) mod on UDP port 24454 (`data/port`): proximity voice, whispering and groups |
 
 ## Install one
 
@@ -48,23 +51,26 @@ server/
 
 ## The sandbox
 
-Each plugin runs in its own wasmtime instance: no files, no network, no clock, no threads. What it
-may do is what its manifest's `capabilities` list, and the server refuses to load a plugin that
+Each plugin runs in its own wasmtime instance: no files, no clock, no threads, and the network only
+through capability `network`. What it may do is what its manifest's `capabilities` list, and the server refuses to load a plugin that
 imports an interface its capabilities don't cover.
 
 | Capability | Interface | What |
 | --- | --- | --- |
 | always | `log` | Lines in the server's log |
+| always | `random` | `bytes(len)`: random bytes from the system's secure source, for keys and ids |
 | `storage` | `storage` | A key-value store of its own (4 MiB), kept across restarts in `plugins/<id>/data/` |
 | `players` | `players` | Who is online (id, name, position, dimension, game mode, health); `rotation(player)`, `permission(player)`; `tell`, `broadcast`, `action-bar(player, text)` (with `§` colour codes); `teleport(player, dimension, x, y, z, yaw, pitch)` |
 | `world` | `world` | Blocks and biomes of the loaded chunks; `set-blocks`, made as `/setblock` makes them |
 | `command` | `command` | `run(line)`, `run-quiet(lines)`: vanilla commands, run as the server console (permission level 4) at the tick's end |
+| `movement` | `movement` | `motion-of(player)` (on the ground, gliding, fall distance, riding); `glide(player)` without an elytra and without fall damage; `allow-double-jump(player, allow)`, heard at the `double-jump` hook; `push(player, x, y, z)` |
+| `channels` | `channels` | `listen(prefix)`: plugin messages from players' mods (`voicechat:`), at the `payload` hook; `send(player, channel, data)` |
+| `network` | `network` | `udp-bind(port)` and `udp-send(address, data)`, datagrams at the `udp` hook; `http-listen(port)`, requests at the `http` hook. One socket and one HTTP server, on ports from 1024 up |
+| `statistics` | `statistics` | `of(player)`: a player's statistics as JSON, live or saved; `players()`, `names()` (from `usercache.json`), `translations(language, prefixes)` of the game's language files, `world-name()` |
 
 `command` is the strongest capability: a plugin with it can do whatever an operator can. Install
-one with it only if you trust its author.
-
-Network access (HTTP, UDP) is planned as capabilities of their own, each limited to the hosts and
-ports the manifest names.
+one with it only if you trust its author. `network` opens ports on the server to anyone who
+reaches it, and sends datagrams anywhere.
 
 ## What a plugin hears
 
@@ -76,10 +82,14 @@ ports the manifest names.
 | `chat` | A player sends a chat message |
 | `command` | A player types one of its commands (any player; the plugin checks what it needs) |
 | `block-broken`, `block-placed` | A player breaks or places a block |
+| `swap-hands` | A player presses the swap-hands key (`F`); the plugin may take it (capability `movement`) |
+| `double-jump` | A player double-jumps where `allow-double-jump` lets them (capability `movement`) |
+| `payload` | A plugin message on a channel the plugin listens to (capability `channels`) |
+| `udp`, `http` | Datagrams to its socket, a request to its HTTP server (capability `network`) |
 
 Its commands appear in every player's command tree, so the chat box completes them like vanilla's.
-A plugin cannot take a vanilla command's name or one of Horizon Server's own (`spawn`, `setspawn`,
-`spawnelytra`, `dimension`, `tps`, `list`).
+A plugin cannot take a vanilla command's name or one of Horizon Server's own (`dimension`, `tps`,
+`list`).
 
 ## Write one
 
@@ -117,7 +127,5 @@ Without it the server still starts, and logs a warning if `plugins/` holds any.
 
 ## Roadmap
 
-- Spawn elytra, the stats page and voice chat move out of the server into plugins of their own,
-  one by one, as `spawn` did.
-- Capabilities for HTTP and UDP, limited to the hosts and ports a manifest names.
+- Limits on capability `network`: the hosts and ports a manifest names.
 - Later, in a repository of its own: a bridge that runs Bukkit plugins.

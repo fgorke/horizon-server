@@ -713,6 +713,129 @@ interface %world {
 /// What the server calls in a server mod (manifest `api = "0.3"`,
 /// experimental). Only the hooks `init` asks for are ever called. The player
 /// in each event is as the server saw them when it happened.
+/// Capability `movement` (server plugins): how players move, and glides
+/// without an elytra.
+interface movement {
+    record motion {
+        on-ground: bool,
+        /// Gliding, with an elytra or in a glide `glide` started.
+        gliding: bool,
+        /// Blocks fallen since the player last stood, as vanilla counts them
+        /// for fall damage.
+        fall-distance: f64,
+        /// In or on a vehicle.
+        riding: bool,
+    }
+    /// A player's motion as of this call; none when not online.
+    motion-of: func(player: string) -> option<motion>;
+    /// Starts a glide without an elytra for an airborne player, after this
+    /// call returns: it wears nothing, and the player takes no fall damage
+    /// until it ends (on landing, or when the player stops gliding). False
+    /// when not online.
+    glide: func(player: string) -> bool;
+    /// Lets a survival or adventure player double-jump (their game shows
+    /// flight allowed): each double jump reaches the `double-jump` hook
+    /// instead of flying. False when not online.
+    allow-double-jump: func(player: string, allow: bool) -> bool;
+    /// Sets a player's velocity, in blocks per tick. False when not online or
+    /// a number isn't finite. Up to 8 per call.
+    push: func(player: string, x: f64, y: f64, z: f64) -> bool;
+}
+
+/// Capability `channels` (server plugins): plugin messages (custom
+/// payloads) with the mods in players' games, such as Simple Voice Chat.
+interface channels {
+    /// Hears every payload whose channel starts with `prefix`
+    /// (`voicechat:`) at the `payload` hook. A prefix is `namespace:` or
+    /// longer, and not vanilla's `minecraft:`; up to 16.
+    listen: func(prefix: string) -> result<_, string>;
+    /// Sends a payload on `channel` (`namespace:path`) to a player. False
+    /// when not online, the channel isn't one or `data` is over 1 MiB. Up to
+    /// 256 per call.
+    send: func(player: string, channel: string, data: list<u8>) -> bool;
+}
+
+/// Capability `network` (server plugins): one UDP socket and one HTTP
+/// server, each on a port of the plugin's choice from 1024 up, on every
+/// address of the server.
+interface network {
+    /// Binds the plugin's UDP socket: datagrams to it reach the `udp` hook,
+    /// about every 5 ms. One per plugin.
+    udp-bind: func(port: u16) -> result<_, string>;
+    /// A datagram from the plugin's socket to `address` (`ip:port`). False
+    /// when there is no socket, the address doesn't parse or `data` is over
+    /// 4096 bytes. Up to 4096 per call.
+    udp-send: func(address: string, data: list<u8>) -> bool;
+    /// Serves HTTP/1.1 on `port`: each request reaches the `http` hook,
+    /// whose response goes back. One per plugin.
+    http-listen: func(port: u16) -> result<_, string>;
+}
+
+/// Random bytes from the system's secure source, for keys and ids: every
+/// mod has it.
+interface random {
+    /// `len` bytes, up to 4096; none when the system has no secure source.
+    bytes: func(len: u32) -> list<u8>;
+}
+
+/// Capability `statistics` (server plugins): what players' statistics say.
+interface statistics {
+    /// A player's statistics as vanilla's stats file holds them, as JSON:
+    /// `{"minecraft:mined": {"minecraft:stone": 3}, ...}`. Live for a player
+    /// online, else their saved file; none when there's neither.
+    of: func(player: string) -> option<string>;
+    /// Every player with saved statistics or online, by UUID.
+    players: func() -> list<string>;
+    /// The names the server knew players by (`usercache.json`): UUID, name.
+    names: func() -> list<tuple<string, string>>;
+    /// The entries of the game's language file `language` (`en_us`) whose
+    /// keys start with one of `prefixes` (up to 16); none when there's no
+    /// such language.
+    translations: func(language: string, prefixes: list<string>) -> option<list<tuple<string, string>>>;
+    /// The world folder's name.
+    world-name: func() -> string;
+}
+
+/// More of the server's calls into a plugin, beside `server-events`: a
+/// plugin built before them doesn't export these and simply hears none.
+interface plugin-events {
+    use players.{player};
+
+    record datagram {
+        /// The sender, `ip:port`.
+        address: string,
+        data: list<u8>,
+    }
+    record request {
+        /// `GET`, `POST`, ...
+        method: string,
+        /// As sent, with the query: `/api/stats?page=2`.
+        path: string,
+        /// Up to 64 KiB.
+        body: list<u8>,
+    }
+    record response {
+        status: u16,
+        content-type: string,
+        /// Seconds a browser may keep it (`Cache-Control: max-age`); 0 for
+        /// `no-store`.
+        max-age: u32,
+        /// Up to 16 MiB.
+        body: list<u8>,
+    }
+    /// The swap-hands key (F) of a player (capability `movement`): true
+    /// takes it, and the hands don't swap.
+    swap-hands: func(player: player) -> bool;
+    /// A double jump of a player `movement.allow-double-jump` lets jump.
+    double-jump: func(player: player);
+    /// A payload from a player on a channel the plugin listens to.
+    payload: func(player: player, channel: string, data: list<u8>);
+    /// The datagrams that reached the plugin's socket since the last call.
+    udp: func(datagrams: list<datagram>);
+    /// A request to the plugin's HTTP server.
+    http: func(request: request) -> response;
+}
+
 interface server-events {
     use players.{player};
 
@@ -824,7 +947,24 @@ world horizon-server-mod {
     /// Capability `command`: on a server, vanilla command lines run as the
     /// server console (permission level 4), after the call returns.
     import command;
+    import movement;
+    import channels;
+    import network;
+    import random;
+    import statistics;
     export server-events;
+    export plugin-events;
+}
+
+/// The game's side of the server plugins' imports and hooks since API level 10: a
+/// second world, so plugins built before them (no `plugin-events` export) still load.
+world plugin-host {
+    import movement;
+    import channels;
+    import network;
+    import random;
+    import statistics;
+    export plugin-events;
 }
 
 /// A mod with widgets (capability `ui`): the SDK builds every mod against

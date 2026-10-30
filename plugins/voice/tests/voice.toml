@@ -1,0 +1,20 @@
+# The voice chat mod asks for its secret on voicechat:request_secret. A mod of another
+# version is told so; datagrams from players without a secret are dropped.
+
+[[step]]
+join = "Alex"
+payload = { channel = "voicechat:request_secret", data = "00000013" }
+expect.told = ["Alex: Your voice chat mod doesn't match the server's version (server 20, yours 19)."]
+expect.payloads = []
+
+[[step]]
+udp = [{ from = "127.0.0.1:50000", data = "ff 0000000000000000000000000000000a 00" }]
+expect.udp = []
+
+[[step]]
+payload = { channel = "voicechat:leave_group" }
+expect.payloads = ["Alex: voicechat:joined_group 0000"]
+
+[[step]]
+ticks = 40
+expect.udp = []

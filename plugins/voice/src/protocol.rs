@@ -1,18 +1,13 @@
-//! A server for the Simple Voice Chat mod (henkelmax/simple-voice-chat,
-//! compatibility version [`COMPATIBILITY_VERSION`]). A client asks for a
-//! secret over the `voicechat:request_secret` channel; with it, it talks to
-//! the UDP port over AES-128-GCM. The server only relays the clients' Opus
-//! frames: a microphone packet goes on to every other player in the same
-//! level within the voice distance, as the mod's `Server.processProximityPacket`
-//! does, and to the other members of the sender's group wherever they are
-//! (`processGroupPacket`). Recording is left out.
+//! The Simple Voice Chat protocol (henkelmax/simple-voice-chat, compatibility version
+//! [`COMPATIBILITY_VERSION`]): the channel payloads, AES-128-GCM, and the relay of the
+//! clients' UDP packets. A microphone packet goes on to every other player in the same
+//! level within the voice distance, as the mod's `Server.processProximityPacket` does, and
+//! to the other members of the sender's group wherever they are (`processGroupPacket`).
+//! Recording is left out.
 
 use std::collections::HashMap;
-use std::net::{SocketAddr, UdpSocket};
-use std::sync::{Arc, Mutex, PoisonError};
-use std::time::{Duration, Instant};
 
-use horizon_protocol::crypto::Aes128;
+use crate::aes::Aes128;
 
 /// The mod's `Voicechat.COMPATIBILITY_VERSION` this server speaks.
 pub const COMPATIBILITY_VERSION: i32 = 20;
@@ -46,10 +41,6 @@ const MAX_PASSWORD: usize = 512;
 const MAGIC: u8 = 0xFF;
 const MAX_PACKET: usize = 2048;
 const MAX_OPUS: usize = 1275;
-/// A client that hasn't answered the keep-alives for this long is dropped
-/// (`Server.sendKeepAlives`: ten intervals).
-const TIMEOUT: Duration = Duration::from_millis(KEEP_ALIVE_MS as u64 * 10);
-
 // ---- AES-128-GCM (`Secret`: a 12 byte IV in front, a 128 bit tag behind) ----
 
 fn gf_mul(x: u128, y: u128) -> u128 {
@@ -438,21 +429,38 @@ pub fn remove_state_payload(uuid: u128) -> Vec<u8> {
     w.0
 }
 
+/// A version 4 UUID from 16 random bytes, as `UUID.randomUUID`.
+pub fn random_uuid(bytes: &[u8]) -> Option<u128> {
+    let mut id: [u8; 16] = bytes.try_into().ok()?;
+    id[6] = (id[6] & 0x0F) | 0x40;
+    id[8] = (id[8] & 0x3F) | 0x80;
+    Some(u128::from_be_bytes(id))
+}
+
 /// `minecraft:register`: the channels, NUL separated.
 pub fn register_payload() -> Vec<u8> {
     CHANNELS.join("\0").into_bytes()
 }
 
-// ---- The UDP server ----
+// ---- The relay ----
 
-/// What the server knows of a player: their secret, the address they
-/// authenticated from, and where they are (from the game, every tick).
+/// Ticks between keep-alives, and without an answer after which a client is dropped back to
+/// unauthenticated (`Server.sendKeepAlives`: ten intervals).
+pub const KEEP_ALIVE_TICKS: u64 = KEEP_ALIVE_MS as u64 / 50;
+const TIMEOUT: u64 = KEEP_ALIVE_TICKS * 10;
+
+/// Fresh 12 byte IVs: random, since GCM must never use one twice under a key.
+pub type Ivs<'a> = &'a mut dyn FnMut() -> Option<[u8; 12]>;
+
+/// What the relay knows of a player: their secret, the address they authenticated from, and
+/// where they are (from the game, every tick).
 struct Client {
     gcm: Gcm,
     secret: [u8; 16],
-    address: Option<SocketAddr>,
+    address: Option<String>,
     checked: bool,
-    last_answer: Instant,
+    /// The tick of their last answer.
+    last_answer: u64,
     disabled: bool,
     dimension: String,
     position: [f64; 3],
@@ -460,53 +468,25 @@ struct Client {
     group: Option<u128>,
 }
 
-/// The players by UUID, and the groups by id.
+/// The players by UUID, the groups by id, and the tick now.
 #[derive(Default)]
-struct Clients(HashMap<u128, Client>, HashMap<u128, Group>);
+pub struct Clients(HashMap<u128, Client>, HashMap<u128, Group>, u64);
 
-/// The voice chat server: a UDP socket and the thread that serves it.
-pub struct VoiceServer {
-    clients: Arc<Mutex<Clients>>,
-    port: u16,
-}
-
-impl VoiceServer {
-    /// Binds the port and starts the thread.
-    pub fn start(port: u16) -> std::io::Result<Self> {
-        let socket = UdpSocket::bind(("0.0.0.0", port))?;
-        socket.set_read_timeout(Some(Duration::from_millis(10)))?;
-        let port = socket.local_addr()?.port();
-        let clients = Arc::new(Mutex::new(Clients::default()));
-        let shared = Arc::clone(&clients);
-        std::thread::Builder::new()
-            .name("voice chat".into())
-            .spawn(move || serve(&socket, &shared))?;
-        log::info!("Voice chat server started at port {port}");
-        Ok(VoiceServer { clients, port })
+impl Clients {
+    pub fn set_tick(&mut self, tick: u64) {
+        self.2 = tick;
     }
 
-    pub fn port(&self) -> u16 {
-        self.port
-    }
-
-    fn lock(&self) -> std::sync::MutexGuard<'_, Clients> {
-        self.clients.lock().unwrap_or_else(PoisonError::into_inner)
-    }
-
-    /// A new secret for the player (`Server.generateNewSecret`); a reconnect
-    /// replaces the old one.
-    pub fn add(&self, player: u128) -> std::io::Result<[u8; 16]> {
-        let mut secret = [0u8; 16];
-        horizon_protocol::crypto::random_bytes(&mut secret)
-            .map_err(|e| std::io::Error::other(e.to_string()))?;
-        self.lock().0.insert(
+    /// The player's new secret (`Server.generateNewSecret`); a reconnect replaces the old one.
+    pub fn add(&mut self, player: u128, secret: [u8; 16]) {
+        self.0.insert(
             player,
             Client {
                 gcm: Gcm::new(&secret),
                 secret,
                 address: None,
                 checked: false,
-                last_answer: Instant::now(),
+                last_answer: self.2,
                 disabled: false,
                 dimension: String::new(),
                 position: [0.0; 3],
@@ -514,87 +494,80 @@ impl VoiceServer {
                 group: None,
             },
         );
-        Ok(secret)
     }
 
-    /// `ServerGroupManager.addGroup`: a new group, the player in it; its id.
-    pub fn create_group(&self, player: u128, group: Group) -> Option<u128> {
-        let mut id = [0u8; 16];
-        horizon_protocol::crypto::random_bytes(&mut id).ok()?;
-        // A version 4 UUID, as UUID.randomUUID.
-        id[6] = (id[6] & 0x0F) | 0x40;
-        id[8] = (id[8] & 0x3F) | 0x80;
-        let id = u128::from_be_bytes(id);
-        let mut clients = self.lock();
-        let c = clients.0.get_mut(&player)?;
+    /// `ServerGroupManager.addGroup`: a new group with id `id`, the player in it. False when
+    /// the player has no secret.
+    pub fn create_group(&mut self, player: u128, id: u128, group: Group) -> bool {
+        let Some(c) = self.0.get_mut(&player) else {
+            return false;
+        };
         c.group = Some(id);
-        clients.1.insert(id, group);
-        Some(id)
+        self.1.insert(id, group);
+        true
     }
 
-    /// `ServerGroupManager.joinGroup`: `Err(true)` for a wrong password,
-    /// `Err(false)` for no such group.
-    pub fn join_group(&self, player: u128, id: u128, password: Option<&str>) -> Result<(), bool> {
-        let mut clients = self.lock();
-        let group = clients.1.get(&id).ok_or(false)?;
+    /// `ServerGroupManager.joinGroup`: `Err(true)` for a wrong password, `Err(false)` for no
+    /// such group.
+    pub fn join_group(
+        &mut self,
+        player: u128,
+        id: u128,
+        password: Option<&str>,
+    ) -> Result<(), bool> {
+        let group = self.1.get(&id).ok_or(false)?;
         if group.password.is_some() && group.password.as_deref() != password {
             return Err(true);
         }
-        clients.0.get_mut(&player).ok_or(false)?.group = Some(id);
+        self.0.get_mut(&player).ok_or(false)?.group = Some(id);
         Ok(())
     }
 
     /// `ServerGroupManager.leaveGroup`.
-    pub fn leave_group(&self, player: u128) {
-        if let Some(c) = self.lock().0.get_mut(&player) {
+    pub fn leave_group(&mut self, player: u128) {
+        if let Some(c) = self.0.get_mut(&player) {
             c.group = None;
         }
     }
 
-    /// `ServerGroupManager.cleanupGroups`: the groups nobody is in are
-    /// removed; their ids.
-    pub fn cleanup_groups(&self) -> Vec<u128> {
-        let mut clients = self.lock();
-        let used: Vec<u128> = clients.0.values().filter_map(|c| c.group).collect();
-        let empty: Vec<u128> = clients
+    /// `ServerGroupManager.cleanupGroups`: the groups nobody is in are removed; their ids.
+    pub fn cleanup_groups(&mut self) -> Vec<u128> {
+        let used: Vec<u128> = self.0.values().filter_map(|c| c.group).collect();
+        let empty: Vec<u128> = self
             .1
             .keys()
             .copied()
             .filter(|g| !used.contains(g))
             .collect();
         for id in &empty {
-            clients.1.remove(id);
+            self.1.remove(id);
         }
         empty
     }
 
     /// The groups there are.
     pub fn groups(&self) -> Vec<(u128, Group)> {
-        self.lock()
-            .1
-            .iter()
-            .map(|(id, g)| (*id, g.clone()))
-            .collect()
+        self.1.iter().map(|(id, g)| (*id, g.clone())).collect()
     }
 
-    pub fn remove(&self, player: u128) {
-        self.lock().0.remove(&player);
+    pub fn remove(&mut self, player: u128) {
+        self.0.remove(&player);
     }
 
     pub fn has(&self, player: u128) -> bool {
-        self.lock().0.contains_key(&player)
+        self.0.contains_key(&player)
     }
 
-    pub fn set_disabled(&self, player: u128, disabled: bool) {
-        if let Some(c) = self.lock().0.get_mut(&player) {
+    pub fn set_disabled(&mut self, player: u128, disabled: bool) {
+        if let Some(c) = self.0.get_mut(&player) {
             c.disabled = disabled;
         }
     }
 
-    /// The player's level and position, and whether they hear the others
-    /// (alive and not a spectator).
-    pub fn place(&self, player: u128, dimension: &str, position: [f64; 3], listening: bool) {
-        if let Some(c) = self.lock().0.get_mut(&player) {
+    /// The player's level and position, and whether they hear the others (alive and not a
+    /// spectator).
+    pub fn place(&mut self, player: u128, dimension: &str, position: [f64; 3], listening: bool) {
+        if let Some(c) = self.0.get_mut(&player) {
             if c.dimension != dimension {
                 c.dimension = dimension.to_owned();
             }
@@ -603,53 +576,15 @@ impl VoiceServer {
         }
     }
 
-    /// The players with a secret, whether they turned voice chat off, and
-    /// their group.
-    pub fn players(&self) -> Vec<(u128, bool, Option<u128>)> {
-        self.lock()
-            .0
-            .iter()
-            .map(|(u, c)| (*u, c.disabled, c.group))
-            .collect()
-    }
-}
-
-fn serve(socket: &UdpSocket, clients: &Mutex<Clients>) {
-    let mut buf = [0u8; MAX_PACKET];
-    let mut last_keep_alive = Instant::now();
-    loop {
-        match socket.recv_from(&mut buf) {
-            Ok((n, from)) => {
-                let mut clients = clients.lock().unwrap_or_else(PoisonError::into_inner);
-                for (to, packet) in handle(&mut clients, &buf[..n], from) {
-                    if let Err(e) = socket.send_to(&packet, to) {
-                        log::debug!("voice chat: send to {to}: {e}");
-                    }
-                }
-            }
-            Err(e)
-                if matches!(
-                    e.kind(),
-                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
-                ) => {}
-            Err(e) => log::debug!("voice chat: receive: {e}"),
-        }
-        if last_keep_alive.elapsed() >= Duration::from_millis(KEEP_ALIVE_MS as u64) {
-            last_keep_alive = Instant::now();
-            let mut clients = clients.lock().unwrap_or_else(PoisonError::into_inner);
-            for (to, packet) in keep_alives(&mut clients) {
-                if let Err(e) = socket.send_to(&packet, to) {
-                    log::debug!("voice chat: keep-alive to {to}: {e}");
-                }
-            }
-        }
+    /// Whether the player turned voice chat off, and their group; none without a secret.
+    pub fn state(&self, player: u128) -> Option<(bool, Option<u128>)> {
+        self.0.get(&player).map(|c| (c.disabled, c.group))
     }
 }
 
 /// `NetworkMessage.writeServer`: the magic byte and the encrypted packet.
-fn message(gcm: &Gcm, kind: u8, body: &[u8]) -> Option<Vec<u8>> {
-    let mut iv = [0u8; 12];
-    horizon_protocol::crypto::random_bytes(&mut iv).ok()?;
+fn message(gcm: &Gcm, kind: u8, body: &[u8], ivs: Ivs) -> Option<Vec<u8>> {
+    let iv = ivs()?;
     let mut plain = Vec::with_capacity(1 + body.len());
     plain.push(kind);
     plain.extend_from_slice(body);
@@ -658,26 +593,28 @@ fn message(gcm: &Gcm, kind: u8, body: &[u8]) -> Option<Vec<u8>> {
     Some(w.0)
 }
 
-/// `Server.sendKeepAlives`: the clients that stopped answering are dropped
-/// back to unauthenticated, the others get a keep-alive.
-fn keep_alives(clients: &mut Clients) -> Vec<(SocketAddr, Vec<u8>)> {
+/// `Server.sendKeepAlives`: the clients that stopped answering are dropped back to
+/// unauthenticated, the others get a keep-alive.
+pub fn keep_alives(clients: &mut Clients, ivs: Ivs) -> Vec<(String, Vec<u8>)> {
+    let now = clients.2;
     let mut out = Vec::new();
     for c in clients.0.values_mut() {
-        let Some(to) = c.address.filter(|_| c.checked) else {
+        let Some(to) = c.address.clone().filter(|_| c.checked) else {
             continue;
         };
-        if c.last_answer.elapsed() >= TIMEOUT {
+        if now.saturating_sub(c.last_answer) >= TIMEOUT {
             c.address = None;
             c.checked = false;
             continue;
         }
-        out.extend(message(&c.gcm, 0x8, &[]).map(|m| (to, m)));
+        out.extend(message(&c.gcm, 0x8, &[], ivs).map(|m| (to, m)));
     }
     out
 }
 
 /// One UDP packet from a client: the packets it calls for.
-fn handle(clients: &mut Clients, data: &[u8], from: SocketAddr) -> Vec<(SocketAddr, Vec<u8>)> {
+pub fn handle(clients: &mut Clients, data: &[u8], from: &str, ivs: Ivs) -> Vec<(String, Vec<u8>)> {
+    let now = clients.2;
     let mut r = Reader(data);
     if r.byte() != Some(MAGIC) {
         return Vec::new();
@@ -692,43 +629,49 @@ fn handle(clients: &mut Clients, data: &[u8], from: SocketAddr) -> Vec<(SocketAd
         return Vec::new();
     };
     let mut p = Reader(&plain);
-    let reply = |c: &Client, kind: u8| message(&c.gcm, kind, &[]).map(|m| (from, m));
+    let from_sender = sender.address.as_deref() == Some(from);
     match p.byte() {
         // AuthenticatePacket: the player and the secret again.
         Some(0x5) => {
             if p.uuid() == Some(player) && p.take(16) == Some(&sender.secret[..]) {
-                sender.address = Some(from);
-                sender.last_answer = Instant::now();
-                return reply(sender, 0x6).into_iter().collect();
+                sender.address = Some(from.to_owned());
+                sender.last_answer = now;
+                return message(&sender.gcm, 0x6, &[], ivs)
+                    .map(|m| (from.to_owned(), m))
+                    .into_iter()
+                    .collect();
             }
             Vec::new()
         }
         // ConnectionCheckPacket: the client hears the server.
-        Some(0x9) if sender.address == Some(from) => {
+        Some(0x9) if from_sender => {
             sender.checked = true;
-            sender.last_answer = Instant::now();
-            reply(sender, 0xA).into_iter().collect()
+            sender.last_answer = now;
+            message(&sender.gcm, 0xA, &[], ivs)
+                .map(|m| (from.to_owned(), m))
+                .into_iter()
+                .collect()
         }
-        Some(0x8) if sender.address == Some(from) => {
-            sender.last_answer = Instant::now();
+        Some(0x8) if from_sender => {
+            sender.last_answer = now;
             Vec::new()
         }
-        Some(0x1) if sender.address == Some(from) && sender.checked => {
+        Some(0x1) if from_sender && sender.checked => {
             let (Some(opus), Some(sequence), Some(whispering)) =
                 (p.bytes(MAX_OPUS).map(<[u8]>::to_vec), p.long(), p.bool())
             else {
                 return Vec::new();
             };
-            sender.last_answer = Instant::now();
+            sender.last_answer = now;
             let group = sender.group;
-            // Server.processMicPacket: the group, then the players around
-            // unless the group keeps to itself.
+            // Server.processMicPacket: the group, then the players around unless the group
+            // keeps to itself.
             let Some(id) = group else {
-                return proximity(clients, player, &opus, sequence, whispering);
+                return proximity(clients, player, &opus, sequence, whispering, ivs);
             };
-            let mut out = group_voice(clients, player, id, &opus, sequence);
+            let mut out = group_voice(clients, player, id, &opus, sequence, ivs);
             if clients.1.get(&id).is_none_or(|g| g.kind == GroupKind::Open) {
-                out.extend(proximity(clients, player, &opus, sequence, whispering));
+                out.extend(proximity(clients, player, &opus, sequence, whispering, ivs));
             }
             out
         }
@@ -736,38 +679,44 @@ fn handle(clients: &mut Clients, data: &[u8], from: SocketAddr) -> Vec<(SocketAd
     }
 }
 
-/// `Server.processGroupPacket`: a `GroupSoundPacket` for every other
-/// member of the group, wherever they are.
+/// `Server.processGroupPacket`: a `GroupSoundPacket` for every other member of the group,
+/// wherever they are.
 fn group_voice(
     clients: &Clients,
     player: u128,
     group: u128,
     opus: &[u8],
     sequence: i64,
-) -> Vec<(SocketAddr, Vec<u8>)> {
+    ivs: Ivs,
+) -> Vec<(String, Vec<u8>)> {
     let mut body = Writer::default();
     body.uuid(player)
         .uuid(player)
         .bytes(opus)
         .long(sequence)
         .byte(0);
-    clients
-        .0
-        .iter()
-        .filter(|(uuid, c)| **uuid != player && c.group == Some(group) && !c.disabled && c.checked)
-        .filter_map(|(_, c)| Some((c.address?, message(&c.gcm, 0x3, &body.0)?)))
-        .collect()
+    let mut out = Vec::new();
+    for (uuid, c) in &clients.0 {
+        if *uuid == player || c.group != Some(group) || c.disabled || !c.checked {
+            continue;
+        }
+        if let (Some(to), Some(m)) = (&c.address, message(&c.gcm, 0x3, &body.0, ivs)) {
+            out.push((to.clone(), m));
+        }
+    }
+    out
 }
 
-/// `Server.processProximityPacket`: a `PlayerSoundPacket` for every other
-/// listening player in the sender's level within the distance and a block.
+/// `Server.processProximityPacket`: a `PlayerSoundPacket` for every other listening player in
+/// the sender's level within the distance and a block.
 fn proximity(
     clients: &Clients,
     player: u128,
     opus: &[u8],
     sequence: i64,
     whispering: bool,
-) -> Vec<(SocketAddr, Vec<u8>)> {
+    ivs: Ivs,
+) -> Vec<(String, Vec<u8>)> {
     let Some(sender) = clients.0.get(&player) else {
         return Vec::new();
     };
@@ -789,8 +738,8 @@ fn proximity(
         if *uuid == player || c.disabled || !c.listening || !c.checked {
             continue;
         }
-        // Server.broadcast: the sender's group heard it already, and an
-        // isolated group's members hear no one else.
+        // Server.broadcast: the sender's group heard it already, and an isolated group's
+        // members hear no one else.
         if c.group.is_some()
             && (c.group == sender.group
                 || c.group
@@ -799,7 +748,7 @@ fn proximity(
         {
             continue;
         }
-        let Some(to) = c.address else {
+        let Some(to) = &c.address else {
             continue;
         };
         let d2: f64 = (0..3)
@@ -808,7 +757,7 @@ fn proximity(
         if c.dimension != sender.dimension || d2 > range * range {
             continue;
         }
-        out.extend(message(&c.gcm, 0x2, &body.0).map(|m| (to, m)));
+        out.extend(message(&c.gcm, 0x2, &body.0, ivs).map(|m| (to.clone(), m)));
     }
     out
 }
@@ -816,6 +765,14 @@ fn proximity(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn handle(clients: &mut Clients, data: &[u8], from: &str) -> Vec<(String, Vec<u8>)> {
+        super::handle(clients, data, from, &mut || Some([0; 12]))
+    }
+
+    fn addr(p: u16) -> &'static str {
+        Box::leak(format!("127.0.0.1:{p}").into_boxed_str())
+    }
 
     fn hex(s: &str) -> Vec<u8> {
         (0..s.len())
@@ -871,7 +828,7 @@ mod tests {
         Gcm::new(secret).open(r.bytes(MAX_PACKET).unwrap()).unwrap()
     }
 
-    fn join(clients: &mut Clients, player: u128, secret: [u8; 16], from: SocketAddr, at: [f64; 3]) {
+    fn join(clients: &mut Clients, player: u128, secret: [u8; 16], from: &str, at: [f64; 3]) {
         clients.0.insert(
             player,
             Client {
@@ -879,7 +836,7 @@ mod tests {
                 secret,
                 address: None,
                 checked: false,
-                last_answer: Instant::now(),
+                last_answer: 0,
                 disabled: false,
                 dimension: "minecraft:overworld".into(),
                 position: at,
@@ -898,7 +855,6 @@ mod tests {
     #[test]
     fn a_voice_reaches_the_players_in_range_only() {
         let mut clients = Clients::default();
-        let addr = |p: u16| SocketAddr::from(([127, 0, 0, 1], p));
         let (a, b, c) = (1u128, 2u128, 3u128);
         join(&mut clients, a, [1; 16], addr(1), [0.0, 64.0, 0.0]);
         join(&mut clients, b, [2; 16], addr(2), [30.0, 64.0, 0.0]);
@@ -953,7 +909,6 @@ mod tests {
     #[test]
     fn a_group_hears_its_members_anywhere_and_isolated_ones_nothing_else() {
         let mut clients = Clients::default();
-        let addr = |p: u16| SocketAddr::from(([127, 0, 0, 1], p));
         let (a, b, c) = (1u128, 2u128, 3u128);
         join(&mut clients, a, [1; 16], addr(1), [0.0, 64.0, 0.0]);
         join(&mut clients, b, [2; 16], addr(2), [5000.0, 64.0, 0.0]);
@@ -971,7 +926,7 @@ mod tests {
             clients.0.get_mut(&b).unwrap().group = Some(7);
             let mut mic = Writer::default();
             mic.bytes(&[1]).long(1).bool(false);
-            let mut to: Vec<SocketAddr> = handle(
+            let mut to: Vec<String> = handle(
                 &mut clients,
                 &client_packet(a, &[1; 16], 0x1, &mic.0),
                 addr(1),

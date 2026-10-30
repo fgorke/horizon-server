@@ -442,9 +442,17 @@ impl Game<'_> {
             // The chunks loading (the players', force-loaded ones, a
             // `/pregen` task) keep the workers fed until the next tick.
             self.pump_chunks(*next, paused);
-            let now = Instant::now();
-            if *next > now {
-                std::thread::sleep(*next - now);
+            // Until then the plugins' sockets are looked at every few milliseconds.
+            while let Some(left) = next
+                .checked_duration_since(Instant::now())
+                .filter(|d| !d.is_zero())
+            {
+                let wait = if self.pump_plugins() {
+                    left.min(super::plugins::PUMP_EVERY)
+                } else {
+                    left
+                };
+                std::thread::sleep(wait);
             }
         } else if now - *next > Duration::from_secs(2) {
             *next = now;

@@ -1555,6 +1555,7 @@ dependencies = [
 name = "horizon-mods"
 version = "0.1.0"
 dependencies = [
+ "getrandom 0.3.4",
  "horizon-shader-api",
  "log",
  "minisign-verify",
@@ -1584,7 +1585,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "horizon-plugin-elytra"
+version = "0.1.0"
+dependencies = [
+ "horizon-mod-sdk",
+]
+
+[[package]]
 name = "horizon-plugin-spawn"
+version = "0.1.0"
+dependencies = [
+ "horizon-mod-sdk",
+]
+
+[[package]]
+name = "horizon-plugin-stats"
+version = "0.1.0"
+dependencies = [
+ "horizon-mod-sdk",
+ "serde_json",
+]
+
+[[package]]
+name = "horizon-plugin-voice"
 version = "0.1.0"
 dependencies = [
  "horizon-mod-sdk",

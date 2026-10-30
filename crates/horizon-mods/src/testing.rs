@@ -8,8 +8,8 @@
 //! test written in TOML, `tests/<name>.toml` in the mod's folder: steps, each
 //! saying what happens and what the mod must have shown by then.
 use crate::{
-    BlockPos, Clock, Corner, GameMode, Mods, Output, Panel, Player, PlayerLook, ServerPlayer,
-    Snapshot, Status,
+    BlockPos, Clock, Corner, Datagram, GameMode, Mods, Output, Panel, Player, PlayerLook,
+    PlayerMotion, Request, ServerPlayer, Snapshot, Status,
 };
 use serde::Deserialize;
 use std::{
@@ -29,6 +29,8 @@ pub struct TestGame {
     pub players: Vec<ServerPlayer>,
     /// Their looks and permission levels, by id.
     pub looks: Vec<PlayerLook>,
+    /// Their motion, by id: a player joins standing.
+    pub motions: Vec<PlayerMotion>,
     /// Every name that joined, for their id.
     names: Vec<String>,
     tick: u64,
@@ -121,6 +123,7 @@ impl TestGame {
             }),
             players: Vec::new(),
             looks: Vec::new(),
+            motions: Vec::new(),
             names: Vec::new(),
             tick: 0,
             world: Default::default(),
@@ -131,7 +134,7 @@ impl TestGame {
     }
 
     fn start(&mut self) -> Result<(), String> {
-        self.mods = Mods::load(std::slice::from_ref(&self.hmod), |_| true, |_| false);
+        self.mods = Mods::load_simulated(std::slice::from_ref(&self.hmod));
         match &self.mods.entries()[0].status {
             Status::Failed(reason) => Err(format!("the mod didn't start: {reason}")),
             _ if !self.mods.is_running() => Err("the mod has no code to run".into()),
@@ -152,6 +155,7 @@ impl TestGame {
             clock: self.clock,
             players: self.players.clone(),
             player_looks: self.looks.clone(),
+            motions: self.motions.clone(),
             // The GUI of a 1280 x 720 window at scale 3, as the trial run's.
             gui_size: (427.0, 240.0),
             ..Snapshot::default()
@@ -223,6 +227,13 @@ impl TestGame {
                 ..PlayerLook::default()
             });
         }
+        if !self.motions.iter().any(|m| m.id == player.id) {
+            self.motions.push(PlayerMotion {
+                id: player.id.clone(),
+                on_ground: true,
+                ..PlayerMotion::default()
+            });
+        }
         self.snapshot();
         self.mods.player_joined(&player);
         player
@@ -256,6 +267,34 @@ impl TestGame {
         } else {
             self.mods.block_broken(player, pos, state);
         }
+    }
+
+    /// `player`'s swap-hands key: true when the mod took it.
+    pub fn swap_hands(&mut self, player: &ServerPlayer) -> bool {
+        self.snapshot();
+        self.mods.swap_hands(player)
+    }
+    /// A double jump of `player`.
+    pub fn double_jump(&mut self, player: &ServerPlayer) {
+        self.snapshot();
+        self.mods.double_jump(player);
+    }
+    /// A payload from `player`: false when the mod doesn't listen to its channel.
+    pub fn payload(&mut self, player: &ServerPlayer, channel: &str, data: &[u8]) -> bool {
+        self.snapshot();
+        self.mods.payload(player, channel, data)
+    }
+    /// Datagrams to the mod's UDP socket.
+    pub fn udp(&mut self, datagrams: &[Datagram]) {
+        self.snapshot();
+        self.mods.udp_arrived(datagrams);
+    }
+    /// A request to the mod's HTTP server: status, content type and body; none when it
+    /// serves none.
+    pub fn http(&mut self, request: &Request) -> Option<(u16, String, Vec<u8>)> {
+        self.snapshot();
+        let r = self.mods.http_request(request)?;
+        Some((r.status, r.content_type, r.body))
     }
 
     /// The scratch copy the mod runs from; its `storage` is beside it.
@@ -333,6 +372,11 @@ pub struct PlayerSet {
     dimension: Option<String>,
     game_mode: Option<Mode>,
     permission: Option<u8>,
+    /// Server mods' `movement.motion-of`: a player joins standing.
+    on_ground: Option<bool>,
+    gliding: Option<bool>,
+    fall_distance: Option<f64>,
+    riding: Option<bool>,
 }
 
 /// `players.game-mode` as a script spells it.
@@ -363,6 +407,43 @@ pub struct BlockSet {
     y: i32,
     z: i32,
     state: String,
+}
+
+/// A payload a player sends: its channel, and its bytes in hex.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PayloadSet {
+    channel: String,
+    #[serde(default)]
+    data: String,
+}
+
+/// A datagram to the mod's socket: its sender (`ip:port`) and its bytes in hex.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DatagramSet {
+    from: String,
+    #[serde(default)]
+    data: String,
+}
+
+/// Bytes written as hex, `"0a1b"`, spaces allowed.
+fn unhex(text: &str) -> Result<Vec<u8>, String> {
+    let digits: Vec<u8> = text.bytes().filter(|b| !b.is_ascii_whitespace()).collect();
+    if !digits.len().is_multiple_of(2) {
+        return Err(format!("{text:?} is not hex: an odd number of digits"));
+    }
+    digits
+        .chunks(2)
+        .map(|d| {
+            let d = std::str::from_utf8(d).unwrap_or("");
+            u8::from_str_radix(d, 16).map_err(|_| format!("{text:?} is not hex"))
+        })
+        .collect()
+}
+
+fn hex(data: &[u8]) -> String {
+    data.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -403,6 +484,17 @@ pub struct Step {
     #[serde(rename = "break")]
     broken: Option<BlockSet>,
     place: Option<BlockSet>,
+    /// Server plugins, after `place`: the player presses the swap-hands key, double-jumps,
+    /// sends a payload; datagrams reach the plugin's socket; a `GET` of this path reaches
+    /// its HTTP server.
+    #[serde(default)]
+    swap_hands: bool,
+    #[serde(default)]
+    double_jump: bool,
+    payload: Option<PayloadSet>,
+    #[serde(default)]
+    udp: Vec<DatagramSet>,
+    http: Option<String>,
     /// Blocks of the Overworld before the rest of the step (capability
     /// `world`); every other block is air.
     #[serde(default)]
@@ -431,6 +523,22 @@ pub struct Expect {
     /// Server mods: every `players.teleport` as `"Name: dimension x y z"`, in
     /// order; the player is moved there for the next steps.
     teleported: Option<Vec<String>>,
+    /// Server plugins (capability `movement`): every `glide` as `"Name"`, every
+    /// `allow-double-jump` as `"Name: true"`, every `push` as `"Name: x y z"`, in order;
+    /// and whether the swap-hands key was taken. A glide makes the player glide for the
+    /// next steps.
+    glides: Option<Vec<String>>,
+    double_jump: Option<Vec<String>>,
+    pushed: Option<Vec<String>>,
+    swap_taken: Option<bool>,
+    /// Every `channels.send` as `"Name: channel hex"`, and every datagram sent as
+    /// `"ip:port hex"`, in order.
+    payloads: Option<Vec<String>>,
+    udp: Option<Vec<String>>,
+    /// The `http` request's response: its status, content type, and text its body holds.
+    http_status: Option<u16>,
+    http_type: Option<String>,
+    http_body: Option<String>,
     /// The panel's lines (`[]`: no panel) and its corner.
     panel: Option<Vec<String>>,
     corner: Option<String>,
@@ -495,6 +603,15 @@ impl PlayerSet {
     }
 }
 
+impl PlayerSet {
+    fn apply_motion(&self, m: &mut PlayerMotion) {
+        m.on_ground = self.on_ground.unwrap_or(m.on_ground);
+        m.gliding = self.gliding.unwrap_or(m.gliding);
+        m.fall_distance = self.fall_distance.unwrap_or(m.fall_distance);
+        m.riding = self.riding.unwrap_or(m.riding);
+    }
+}
+
 impl ClockSet {
     fn apply(&self, c: &mut Clock) {
         c.game_time = self.game_time.unwrap_or(c.game_time);
@@ -528,6 +645,21 @@ impl Step {
             if let Some(b) = b {
                 parts.push(format!("{what} {} at {} {} {}", b.state, b.x, b.y, b.z));
             }
+        }
+        if self.swap_hands {
+            parts.push("swap-hands".into());
+        }
+        if self.double_jump {
+            parts.push("double jump".into());
+        }
+        if let Some(p) = &self.payload {
+            parts.push(format!("payload {}", p.channel));
+        }
+        if !self.udp.is_empty() {
+            parts.push(format!("{} datagrams", self.udp.len()));
+        }
+        if let Some(path) = &self.http {
+            parts.push(format!("GET {path}"));
         }
         if let Some(name) = &self.leave {
             parts.push(format!("{name} leaves"));
@@ -569,7 +701,10 @@ impl Step {
             || self.chat.is_some()
             || self.command.is_some()
             || self.broken.is_some()
-            || self.place.is_some();
+            || self.place.is_some()
+            || self.swap_hands
+            || self.double_jump
+            || self.payload.is_some();
         let actor = if server && acts {
             Some(actor(game)?)
         } else {
@@ -581,6 +716,9 @@ impl Step {
                     let id = game.players[i].id.clone();
                     let look = game.looks.iter_mut().find(|l| l.id == id);
                     set.apply_server(&mut game.players[i], look);
+                    if let Some(m) = game.motions.iter_mut().find(|m| m.id == id) {
+                        set.apply_motion(m);
+                    }
                 }
                 None => set.apply(game.player.get_or_insert_with(default_player)),
             }
@@ -614,6 +752,42 @@ impl Step {
                 game.block(p, pos, &b.state, placed);
             }
         }
+        let mut swap_taken = None;
+        if let Some(p) = who.as_ref().filter(|_| self.swap_hands) {
+            swap_taken = Some(game.swap_hands(p));
+        }
+        if let Some(p) = who.as_ref().filter(|_| self.double_jump) {
+            game.double_jump(p);
+        }
+        if let (Some(set), Some(p)) = (&self.payload, &who)
+            && !game.payload(p, &set.channel, &unhex(&set.data)?)
+        {
+            return Err(format!("the mod doesn't listen to {}", set.channel));
+        }
+        if !self.udp.is_empty() {
+            let datagrams = self
+                .udp
+                .iter()
+                .map(|d| {
+                    Ok(Datagram {
+                        address: d.from.clone(),
+                        data: unhex(&d.data)?,
+                    })
+                })
+                .collect::<Result<Vec<_>, String>>()?;
+            game.udp(&datagrams);
+        }
+        let response = match &self.http {
+            Some(path) => {
+                let request = Request {
+                    method: "GET".into(),
+                    path: path.clone(),
+                    body: Vec::new(),
+                };
+                Some(game.http(&request).ok_or("the mod serves no HTTP")?)
+            }
+            None => None,
+        };
         if let Some(name) = &self.leave
             && !game.leave(name)
         {
@@ -670,6 +844,40 @@ impl Step {
                 _ => None,
             })
             .collect();
+        let mut moved = (Vec::new(), Vec::new(), Vec::new());
+        let (mut payloads, mut udp) = (Vec::new(), Vec::new());
+        for o in &out {
+            match o {
+                Output::Glide { player } => {
+                    moved.0.push(name(&game.players, player));
+                    if let Some(m) = game.motions.iter_mut().find(|m| m.id == *player) {
+                        m.gliding = true;
+                    }
+                }
+                Output::AllowDoubleJump { player, allow } => {
+                    moved
+                        .1
+                        .push(format!("{}: {allow}", name(&game.players, player)));
+                }
+                Output::Push {
+                    player,
+                    velocity: [x, y, z],
+                } => moved
+                    .2
+                    .push(format!("{}: {x} {y} {z}", name(&game.players, player))),
+                Output::Payload {
+                    player,
+                    channel,
+                    data,
+                } => payloads.push(format!(
+                    "{}: {channel} {}",
+                    name(&game.players, player),
+                    hex(data)
+                )),
+                Output::UdpSent { address, data } => udp.push(format!("{address} {}", hex(data))),
+                _ => {}
+            }
+        }
         let stopped = out.iter().find_map(|o| match o {
             Output::Stopped { reason, .. } => Some(reason.as_str()),
             _ => None,
@@ -745,6 +953,38 @@ impl Step {
         }
         if let Some(want) = &e.teleported {
             same("teleported", want, &teleported)?;
+        }
+        if let Some(want) = &e.glides {
+            same("glides", want, &moved.0)?;
+        }
+        if let Some(want) = &e.double_jump {
+            same("double-jump", want, &moved.1)?;
+        }
+        if let Some(want) = &e.pushed {
+            same("pushed", want, &moved.2)?;
+        }
+        if let Some(want) = e.swap_taken {
+            same("swap-taken", &Some(want), &swap_taken)?;
+        }
+        if let Some(want) = &e.payloads {
+            same("payloads", want, &payloads)?;
+        }
+        if let Some(want) = &e.udp {
+            same("udp", want, &udp)?;
+        }
+        if let Some((status, kind, body)) = &response {
+            if let Some(want) = e.http_status {
+                same("http-status", &want, status)?;
+            }
+            if let Some(want) = &e.http_type {
+                same("http-type", want, kind)?;
+            }
+            if let Some(want) = &e.http_body {
+                let text = String::from_utf8_lossy(body);
+                if !text.contains(want.as_str()) {
+                    return Err(format!("http-body: {want:?} is not in {text:?}"));
+                }
+            }
         }
         if let Some(want) = &e.feedback {
             same("feedback", &Some(want.clone()), &feedback(false))?;

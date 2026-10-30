@@ -1,0 +1,29 @@
+# The page and its API, served on the plugin's HTTP port.
+
+[[step]]
+join = "Alex"
+http = "/"
+expect.http-status = 200
+expect.http-type = "text/html; charset=utf-8"
+expect.http-body = "</html>"
+
+[[step]]
+http = "/api/info?x=1"
+expect.http-status = 200
+expect.http-type = "application/json"
+expect.http-body = "\"lang\":\"en_us\""
+
+[[step]]
+http = "/api/stats"
+expect.http-status = 200
+expect.http-type = "application/json"
+
+[[step]]
+http = "/skin/head/x"
+expect.http-status = 404
+
+# Three still minutes count as away, then every second.
+[[step]]
+ticks = 3700
+http = "/api/stats"
+expect.http-status = 200

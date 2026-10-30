@@ -1,0 +1,8 @@
+id = "elytra"
+name = "Spawn Elytra"
+version = "0.1.0"
+description = "In a region an operator sets with /spawnelytra, survival players who fall or double-jump glide without an elytra, boost once with F and land without fall damage."
+authors = ["fgorke"]
+api = "0.3"
+side = "server"
+capabilities = ["players", "movement", "storage"]

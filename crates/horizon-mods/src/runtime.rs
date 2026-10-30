@@ -102,6 +102,9 @@ pub use recipes_bindings::horizon::mods::recipes::{
     Item as RecipeItem, Kind as RecipeKind, Recipe, Stack as RecipeStack,
 };
 use recipes_bindings::{RecipesHost, horizon::mods::browser, horizon::mods::recipes};
+mod plugin_io;
+use plugin_io::PluginHost;
+pub use plugin_io::{Datagram, PlayerMotion, Request, Response, ServerFiles};
 
 /// A mod's linear memory cap.
 const MEMORY: usize = 64 << 20;
@@ -166,6 +169,8 @@ pub struct Snapshot {
     pub players: Vec<ServerPlayer>,
     /// Their looks and permission levels (`players.rotation`, `players.permission`).
     pub player_looks: Vec<PlayerLook>,
+    /// Their motion (`movement.motion-of`).
+    pub motions: Vec<PlayerMotion>,
     /// The first block along the player's view within [`RAYCAST_MAX`] and
     /// its distance from the eye, for `game.raycast`; the game works it out
     /// only while a mod calls it ([`Mods::wants_raycast`]).
@@ -245,6 +250,20 @@ pub enum Output {
         yaw: f32,
         pitch: f32,
     },
+    /// `movement.glide`: a glide without an elytra for this player.
+    Glide { player: String },
+    /// `movement.allow-double-jump`.
+    AllowDoubleJump { player: String, allow: bool },
+    /// `movement.push`: the player's new velocity, in blocks per tick.
+    Push { player: String, velocity: [f64; 3] },
+    /// `channels.send`: a payload to a player.
+    Payload {
+        player: String,
+        channel: String,
+        data: Vec<u8>,
+    },
+    /// `network.udp-send` from a simulated socket ([`Mods::load_simulated`]).
+    UdpSent { address: String, data: Vec<u8> },
     /// A server mod command's feedback, to the player who typed it.
     Reply {
         player: String,
@@ -345,6 +364,11 @@ struct Running {
     raycasts: bool,
     /// It imports capability `recipes`.
     reads_recipes: bool,
+    /// A server plugin's `plugin-events` export; none for one built before them.
+    plugin: Option<PluginHost>,
+    /// It imports capability `movement`, and `statistics`.
+    moves: bool,
+    statistics: bool,
 }
 
 /// A running mod's exports and the hooks its `init` asked for.
@@ -454,6 +478,8 @@ struct State {
     storage_budget: u64,
     limits: StoreLimits,
     world: WorldSlot,
+    /// Capabilities `channels`, `network` and `statistics`.
+    io: plugin_io::Io,
 }
 
 /// The installed mods and the engine running them. `Mods::default()` is
@@ -470,6 +496,10 @@ pub struct Mods {
     generation: u64,
     /// Loaded by [`Mods::load_plugins`]: each keeps its `storage` in a folder of its own.
     plugin_folders: bool,
+    /// What capability `statistics` reads, shared by every mod's store.
+    files: plugin_io::FilesSlot,
+    /// Sockets are recorded, not opened ([`Mods::load_simulated`]).
+    simulated_network: bool,
 }
 
 impl Mods {
@@ -596,6 +626,7 @@ impl Mods {
                 .map_err(|e| e.to_string())?;
             RecipesHost::add_to_linker::<State, HasSelf<State>>(&mut linker, |s| s)
                 .map_err(|e| e.to_string())?;
+            plugin_io::add_to_linker(&mut linker).map_err(|e| e.to_string())?;
             self.engine = Some((engine, linker));
         }
         Ok(self.engine.as_ref().expect("made above"))
@@ -636,6 +667,7 @@ impl Mods {
         let snapshot = self.snapshot.clone();
         let world = self.world.clone();
         let plugin_folders = self.plugin_folders;
+        let io = plugin_io::Io::new(self.simulated_network, self.files.clone());
         let (engine, linker) = self.engine()?;
         let component =
             Component::new(engine, wasm).map_err(|e| format!("not a component: {e}"))?;
@@ -680,6 +712,7 @@ impl Mods {
                 .instances(16)
                 .build(),
             world,
+            io,
         };
         let mut store = Store::new(engine, state);
         store.limiter(|s| &mut s.limits);
@@ -704,6 +737,12 @@ impl Mods {
                 .call_init(&mut store)
                 .map_err(|e| reason(&e))??;
             (Hooks::Client(exports, r), ui)
+        };
+        // `plugin-events` is a plugin built since API level 10's; older ones have no export.
+        let plugin = if server {
+            PluginHost::new(&mut store, &instance).ok()
+        } else {
+            None
         };
         let free = |c: &str| {
             let free = !reserved(c) && !taken.iter().any(|t| t == c);
@@ -736,6 +775,9 @@ impl Mods {
             hooks,
             raycasts: functions.iter().any(|f| f == "game.raycast"),
             reads_recipes: functions.iter().any(|f| f.starts_with("recipes.")),
+            plugin,
+            moves: functions.iter().any(|f| f.starts_with("movement.")),
+            statistics: functions.iter().any(|f| f.starts_with("statistics.")),
         }))
     }
 
@@ -818,6 +860,7 @@ impl Mods {
         let run = entry.run.as_mut()?;
         run.store.data_mut().snapshot = self.snapshot.clone();
         run.store.data_mut().storage_budget = STORAGE_WRITE_BUDGET;
+        run.store.data_mut().io.new_call();
         let started = Instant::now();
         let result = run.store.set_fuel(fuel).and_then(|()| f(run));
         // An average over about the last 64 calls.

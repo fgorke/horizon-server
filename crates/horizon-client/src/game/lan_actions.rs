@@ -1163,8 +1163,8 @@ impl Game<'_> {
                 }
                 // SWAP_ITEM_WITH_OFFHAND: the hands swap and the item in use stops
                 // (ServerGamePacketListenerImpl.handlePlayerAction), not for spectators.
-                // A spawn glide's boost takes the key instead.
-                7 if !spectator && self.spawn_elytra_boost(host, conn) => {}
+                // A plugin (capability `movement`) may take the key instead.
+                7 if !spectator && self.plugin_swap_hands(host, conn) => {}
                 7 if !spectator => {
                     let g = &mut host.hub.guests[gi];
                     let slot = g.selected;
@@ -1440,9 +1440,8 @@ impl Game<'_> {
             S::CustomPayload(p) if p.channel == horizon_protocol::quiet::CHANNEL => {
                 self.guest_quiet_commands(host, conn, &p.data)
             }
-            S::CustomPayload(p) if p.channel.starts_with("voicechat:") => {
-                self.voice_payload(host, conn, &p.channel, &p.data)
-            }
+            // A plugin's channels (capability `channels`), such as Simple Voice Chat's.
+            S::CustomPayload(p) if self.plugin_payload(host, conn, &p.channel, &p.data) => {}
             S::ChatCommandSigned(p) => self.guest_signed_command(host, conn, p),
             S::ChangeDifficulty(p) if host.hub.guests[gi].permission >= 2 => {
                 if !self.level.difficulty_locked && (0..=3).contains(&p.difficulty) {
@@ -1923,10 +1922,6 @@ impl Game<'_> {
                     overlay: false,
                 }),
             );
-            return;
-        }
-        if words[0] == "spawnelytra" {
-            self.spawn_command(host, conn, &words);
             return;
         }
         if words[0] == "dimension" {
@@ -2651,9 +2646,7 @@ impl Game<'_> {
             .guest_mut(conn)
             .and_then(|g| g.moves.last().map(|m| m.0[1]))
             .unwrap_or(0.0);
-        self.spawn_elytra_tick(host, conn);
-        self.voice_tick(host, conn);
-        self.stats_page_tick(host, conn);
+        self.plugin_guest_tick(host, conn);
         self.guest_glide_tick(host, conn, fell);
         let Some(g) = host.hub.guest_mut(conn) else {
             return;
@@ -2936,7 +2929,7 @@ impl Game<'_> {
         if g.flying || g.on_ground || g.vehicle.is_some() {
             return Some(false);
         }
-        let spawn = g.spawn_gliding;
+        let spawn = g.plugin_glide;
         self.as_guest(host, conn, |game| {
             (spawn || game.glider_worn()) && game.potions.effects.get("levitation").is_none()
         })
@@ -2957,8 +2950,8 @@ impl Game<'_> {
             }
             return;
         }
-        // A spawn glide wears no elytra.
-        let creative = g.creative() || g.spawn_gliding;
+        // A plugin's glide wears no elytra.
+        let creative = g.creative() || g.plugin_glide;
         if let Some(m) = g.motion.as_mut()
             && fell > -0.5
             && m.fall_distance > 1.0

@@ -263,6 +263,18 @@ fn play(path: &Path, report: &mut Report) -> Result<(), String> {
             Output::Tell { text, .. } => format!("tell: {text}"),
             Output::Broadcast { text, .. } => format!("broadcast: {text}"),
             Output::ActionBar { text, .. } => format!("action bar: {text}"),
+            Output::Glide { .. } => "started a glide".to_string(),
+            Output::AllowDoubleJump { allow, .. } => format!("double jump allowed: {allow}"),
+            Output::Push {
+                velocity: [x, y, z],
+                ..
+            } => format!("pushed a player: {x} {y} {z}"),
+            Output::Payload { channel, data, .. } => {
+                format!("payload on {channel}: {} bytes", data.len())
+            }
+            Output::UdpSent { address, data } => {
+                format!("datagram to {address}: {} bytes", data.len())
+            }
             Output::Teleport { dimension, at, .. } => {
                 format!("teleported to {} {} {} in {dimension}", at[0], at[1], at[2])
             }

@@ -197,12 +197,39 @@ pub mod server {
     /// Capability `command`: on a server, lines run as the server console.
     pub use crate::command;
 
+    pub use exports::horizon::mods::plugin_events::{
+        Datagram, Guest as __PluginGuest, Request, Response,
+    };
     pub use exports::horizon::mods::server_events::{
         Argument, ArgumentKind, ArgumentValue, BlockPos, Guest as __Guest, Registration,
         ServerCommand,
     };
     pub use horizon::mods::players::{self, GameMode, Player};
     pub use horizon::mods::world::{self, BlockChange};
+    /// API level 10: capabilities `movement`, `channels`, `network` and `statistics`, and
+    /// `random` for every plugin.
+    pub use horizon::mods::{channels, movement, network, random, statistics};
+
+    impl Response {
+        /// A response with `body` of type `content_type`, not to be kept.
+        pub fn new(status: u16, content_type: &str, body: impl Into<Vec<u8>>) -> Self {
+            Self {
+                status,
+                content_type: content_type.into(),
+                max_age: 0,
+                body: body.into(),
+            }
+        }
+        /// `404 Not Found`.
+        pub fn not_found() -> Self {
+            Self::new(404, "text/plain; charset=utf-8", "not found")
+        }
+        /// A browser may keep it for `seconds`.
+        pub fn kept(mut self, seconds: u32) -> Self {
+            self.max_age = seconds;
+            self
+        }
+    }
 
     /// The server's calls into a mod. Only the hooks [`Registration`] asks
     /// for are called; the others may stay as their defaults.
@@ -231,6 +258,21 @@ pub mod server {
         /// When [`Registration::blocks`] is set: `state` is what was there.
         fn block_broken(&mut self, _player: &Player, _pos: BlockPos, _state: &str) {}
         fn block_placed(&mut self, _player: &Player, _pos: BlockPos, _state: &str) {}
+        /// The swap-hands key (F) of a player (capability `movement`): true takes it, and
+        /// the hands don't swap.
+        fn swap_hands(&mut self, _player: &Player) -> bool {
+            false
+        }
+        /// A double jump of a player [`movement::allow_double_jump`] lets jump.
+        fn double_jump(&mut self, _player: &Player) {}
+        /// A payload on a channel the plugin listens to ([`channels::listen`]).
+        fn payload(&mut self, _player: &Player, _channel: &str, _data: &[u8]) {}
+        /// Datagrams to the plugin's socket ([`network::udp_bind`]).
+        fn udp(&mut self, _datagrams: &[Datagram]) {}
+        /// A request to the plugin's HTTP server ([`network::http_listen`]).
+        fn http(&mut self, _request: &Request) -> Response {
+            Response::not_found()
+        }
     }
 
     impl Registration {
@@ -439,6 +481,31 @@ macro_rules! export_server_mod {
                 }
                 fn block_placed(player: Player, pos: BlockPos, state: String) {
                     with(|m| m.block_placed(&player, pos, &state))
+                }
+            }
+            impl $crate::server::__PluginGuest for Export {
+                fn swap_hands(player: Player) -> bool {
+                    let mut taken = false;
+                    with(|m| taken = m.swap_hands(&player));
+                    taken
+                }
+                fn double_jump(player: Player) {
+                    with(|m| m.double_jump(&player))
+                }
+                fn payload(player: Player, channel: String, data: Vec<u8>) {
+                    with(|m| m.payload(&player, &channel, &data))
+                }
+                fn udp(datagrams: Vec<$crate::server::Datagram>) {
+                    with(|m| m.udp(&datagrams))
+                }
+                fn http(request: $crate::server::Request) -> $crate::server::Response {
+                    let mut out = $crate::server::Response::new(
+                        503,
+                        "text/plain; charset=utf-8",
+                        "the plugin is not running",
+                    );
+                    with(|m| out = m.http(&request));
+                    out
                 }
             }
             #[cfg(target_arch = "wasm32")]

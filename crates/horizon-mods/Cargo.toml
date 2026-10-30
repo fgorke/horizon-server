@@ -14,6 +14,8 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 log = "0.4"
 # The 48 LTS line: security fixes until August 2028, on the same wasm-tools (0.254) as wit-component and the SDK's wit-bindgen.
 wasmtime = { version = "48.0.7", default-features = false, features = ["runtime", "cranelift", "component-model", "std"], optional = true }
+# Capability `random`'s bytes (already in every build through horizon-protocol).
+getrandom = { version = "0.3", optional = true }
 # Turns a mod's core module into a component (cargo horizon-mod build, the tests).
 wit-component = { version = "0.254", optional = true }
 wit-parser = { version = "0.254", optional = true }
@@ -34,7 +36,7 @@ wit-parser = "0.254"
 # Loads and runs mods (the game's `mods` feature); without it only manifests,
 # content and packaging. Off by default so builds that don't run mods (the
 # game's tests and probes) skip wasmtime and cranelift.
-runtime = ["dep:wasmtime", "dep:wasmparser"]
+runtime = ["dep:wasmtime", "dep:wasmparser", "dep:getrandom"]
 pack = ["dep:wit-component", "dep:wit-parser"]
 # The mod registry's index (docs/api/mod-index.md): the launcher, the registry server and its CI.
 index = ["dep:sha2", "dep:minisign-verify", "dep:horizon-shader-api", "dep:wasmparser"]

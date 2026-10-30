@@ -2179,9 +2179,9 @@ impl Hub {
                 // handlePlayerAbilities: the client flies only if it may.
                 S::PlayerAbilities(p) => {
                     let g = &mut self.guests[i];
-                    // Spawn elytra: a double jump where it may starts a glide.
-                    if p.flags & 2 != 0 && g.spawn_may_fly && !g.creative() && !g.spectator() {
-                        g.spawn_jump = true;
+                    // A double jump a plugin allows is the plugin's, not a flight.
+                    if p.flags & 2 != 0 && g.plugin_may_fly && !g.creative() && !g.spectator() {
+                        g.plugin_jump = true;
                     }
                     g.flying = p.flags & 2 != 0 && (g.creative() || g.spectator());
                 }
@@ -2931,13 +2931,6 @@ fn with_builtin_commands(mods: &serde_json::Value) -> serde_json::Value {
         children
             .entry("tps")
             .or_insert_with(|| serde_json::json!({ "type": "literal", "executable": true }));
-        children.entry("spawnelytra").or_insert_with(|| {
-            serde_json::json!({ "type": "literal", "executable": true, "children": {
-                "pos1": { "type": "literal", "executable": true },
-                "pos2": { "type": "literal", "executable": true },
-                "off": { "type": "literal", "executable": true },
-            }})
-        });
         let switch = serde_json::json!({ "type": "literal", "children": {
             "on": { "type": "literal", "executable": true },
             "off": { "type": "literal", "executable": true },

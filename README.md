@@ -25,10 +25,10 @@ Everything upstream Horizon's dedicated server does, plus:
 | --- | --- |
 | Plugins | Sandboxed WebAssembly plugins anyone can write ([docs/plugins.md](docs/plugins.md)); the official ones come with each release |
 | Spawn | Plugin [`spawn`](plugins/spawn): `/setspawn` (operators) sets the spawn spot; `/spawn` (everyone) takes you there after a 5 second countdown in the action bar that moving cancels |
-| Spawn elytra | `/spawnelytra pos1` and `pos2` mark a region: falling or jumping off inside it starts a glide without an elytra, `F` boosts once, no fall damage on landing. Made for a spawn island in the sky |
+| Spawn elytra | Plugin [`elytra`](plugins/elytra): `/spawnelytra pos1` and `pos2` mark a region: falling or jumping off inside it starts a glide without an elytra, `F` boosts once, no fall damage on landing. Made for a spawn island in the sky |
 | Dimensions | `/dimension nether on\|off` and `/dimension end on\|off` close or open the Nether and the End |
-| Voice chat | A server for the [Simple Voice Chat](https://modrinth.com/plugin/simple-voice-chat) mod: proximity voice, whispering, and groups (normal, open, isolated, with passwords) |
-| Stats page | A live web page with every player's statistics, top-10 boards and a page per player, AFK time included, in English or German |
+| Voice chat | Plugin [`voice`](plugins/voice): a server for the [Simple Voice Chat](https://modrinth.com/plugin/simple-voice-chat) mod: proximity voice, whispering, and groups (normal, open, isolated, with passwords) |
+| Stats page | Plugin [`stats`](plugins/stats): a live web page with every player's statistics, top-10 boards and a page per player, AFK time included, in English or German |
 | Server tools | `/tps` (tick rate, MSPT, players, loaded chunks); `horizon-server console` attaches to a running server |
 | Fixes | Ender pearls through End gateways; a neutral mob stays angry at the player who provoked it only; the hurt sound reaches the other players once; PvP death messages name the attacker; no TNT ghost blocks; `x_rotation`/`y_rotation` in selectors; shulker box tooltips; guests' deaths, jumps and crafted items are counted |
 
@@ -45,12 +45,12 @@ far as the capabilities its manifest asks for. Installing and writing one:
 | Port | Protocol | What | Change it with |
 | --- | --- | --- | --- |
 | 25565 | TCP | The game | `server-port` in `server.toml` |
-| 24454 | UDP | Simple Voice Chat | `HORIZON_VOICE_PORT` |
-| 8100 | TCP | The stats page (`http://<server>:8100`) | `HORIZON_STATS_PORT` |
+| 24454 | UDP | Simple Voice Chat (plugin `voice`) | `plugins/voice/data/port` |
+| 8100 | TCP | The stats page (`http://<server>:8100`, plugin `stats`) | `plugins/stats/data/port` |
 
-The stats page speaks English; `HORIZON_STATS_LANG=de_de` (any game language code) switches its item, block and mob names, and its own words to German for `de_*`.
+The stats page speaks English; `de_de` (any game language code) in `plugins/stats/data/lang` switches its item, block and mob names, and its own words to German for `de_*`.
 
-Open the ones you use in your firewall. The voice chat server starts when the first player with the mod joins; the stats page starts with the server.
+Open the ones you use in your firewall. Both start with the server, when their plugin is installed. A plugin's settings are plain text files in its `data/` folder: change one, then restart.
 
 ## Commands
 
@@ -58,12 +58,12 @@ Open the ones you use in your firewall. The voice chat server starts when the fi
 | --- | --- | --- |
 | `/spawn` | Everyone | Teleport to the spawn after 5 seconds standing still (plugin `spawn`) |
 | `/setspawn` | Operators | The spawn spot is where you stand, looking where you look (plugin `spawn`) |
-| `/spawnelytra pos1` / `pos2` | Operators | The corners of the spawn elytra region, at your feet |
-| `/spawnelytra off` | Operators | Remove the region; `/spawnelytra` alone shows it |
+| `/spawnelytra pos1` / `pos2` | Operators | The corners of the spawn elytra region, at your feet (plugin `elytra`) |
+| `/spawnelytra off` | Operators | Remove the region; `/spawnelytra` alone shows it (plugin `elytra`) |
 | `/dimension nether\|end on\|off` | Operators | Open or close a dimension |
 | `/tps` | Everyone | Tick rate, MSPT, players and loaded chunks |
 
-The settings these commands write live next to the world: `horizon-spawn.json` (the spawn elytra region), `horizon-dimensions.json` (the End) and `horizon-afk.json` (AFK times). The Nether switch is the vanilla game rule `allow_entering_nether_using_portals`.
+The settings these commands write live next to the world (`horizon-dimensions.json`, the End) or in their plugin's `data/` folder (the spawn, the spawn elytra region, the AFK times). The Nether switch is the vanilla game rule `allow_entering_nether_using_portals`.
 
 ## Host it
 

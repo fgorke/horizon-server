@@ -356,7 +356,7 @@ const totems = s => item(s, "minecraft:used", "totem_of_undying");
 const afkTicks = p => (p.afk || 0) * 20;
 const fmt = (n, d = 0) => Number(n).toLocaleString(T.locale, { maximumFractionDigits: d });
 const esc = t => String(t).replace(/[&<>"']/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
-const head = (p, size) => `<img class="head" src="skin/head/${encodeURIComponent(p.uuid)}" alt="" width="${size}" height="${size}" loading="lazy">`;
+const head = (p, size) => `<img class="head" src="https://mc-heads.net/avatar/${encodeURIComponent(p.uuid)}/64" referrerpolicy="no-referrer" alt="" width="${size}" height="${size}" loading="lazy">`;
 const link = p => `#/${encodeURIComponent(p.uuid)}`;
 const human = id => id.replace(/^minecraft:/, "").split("_").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
 // Names from the server's language file (block., item., entity., stat.).
@@ -490,7 +490,7 @@ function detail(p) {
   ];
   const tabs = Object.keys(T.cat).map(k => `<button type="button" class="tab${k === tab ? " on" : ""}" data-tab="${k}">${T.cat[k]}<small>${Object.keys((s && s[k]) || {}).filter(id => k !== "minecraft:custom" || !HIDDEN.has(id)).length}</small></button>`).join("");
   return `<section class="band teal"><div class="wrap profile">
-      <img src="skin/body/${encodeURIComponent(p.uuid)}" alt="${esc(T.skinOf(p.name))}" width="160" height="360">
+      <img src="https://mc-heads.net/body/${encodeURIComponent(p.uuid)}/240" referrerpolicy="no-referrer" alt="${esc(T.skinOf(p.name))}" width="160" height="360">
       <div><a class="back" href="#/">${T.back}</a>
         <div class="kicker">${T.player} <span class="badge${p.online ? " on" : ""}"><i></i>${p.online ? "online" : "offline"}</span></div>
         <h1>${esc(p.name)}</h1></div>

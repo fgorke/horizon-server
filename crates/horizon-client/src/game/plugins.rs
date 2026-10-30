@@ -1,14 +1,22 @@
 //! Server plugins (`docs/plugins.md`): WebAssembly server mods (`side = "server"`,
 //! `crates/horizon-mod-sdk`) a dedicated server loads from `plugins/` beside its world. Each runs
-//! in its own sandbox (no file, network or clock access, a memory cap and a time budget per call);
-//! one that traps or overruns is turned off and the server goes on.
+//! in its own sandbox (a memory cap and a time budget per call, no file access but its own
+//! `data/`, the network only through capability `network`'s two sockets); one that traps or
+//! overruns is turned off and the server goes on.
 //!
 //! At the end of each server tick they hear who joined and left, then what players said, broke and
 //! placed since the last one, then tick; a player's command reaches them at once. Their lines go to
 //! the players they name, the blocks they set are made level by level. With no plugin, each hook
 //! here is one check. Built with the `plugins` feature (wasmtime); without it nothing loads.
 use super::{Game, lan::LanHost};
+use horizon_protocol::packets::play::{self, Clientbound as C};
 use horizon_world::registry::BlockStateId;
+
+#[cfg(feature = "plugins")]
+mod io;
+
+/// How often, between ticks, the server looks at the plugins' sockets.
+pub(super) const PUMP_EVERY: std::time::Duration = std::time::Duration::from_millis(5);
 
 /// Who did something a plugin hears about, resolved at the tick's end.
 #[cfg_attr(not(feature = "plugins"), allow(dead_code))]
@@ -27,6 +35,8 @@ enum Event {
         state: String,
         placed: bool,
     },
+    /// A double jump a plugin allowed (capability `movement`).
+    DoubleJump(Who),
 }
 
 /// The plugins and what is queued for them.
@@ -71,6 +81,33 @@ impl Game<'_> {
         });
     }
 
+    /// Once a tick for a guest, before its glide tick: a plugin's glide spares the fall
+    /// damage until it ends, and a double jump waits for the plugins at the tick's end (the
+    /// guest's game is told it doesn't fly after all).
+    pub(super) fn plugin_guest_tick(&mut self, host: &mut LanHost, conn: u32) {
+        let Some(g) = host.hub.guest_mut(conn) else {
+            return;
+        };
+        if g.plugin_glide {
+            if let Some(m) = g.motion.as_mut() {
+                m.fall_distance = 0.0;
+            }
+            if g.on_ground || !g.fall_flying || g.creative() || g.spectator() {
+                g.plugin_glide = false;
+            }
+        }
+        if std::mem::take(&mut g.plugin_jump) {
+            g.send(&C::PlayerAbilities(play::PlayerAbilities {
+                flags: g.ability_flags(),
+                flying_speed: 0.05,
+                walking_speed: 0.1,
+            }));
+            if self.plugins.running {
+                self.plugins.events.push(Event::DoubleJump(Who::Conn(conn)));
+            }
+        }
+    }
+
     /// A chat message a player sent.
     pub(super) fn plugin_chat(&mut self, sender: u128, text: &str) {
         if self.plugins.running {
@@ -99,6 +136,21 @@ impl Game<'_> {
         false
     }
     pub(super) fn apply_plugin_block_writes(&mut self) {}
+    pub(super) fn plugin_swap_hands(&mut self, _host: &mut LanHost, _conn: u32) -> bool {
+        false
+    }
+    pub(super) fn plugin_payload(
+        &mut self,
+        _host: &mut LanHost,
+        _conn: u32,
+        _channel: &str,
+        _data: &[u8],
+    ) -> bool {
+        false
+    }
+    pub(super) fn pump_plugins(&mut self) -> bool {
+        false
+    }
 }
 
 impl Game<'_> {
@@ -160,7 +212,7 @@ fn plugin_paths(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
 /// A command name plugins may not take: vanilla's, and this server's own.
 #[cfg_attr(not(feature = "plugins"), allow(dead_code))]
 fn reserved_command(name: &str) -> bool {
-    const OWN: [&str; 4] = ["spawnelytra", "dimension", "tps", "list"];
+    const OWN: [&str; 3] = ["dimension", "tps", "list"];
     let d = horizon_command::vanilla::game_dispatcher();
     OWN.contains(&name)
         || d.nodes[0]
@@ -290,7 +342,7 @@ mod run {
     }
 
     /// `UUID.toString()`.
-    fn uuid_string(u: u128) -> String {
+    pub(super) fn uuid_string(u: u128) -> String {
         let h = format!("{u:032x}");
         format!(
             "{}-{}-{}-{}-{}",
@@ -312,7 +364,7 @@ mod run {
     }
 
     /// The players on the server.
-    fn server_players(host: &LanHost) -> Vec<ServerPlayer> {
+    pub(super) fn server_players(host: &LanHost) -> Vec<ServerPlayer> {
         host.hub
             .guests
             .iter()
@@ -345,6 +397,16 @@ mod run {
             .collect()
     }
 
+    /// What plugins read of the server during a call.
+    pub(super) fn snapshot(host: &LanHost) -> Snapshot {
+        Snapshot {
+            players: server_players(host),
+            player_looks: player_looks(host),
+            motions: super::io::motions(host),
+            ..Snapshot::default()
+        }
+    }
+
     impl Game<'_> {
         /// Reads `plugins/` and starts every plugin there, logging each.
         fn start_plugins(&mut self) {
@@ -374,6 +436,7 @@ mod run {
                 super::super::dedicated::log(level, &line);
             }
             self.plugins.mods = mods;
+            self.set_plugin_files();
             self.plugins.running = self.plugins.mods.runs_server();
             self.plugins.world = self.plugins.mods.wants_world();
         }
@@ -399,7 +462,7 @@ mod run {
 
         /// The command lines plugins queued (`command.run`, `players.teleport`), run as the
         /// server console; a quiet one's feedback isn't logged.
-        fn run_plugin_console(&mut self) {
+        pub(super) fn run_plugin_console(&mut self) {
             if self.plugins.console.is_empty() {
                 return;
             }
@@ -426,11 +489,8 @@ mod run {
 
         fn run_plugin_tick(&mut self, host: &mut LanHost) {
             let players = server_players(host);
-            self.plugins.mods.set_snapshot(Snapshot {
-                players: players.clone(),
-                player_looks: player_looks(host),
-                ..Snapshot::default()
-            });
+            self.feed_plugin_statistics(host);
+            self.plugins.mods.set_snapshot(snapshot(host));
             self.lend_world();
             let before = std::mem::take(&mut self.plugins.players);
             for p in before
@@ -480,6 +540,11 @@ mod run {
                             self.plugins.mods.block_broken(&p, pos, &state);
                         }
                     }
+                    Event::DoubleJump(w) => {
+                        if let Some(p) = who(&w) {
+                            self.plugins.mods.double_jump(&p);
+                        }
+                    }
                 }
             }
             self.plugins.mods.server_tick(self.ticks);
@@ -514,15 +579,10 @@ mod run {
                 return false;
             };
             let id = uuid_string(g.uuid);
-            let players = server_players(host);
-            let Some(me) = players.iter().find(|p| p.id == id).cloned() else {
+            let Some(me) = server_players(host).into_iter().find(|p| p.id == id) else {
                 return false;
             };
-            self.plugins.mods.set_snapshot(Snapshot {
-                players,
-                player_looks: player_looks(host),
-                ..Snapshot::default()
-            });
+            self.plugins.mods.set_snapshot(snapshot(host));
             self.lend_world();
             let owned = self.plugins.mods.server_command(&me, line);
             self.return_world();
@@ -618,7 +678,7 @@ mod run {
 
         /// What plugins said and did: `Tell` and `Reply` to their player, `Broadcast` to
         /// everyone and the log, blocks queued for their level, a stopped plugin logged.
-        fn route_plugin_output(&mut self, host: &mut LanHost) {
+        pub(super) fn route_plugin_output(&mut self, host: &mut LanHost) {
             let named = |name: &str, text: String| {
                 let mut line = Text::literal(format!("[{name}] ")).with_color(text::GRAY);
                 line.push(Text::literal(text));
@@ -695,6 +755,10 @@ mod run {
                             .console
                             .extend(lines.into_iter().map(|l| (l, true)));
                     }
+                    o @ (Output::Glide { .. }
+                    | Output::AllowDoubleJump { .. }
+                    | Output::Push { .. }
+                    | Output::Payload { .. }) => super::io::apply(host, o),
                     // Client mods' outputs: a plugin has none of these.
                     _ => {}
                 }

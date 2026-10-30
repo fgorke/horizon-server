@@ -1,0 +1,8 @@
+id = "stats"
+name = "Stats Page"
+version = "0.1.0"
+description = "A web page on port 8100 with every player's statistics, live for the players online, and their time away from the keyboard."
+authors = ["fgorke"]
+api = "0.3"
+side = "server"
+capabilities = ["players", "network", "statistics", "storage"]

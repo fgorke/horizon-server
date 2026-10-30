@@ -1547,10 +1547,6 @@ impl Game<'_> {
         let Some(mut host) = self.lan.take() else {
             return;
         };
-        // The stats page is up while nobody is online, too.
-        if self.options.dedicated.is_some() {
-            super::stats_page::start(&self.world_root, &self.options.resources);
-        }
         // What the tick sends a guest goes to its connection at the end.
         let holding = lan::Holding::start();
         // The host's own commands' (and command blocks') players moving
@@ -1734,8 +1730,6 @@ impl Game<'_> {
                         self.save_guest(&host, &guest);
                         host.models.remove(&guest.conn);
                         host.play.remove(&guest.conn);
-                        super::voice_chat::guest_left(&host, guest.uuid);
-                        super::stats_page::guest_left(guest.uuid);
                         self.guest_combat.remove(&guest.conn);
                         if self.options.dedicated.is_some() && guest.placed {
                             super::dedicated::log(

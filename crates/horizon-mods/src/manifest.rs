@@ -103,9 +103,19 @@ pub enum Capability {
     /// The recipes and items the game knows, for recipe viewers
     /// (interface `recipes`).
     Recipes,
+    /// Players' motion, glides without an elytra, double jumps and the
+    /// swap-hands key (server plugins).
+    Movement,
+    /// Plugin messages with the mods in players' games (server plugins).
+    Channels,
+    /// A UDP socket and an HTTP server on ports of the plugin's own
+    /// (server plugins).
+    Network,
+    /// Players' statistics, saved and live (server plugins).
+    Statistics,
 }
 impl Capability {
-    pub const ALL: [Capability; 12] = [
+    pub const ALL: [Capability; 16] = [
         Capability::GameRead,
         Capability::Chat,
         Capability::Hud,
@@ -118,12 +128,22 @@ impl Capability {
         Capability::Players,
         Capability::World,
         Capability::Recipes,
+        Capability::Movement,
+        Capability::Channels,
+        Capability::Network,
+        Capability::Statistics,
     ];
     /// Whether a server mod may have it: the others act on a local player.
     pub fn on_server(self) -> bool {
         matches!(
             self,
-            Capability::Storage | Capability::Players | Capability::World
+            Capability::Storage
+                | Capability::Players
+                | Capability::World
+                | Capability::Movement
+                | Capability::Channels
+                | Capability::Network
+                | Capability::Statistics
         )
     }
     /// The WIT interface it grants, in `horizon:mods`.
@@ -141,6 +161,10 @@ impl Capability {
             Capability::Players => "players",
             Capability::World => "world",
             Capability::Recipes => "recipes",
+            Capability::Movement => "movement",
+            Capability::Channels => "channels",
+            Capability::Network => "network",
+            Capability::Statistics => "statistics",
         }
     }
     /// May change in any release: a mod uses it only with
@@ -170,6 +194,14 @@ impl Capability {
             Capability::Recipes => {
                 "read the game's recipes and items and which recipes you know, place recipes in your crafting grid and, in creative mode, give you items"
             }
+            Capability::Movement => {
+                "see how players move, let them glide without an elytra and double-jump, push them and take their swap-hands key"
+            }
+            Capability::Channels => "exchange plugin messages with the mods in players' games",
+            Capability::Network => "open a UDP port and serve a website on a port of its own",
+            Capability::Statistics => {
+                "read players' statistics and the names the server knew them by"
+            }
         }
     }
     /// The capability a component import needs, `Ok(None)` for one every
@@ -181,7 +213,7 @@ impl Capability {
         if !version.starts_with("0.1.") {
             return Err(format!("needs API {version}; this Horizon runs {API}"));
         }
-        if interface == "log" {
+        if interface == "log" || interface == "random" {
             return Ok(None);
         }
         // A recipe viewer's panel is part of capability `ui`.
@@ -211,6 +243,10 @@ impl fmt::Display for Capability {
             Capability::Players => "players",
             Capability::World => "world",
             Capability::Recipes => "recipes",
+            Capability::Movement => "movement",
+            Capability::Channels => "channels",
+            Capability::Network => "network",
+            Capability::Statistics => "statistics",
         };
         f.write_str(name)
     }

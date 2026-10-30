@@ -19,6 +19,10 @@ The contract between Horizon and its mods: the WIT package `horizon:mods@0.1.0`,
 | `players` | [`players`](#players) | see who is on the server and message them |
 | `world` | [`world`](#world) | read and change the world's blocks |
 | `recipes` | [`recipes`](#recipes) | read the game's recipes and items and which recipes you know, place recipes in your crafting grid and, in creative mode, give you items |
+| `movement` | [`movement`](#movement) | see how players move, let them glide without an elytra and double-jump, push them and take their swap-hands key |
+| `channels` | [`channels`](#channels) | exchange plugin messages with the mods in players' games |
+| `network` | [`network`](#network) | open a UDP port and serve a website on a port of its own |
+| `statistics` | [`statistics`](#statistics) | read players' statistics and the names the server knew them by |
 
 ## World `horizon-mod`
 
@@ -31,8 +35,15 @@ A client mod: runs in the player's game.
 
 A server mod (manifest `side = "server"`, `api = "0.3"`, experimental): runs where the world is simulated, on the dedicated server, a LAN host and single player's own server.
 
-- Imports (what the game offers): `log`, `storage`, `players`, `world`, `command`
-- Exports (what the mod provides): `server-events`
+- Imports (what the game offers): `log`, `storage`, `players`, `world`, `command`, `movement`, `channels`, `network`, `random`, `statistics`
+- Exports (what the mod provides): `server-events`, `plugin-events`
+
+## World `plugin-host`
+
+The game's side of the server plugins' imports and hooks since API level 10: a second world, so plugins built before them (no `plugin-events` export) still load.
+
+- Imports (what the game offers): `movement`, `channels`, `network`, `random`, `statistics`, `players`
+- Exports (what the mod provides): `plugin-events`
 
 ## World `horizon-ui-mod`
 
@@ -691,11 +702,120 @@ Capability `world`, server mods only (manifest `api = "0.3"`, experimental): the
 | `get-biome` | `func(dimension: string, x: s32, y: s32, z: s32) -> option<string>` | The biome at a position (`minecraft:plains`, ...), as the server stores it (one per 4 x 4 x 4 cell): none where no chunk is loaded. |
 | `set-blocks` | `func(dimension: string, blocks: list<block-change>) -> result<_, string>` | Sets blocks as `/setblock` does: the old block entity removed, neighbours and shapes updated, light, and every player told. Every state is checked now (an error queues nothing); the changes are made in order after this call returns, before that dimension's next tick; one in a chunk not loaded then is skipped. At most 4096 per call. |
 
-## `server-events`
+## `movement`
+
+Access: capability `movement`.
+
+What the server calls in a server mod (manifest `api = "0.3"`, experimental). Only the hooks `init` asks for are ever called. The player in each event is as the server saw them when it happened. Capability `movement` (server plugins): how players move, and glides without an elytra.
+
+### record `motion`
+
+| Field | Type | |
+| --- | --- | --- |
+| `on-ground` | `bool` |  |
+| `gliding` | `bool` | Gliding, with an elytra or in a glide `glide` started. |
+| `fall-distance` | `f64` | Blocks fallen since the player last stood, as vanilla counts them for fall damage. |
+| `riding` | `bool` | In or on a vehicle. |
+
+| Function | Signature | What it does |
+| --- | --- | --- |
+| `motion-of` | `func(player: string) -> option<motion>` | A player's motion as of this call; none when not online. |
+| `glide` | `func(player: string) -> bool` | Starts a glide without an elytra for an airborne player, after this call returns: it wears nothing, and the player takes no fall damage until it ends (on landing, or when the player stops gliding). False when not online. |
+| `allow-double-jump` | `func(player: string, allow: bool) -> bool` | Lets a survival or adventure player double-jump (their game shows flight allowed): each double jump reaches the `double-jump` hook instead of flying. False when not online. |
+| `push` | `func(player: string, x: f64, y: f64, z: f64) -> bool` | Sets a player's velocity, in blocks per tick. False when not online or a number isn't finite. Up to 8 per call. |
+
+## `channels`
+
+Access: capability `channels`.
+
+Capability `channels` (server plugins): plugin messages (custom payloads) with the mods in players' games, such as Simple Voice Chat.
+
+| Function | Signature | What it does |
+| --- | --- | --- |
+| `listen` | `func(prefix: string) -> result<_, string>` | Hears every payload whose channel starts with `prefix` (`voicechat:`) at the `payload` hook. A prefix is `namespace:` or longer, and not vanilla's `minecraft:`; up to 16. |
+| `send` | `func(player: string, channel: string, data: list<u8>) -> bool` | Sends a payload on `channel` (`namespace:path`) to a player. False when not online, the channel isn't one or `data` is over 1 MiB. Up to 256 per call. |
+
+## `network`
+
+Access: capability `network`.
+
+Capability `network` (server plugins): one UDP socket and one HTTP server, each on a port of the plugin's choice from 1024 up, on every address of the server.
+
+| Function | Signature | What it does |
+| --- | --- | --- |
+| `udp-bind` | `func(port: u16) -> result<_, string>` | Binds the plugin's UDP socket: datagrams to it reach the `udp` hook, about every 5 ms. One per plugin. |
+| `udp-send` | `func(address: string, data: list<u8>) -> bool` | A datagram from the plugin's socket to `address` (`ip:port`). False when there is no socket, the address doesn't parse or `data` is over 4096 bytes. Up to 4096 per call. |
+| `http-listen` | `func(port: u16) -> result<_, string>` | Serves HTTP/1.1 on `port`: each request reaches the `http` hook, whose response goes back. One per plugin. |
+
+## `random`
+
+Access: not granted by any capability.
+
+Random bytes from the system's secure source, for keys and ids: every mod has it.
+
+| Function | Signature | What it does |
+| --- | --- | --- |
+| `bytes` | `func(len: u32) -> list<u8>` | `len` bytes, up to 4096; none when the system has no secure source. |
+
+## `statistics`
+
+Access: capability `statistics`.
+
+Capability `statistics` (server plugins): what players' statistics say.
+
+| Function | Signature | What it does |
+| --- | --- | --- |
+| `of` | `func(player: string) -> option<string>` | A player's statistics as vanilla's stats file holds them, as JSON: `{"minecraft:mined": {"minecraft:stone": 3}, ...}`. Live for a player online, else their saved file; none when there's neither. |
+| `players` | `func() -> list<string>` | Every player with saved statistics or online, by UUID. |
+| `names` | `func() -> list<tuple<string, string>>` | The names the server knew players by (`usercache.json`): UUID, name. |
+| `translations` | `func(language: string, prefixes: list<string>) -> option<list<tuple<string, string>>>` | The entries of the game's language file `language` (`en_us`) whose keys start with one of `prefixes` (up to 16); none when there's no such language. |
+| `world-name` | `func() -> string` | The world folder's name. |
+
+## `plugin-events`
 
 Access: exported by the mod: the game calls it.
 
-What the server calls in a server mod (manifest `api = "0.3"`, experimental). Only the hooks `init` asks for are ever called. The player in each event is as the server saw them when it happened.
+More of the server's calls into a plugin, beside `server-events`: a plugin built before them doesn't export these and simply hears none.
+
+### type `player`
+
+`type player = player`
+
+### record `datagram`
+
+| Field | Type | |
+| --- | --- | --- |
+| `address` | `string` | The sender, `ip:port`. |
+| `data` | `list<u8>` |  |
+
+### record `request`
+
+| Field | Type | |
+| --- | --- | --- |
+| `method` | `string` | `GET`, `POST`, ... |
+| `path` | `string` | As sent, with the query: `/api/stats?page=2`. |
+| `body` | `list<u8>` | Up to 64 KiB. |
+
+### record `response`
+
+| Field | Type | |
+| --- | --- | --- |
+| `status` | `u16` |  |
+| `content-type` | `string` |  |
+| `max-age` | `u32` | Seconds a browser may keep it (`Cache-Control: max-age`); 0 for `no-store`. |
+| `body` | `list<u8>` | Up to 16 MiB. |
+
+| Function | Signature | What it does |
+| --- | --- | --- |
+| `swap-hands` | `func(player: player) -> bool` | The swap-hands key (F) of a player (capability `movement`): true takes it, and the hands don't swap. |
+| `double-jump` | `func(player: player)` | A double jump of a player `movement.allow-double-jump` lets jump. |
+| `payload` | `func(player: player, channel: string, data: list<u8>)` | A payload from a player on a channel the plugin listens to. |
+| `udp` | `func(datagrams: list<datagram>)` | The datagrams that reached the plugin's socket since the last call. |
+| `http` | `func(request: request) -> response` | A request to the plugin's HTTP server. |
+
+## `server-events`
+
+Access: exported by the mod: the game calls it.
 
 ### type `player`
 

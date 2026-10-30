@@ -1,0 +1,8 @@
+id = "voice"
+name = "Voice Chat"
+version = "0.1.0"
+description = "A server for the Simple Voice Chat mod: players hear the players near them and their group, on UDP port 24454."
+authors = ["fgorke"]
+api = "0.3"
+side = "server"
+capabilities = ["players", "channels", "network", "storage"]

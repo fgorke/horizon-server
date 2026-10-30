@@ -1,0 +1,92 @@
+# /spawnelytra sets the region (operators); in it a fall or a double jump starts a glide,
+# F boosts it once, and landing ends it.
+
+[[step]]
+join = "Alex"
+expect.commands = ["spawnelytra"]
+
+[[step]]
+command = "spawnelytra pos1"
+expect.error = "You need to be an operator for that."
+
+[[step]]
+player = { x = -10.5, y = 60.0, z = -10.5, permission = 2 }
+command = "spawnelytra pos1"
+expect.feedback = "pos1 set: -11 60 -11"
+
+[[step]]
+player = { x = 10.5, y = 80.0, z = 10.5 }
+command = "spawnelytra pos2"
+expect.feedback = "pos2 set: 10 80 10"
+
+# The region stays across a restart.
+[[step]]
+reload = true
+command = "spawnelytra"
+expect.feedback = "Pos1: -11 60 -11 | Pos2: 10 80 10 (/spawnelytra pos1|pos2|off)"
+
+# Standing in it, double jumps are allowed.
+[[step]]
+player = { x = 0.5, y = 70.0, z = 0.5 }
+ticks = 1
+expect.double-jump = ["Alex: true"]
+expect.glides = []
+
+# A fall of more than a jump starts a glide, and no double jumps while it lasts.
+[[step]]
+player = { on-ground = false, fall-distance = 2.0 }
+ticks = 1
+expect.glides = ["Alex"]
+expect.action-bar = ["Alex: §bPress F for a boost"]
+expect.double-jump = ["Alex: false"]
+
+# F boosts once, along the look.
+[[step]]
+player = { yaw = 0.0, pitch = 0.0, fall-distance = 0.0 }
+swap-hands = true
+expect.swap-taken = true
+expect.pushed = ["Alex: -0 -0 2"]
+
+[[step]]
+swap-hands = true
+expect.swap-taken = false
+expect.pushed = []
+
+# Landing ends the glide.
+[[step]]
+player = { on-ground = true, gliding = false }
+ticks = 1
+expect.double-jump = ["Alex: true"]
+
+# A double jump in the air starts one too.
+[[step]]
+player = { on-ground = false }
+double-jump = true
+
+[[step]]
+ticks = 1
+expect.glides = ["Alex"]
+
+[[step]]
+player = { on-ground = true, gliding = false }
+ticks = 1
+expect.double-jump = ["Alex: true"]
+
+# Outside the region nothing glides, and double jumps are off.
+[[step]]
+player = { x = 50.0, on-ground = true, gliding = false }
+ticks = 1
+expect.double-jump = ["Alex: false"]
+
+[[step]]
+player = { on-ground = false, fall-distance = 5.0 }
+ticks = 1
+expect.glides = []
+
+[[step]]
+command = "spawnelytra off"
+expect.feedback = "Spawn elytra region removed."
+
+[[step]]
+command = "spawnelytra up"
+expect.error = "Usage: /spawnelytra <pos1|pos2|off>"
