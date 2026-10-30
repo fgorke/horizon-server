@@ -38,9 +38,14 @@ A server mod (manifest `side = "server"`, `api = "0.3"`, experimental): runs whe
 - Imports (what the game offers): `log`, `storage`, `players`, `world`, `command`, `movement`, `channels`, `network`, `random`, `statistics`
 - Exports (what the mod provides): `server-events`, `plugin-events`
 
-## World `plugin-host`
+## World `server-host`
 
-The game's side of the server plugins' imports and hooks since API level 10: a second world, so plugins built before them (no `plugin-events` export) still load.
+The game's side of the server plugins' imports and hooks since API level 10: a second world, so plugins built before them (no `plugin-events` export) still load. The host's half of `horizon-server-mod` without `plugin-events`, which plugins built before it don't export (`plugin-host` binds it where there is one).
+
+- Imports (what the game offers): `log`, `storage`, `players`, `world`, `command`
+- Exports (what the mod provides): `server-events`
+
+## World `plugin-host`
 
 - Imports (what the game offers): `movement`, `channels`, `network`, `random`, `statistics`, `players`
 - Exports (what the mod provides): `plugin-events`

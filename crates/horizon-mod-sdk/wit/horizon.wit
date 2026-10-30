@@ -958,6 +958,16 @@ world horizon-server-mod {
 
 /// The game's side of the server plugins' imports and hooks since API level 10: a
 /// second world, so plugins built before them (no `plugin-events` export) still load.
+/// The host's half of `horizon-server-mod` without `plugin-events`, which plugins built
+/// before it don't export (`plugin-host` binds it where there is one).
+world server-host {
+    import log;
+    import storage;
+    import players;
+    import %world;
+    import command;
+    export server-events;
+}
 world plugin-host {
     import movement;
     import channels;

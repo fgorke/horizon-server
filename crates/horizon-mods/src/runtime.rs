@@ -1,7 +1,7 @@
 //! Loading and calling mods with wasmtime's component model.
 use crate::manifest::{Manifest, Package, Side};
 use server_bindings::{
-    HorizonServerMod,
+    ServerHost,
     exports::horizon::mods::server_events::Registration as ServerRegistration,
     horizon::mods::{players, world as mod_world},
 };
@@ -25,7 +25,7 @@ mod bindings {
 mod server_bindings {
     wasmtime::component::bindgen!({
         path: "../horizon-mod-sdk/wit",
-        world: "horizon-server-mod",
+        world: "server-host",
         additional_derives: [PartialEq],
         with: {
             "horizon:mods/log": super::bindings::horizon::mods::log,
@@ -374,7 +374,7 @@ struct Running {
 /// A running mod's exports and the hooks its `init` asked for.
 enum Hooks {
     Client(HorizonMod, Registration),
-    Server(HorizonServerMod, ServerRegistration),
+    Server(ServerHost, ServerRegistration),
 }
 impl Hooks {
     fn client(&self) -> Option<&Registration> {
@@ -721,7 +721,7 @@ impl Mods {
             .instantiate(&mut store, &component)
             .map_err(|e| reason(&e))?;
         let (mut hooks, ui) = if server {
-            let exports = HorizonServerMod::new(&mut store, &instance).map_err(|e| reason(&e))?;
+            let exports = ServerHost::new(&mut store, &instance).map_err(|e| reason(&e))?;
             let r = exports
                 .horizon_mods_server_events()
                 .call_init(&mut store)
