@@ -227,7 +227,7 @@ mod run {
     use horizon_client::chunk_map::ChunkMap;
     use horizon_client::{
         lan::data::component_nbt,
-        text::{self, Text},
+        text::{self, Style, Text},
     };
     use horizon_mods::{
         ArgumentKind, BlockPos, GameMode, Output, PlayerLook, ServerCommand, ServerPlayer,
@@ -461,7 +461,7 @@ mod run {
         }
 
         /// The command lines plugins queued (`command.run`, `players.teleport`), run as the
-        /// server console; a quiet one's feedback isn't logged.
+        /// server console; a quiet one's feedback isn't logged nor sent to the operators.
         pub(super) fn run_plugin_console(&mut self) {
             if self.plugins.console.is_empty() {
                 return;
@@ -471,7 +471,11 @@ mod run {
                     super::super::dedicated::log("INFO", &format!("A plugin ran /{line}"));
                 }
                 self.chat_capture = Some(Vec::new());
+                let fed = self.admin_feedback.len();
                 self.as_console(|g| g.run_command(&line));
+                if quiet {
+                    self.admin_feedback.truncate(fed);
+                }
                 for said in self.chat_capture.take().unwrap_or_default() {
                     if !quiet {
                         super::super::dedicated::log("INFO", &said.plain());
@@ -678,33 +682,42 @@ mod run {
 
         /// What plugins said and did: `Tell` and `Reply` to their player, `Broadcast` to
         /// everyone and the log, blocks queued for their level, a stopped plugin logged.
+        /// Their lines are markup (`horizon_client_core::markup`), after the plugin's
+        /// `prefix` or, for `Tell` and `Broadcast`, its name.
         pub(super) fn route_plugin_output(&mut self, host: &mut LanHost) {
-            let named = |name: &str, text: String| {
-                let mut line = Text::literal(format!("[{name}] ")).with_color(text::GRAY);
-                line.push(Text::literal(text));
+            let line = |prefix: Option<String>, head: String, text: &str, error: bool| {
+                let base = if error {
+                    Style::color(text::RED)
+                } else {
+                    Style::default()
+                };
+                let mut line = Text::markup(&prefix.unwrap_or(head));
+                line.spans.extend(Text::markup_on(text, &base).spans);
                 line
             };
             for output in self.plugins.mods.drain() {
                 match output {
-                    Output::Tell { name, player, text } => {
-                        Self::tell_plugin_player(host, &player, &named(&name, text), false);
+                    Output::Tell {
+                        name,
+                        player,
+                        text,
+                        prefix,
+                    } => {
+                        let line = line(prefix, format!("&7[{name}] "), &text, false);
+                        Self::tell_plugin_player(host, &player, &line, false);
                     }
                     Output::Reply {
                         player,
                         text,
                         error,
+                        prefix,
                     } => {
-                        let line = Text::literal(text);
-                        let line = if error {
-                            line.with_color(text::RED)
-                        } else {
-                            line
-                        };
+                        let line = line(prefix, String::new(), &text, error);
                         Self::tell_plugin_player(host, &player, &line, false);
                     }
-                    Output::Broadcast { name, text } => {
-                        super::super::dedicated::log("INFO", &format!("[{name}] {text}"));
-                        let line = named(&name, text);
+                    Output::Broadcast { name, text, prefix } => {
+                        let line = line(prefix, format!("&7[{name}] "), &text, false);
+                        super::super::dedicated::log("INFO", &line.plain());
                         for p in server_players(host) {
                             Self::tell_plugin_player(host, &p.id, &line, false);
                         }
@@ -736,7 +749,7 @@ mod run {
                         super::super::dedicated::log("INFO", &format!("[{name}] {text}"));
                     }
                     Output::ActionBar { player, text, .. } => {
-                        Self::tell_plugin_player(host, &player, &Text::legacy(&text), true);
+                        Self::tell_plugin_player(host, &player, &Text::markup(&text), true);
                     }
                     Output::Teleport {
                         name: _,

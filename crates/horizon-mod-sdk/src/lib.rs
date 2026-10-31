@@ -43,6 +43,8 @@ pub use horizon::mods::{
     browser, chat, command, game, hud, input, log, recipes, render, storage, ui,
 };
 
+pub mod messages;
+
 /// The game's calls into a mod. Only the hooks [`Registration`] asks for
 /// are called; the others may stay as their defaults.
 pub trait Mod: Sized + 'static {

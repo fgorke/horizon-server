@@ -3,8 +3,10 @@
 //! blocks) or double-jumps glides without an elytra, boosts once along their look with the
 //! swap-hands key (F) and lands without fall damage; the glide goes on past the region until they
 //! land. The region is kept in `storage` key `region`: a line `dimension <id>`, then `pos1 x y z`
-//! and `pos2 x y z` for the corners set.
+//! and `pos2 x y z` for the corners set. Its messages are [`MESSAGES`], worded in
+//! `data/messages`.
 use horizon_mod_sdk::{
+    messages::Messages,
     server::{Args, Argument, GameMode, Player, Registration, ServerMod, movement, players},
     storage,
 };
@@ -17,6 +19,20 @@ const BOOST: f64 = 2.0;
 /// The permission level /spawnelytra needs: an operator's.
 const OPERATOR: u8 = 2;
 const KEY: &str = "region";
+/// The messages and their defaults.
+const MESSAGES: &[(&str, &str)] = &[
+    ("boost_hint", "§bPress F for a boost"),
+    ("not_operator", "You need to be an operator for that."),
+    ("corner_set", "{corner} set: {x} {y} {z}"),
+    ("removed", "Spawn elytra region removed."),
+    (
+        "status",
+        "Pos1: {pos1} | Pos2: {pos2} (/spawnelytra pos1|pos2|off)",
+    ),
+    ("not_set", "not set"),
+    ("usage", "Usage: /spawnelytra <pos1|pos2|off>"),
+    ("save_failed", "Could not save the region: {error}"),
+];
 
 /// The region's dimension and corners, as they were set.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -88,6 +104,7 @@ struct Elytra {
     region: Region,
     /// By player id.
     gliders: BTreeMap<String, Glider>,
+    messages: Messages,
 }
 
 /// The unit look vector of a yaw and pitch in degrees (`Entity.calculateViewVector`).
@@ -107,7 +124,7 @@ fn block(p: &Player) -> [i32; 3] {
 impl Elytra {
     fn save(&self) -> Result<(), String> {
         storage::set(KEY, self.region.text().as_bytes())
-            .map_err(|e| format!("Could not save the region: {e}"))
+            .map_err(|e| self.messages.get("save_failed", &[("error", &e)]))
     }
 
     fn run_command(
@@ -116,7 +133,7 @@ impl Elytra {
         action: Option<&str>,
     ) -> Result<Option<String>, String> {
         if players::permission(&player.id).unwrap_or(0) < OPERATOR {
-            return Err("You need to be an operator for that.".into());
+            return Err(self.messages.get("not_operator", &[]));
         }
         match action {
             Some(corner @ ("pos1" | "pos2")) => {
@@ -134,24 +151,28 @@ impl Elytra {
                     self.region.pos2 = Some(at);
                 }
                 self.save()?;
-                Ok(Some(format!("{corner} set: {} {} {}", at[0], at[1], at[2])))
+                let [x, y, z] = at;
+                let args: [(&str, &dyn std::fmt::Display); 4] =
+                    [("corner", &corner), ("x", &x), ("y", &y), ("z", &z)];
+                Ok(Some(self.messages.get("corner_set", &args)))
             }
             Some("off") => {
                 self.region = Region::default();
                 self.save()?;
-                Ok(Some("Spawn elytra region removed.".into()))
+                Ok(Some(self.messages.get("removed", &[])))
             }
             None => {
                 let show = |p: Option<[i32; 3]>| {
-                    p.map_or("not set".to_owned(), |[x, y, z]| format!("{x} {y} {z}"))
+                    p.map_or_else(
+                        || self.messages.get("not_set", &[]),
+                        |[x, y, z]| format!("{x} {y} {z}"),
+                    )
                 };
-                Ok(Some(format!(
-                    "Pos1: {} | Pos2: {} (/spawnelytra pos1|pos2|off)",
-                    show(self.region.pos1),
-                    show(self.region.pos2)
-                )))
+                let (pos1, pos2) = (show(self.region.pos1), show(self.region.pos2));
+                let args: [(&str, &dyn std::fmt::Display); 2] = [("pos1", &pos1), ("pos2", &pos2)];
+                Ok(Some(self.messages.get("status", &args)))
             }
-            Some(_) => Err("Usage: /spawnelytra <pos1|pos2|off>".into()),
+            Some(_) => Err(self.messages.get("usage", &[])),
         }
     }
 
@@ -174,7 +195,7 @@ impl Elytra {
         if started && movement::glide(&p.id) {
             g.gliding = true;
             g.boosted = false;
-            players::action_bar(&p.id, "§bPress F for a boost");
+            players::action_bar(&p.id, &self.messages.get("boost_hint", &[]));
         } else if g.gliding && (m.on_ground || !m.gliding || !survival) {
             g.gliding = false;
         }
@@ -198,6 +219,7 @@ impl ServerMod for Elytra {
             Elytra {
                 region,
                 gliders: BTreeMap::new(),
+                messages: Messages::load(MESSAGES),
             },
             hooks,
         ))

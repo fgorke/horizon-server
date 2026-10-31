@@ -2,8 +2,10 @@
 //! player stands, looking where they look; `/spawn` (everyone) takes a player there after
 //! [`COUNTDOWN`] ticks standing still, the seconds left in the action bar. Moving cancels it,
 //! looking around doesn't. The spot is kept in `storage` key `spawn`, as
-//! `<dimension> <x> <y> <z> <yaw> <pitch>`.
+//! `<dimension> <x> <y> <z> <yaw> <pitch>`. Its messages are [`MESSAGES`], worded in
+//! `data/messages`.
 use horizon_mod_sdk::{
+    messages::Messages,
     server::{Args, Player, Registration, ServerMod, players},
     storage,
 };
@@ -16,6 +18,19 @@ const STILL: f64 = 0.1;
 /// The permission level /setspawn needs: an operator's.
 const OPERATOR: u8 = 2;
 const KEY: &str = "spawn";
+/// The messages and their defaults.
+const MESSAGES: &[(&str, &str)] = &[
+    ("countdown", "§eTeleport in {seconds} s, don't move"),
+    ("cancelled", "§cTeleport cancelled: you moved."),
+    ("teleported", "§aTeleported."),
+    ("spawn_set", "Spawn set: {x} {y} {z}"),
+    ("not_operator", "You need to be an operator for that."),
+    (
+        "no_spawn",
+        "No spawn is set yet: an operator sets it with /setspawn",
+    ),
+    ("save_failed", "Could not save the spawn: {error}"),
+];
 
 /// A spot in a dimension, with the look to arrive with.
 #[derive(Clone, Debug, PartialEq)]
@@ -57,6 +72,7 @@ struct Spawn {
     spot: Option<Spot>,
     /// By player id.
     waiting: BTreeMap<String, Wait>,
+    messages: Messages,
 }
 
 fn position(p: &Player) -> [f64; 3] {
@@ -66,7 +82,7 @@ fn position(p: &Player) -> [f64; 3] {
 impl Spawn {
     fn set_spawn(&mut self, player: &Player) -> Result<Option<String>, String> {
         if players::permission(&player.id).unwrap_or(0) < OPERATOR {
-            return Err("You need to be an operator for that.".into());
+            return Err(self.messages.get("not_operator", &[]));
         }
         let (yaw, pitch) = players::rotation(&player.id).unwrap_or((0.0, 0.0));
         let spot = Spot {
@@ -76,12 +92,13 @@ impl Spawn {
             pitch,
         };
         storage::set(KEY, spot.line().as_bytes())
-            .map_err(|e| format!("Could not save the spawn: {e}"))?;
+            .map_err(|e| self.messages.get("save_failed", &[("error", &e)]))?;
         self.spot = Some(spot);
-        Ok(Some(format!(
-            "Spawn set: {:.1} {:.1} {:.1}",
-            player.x, player.y, player.z
-        )))
+        let [x, y, z] = position(player).map(|c| format!("{c:.1}"));
+        let set = self
+            .messages
+            .get("spawn_set", &[("x", &x), ("y", &y), ("z", &z)]);
+        Ok(Some(set))
     }
 
     /// One tick of every wait: cancelled by a move, the seconds left each second, then the
@@ -89,18 +106,19 @@ impl Spawn {
     fn tick_waits(&mut self) {
         let online = players::online();
         let spot = self.spot.clone();
+        let messages = &self.messages;
         self.waiting.retain(|id, wait| {
             let Some(p) = online.iter().find(|p| p.id == *id) else {
                 return false;
             };
             let at = position(p);
             if (0..3).any(|k| (at[k] - wait.from[k]).abs() > STILL) {
-                players::action_bar(id, "§cTeleport cancelled: you moved.");
+                players::action_bar(id, &messages.get("cancelled", &[]));
                 return false;
             }
             if wait.left > 0 {
                 if wait.left % 20 == 0 {
-                    let line = format!("§eTeleport in {} s, don't move", wait.left / 20);
+                    let line = messages.get("countdown", &[("seconds", &(wait.left / 20))]);
                     players::action_bar(id, &line);
                 }
                 wait.left -= 1;
@@ -109,7 +127,7 @@ impl Spawn {
             if let Some(s) = &spot {
                 let [x, y, z] = s.at;
                 if players::teleport(id, &s.dimension, x, y, z, s.yaw, s.pitch) {
-                    players::action_bar(id, "§aTeleported.");
+                    players::action_bar(id, &messages.get("teleported", &[]));
                 }
             }
             false
@@ -128,6 +146,7 @@ impl ServerMod for Spawn {
             Spawn {
                 spot,
                 waiting: BTreeMap::new(),
+                messages: Messages::load(MESSAGES),
             },
             hooks,
         ))
@@ -147,9 +166,7 @@ impl ServerMod for Spawn {
     ) -> Result<Option<String>, String> {
         match name {
             "setspawn" => self.set_spawn(player),
-            _ if self.spot.is_none() => {
-                Err("No spawn is set yet: an operator sets it with /setspawn".into())
-            }
+            _ if self.spot.is_none() => Err(self.messages.get("no_spawn", &[])),
             _ => {
                 let wait = Wait {
                     left: COUNTDOWN,

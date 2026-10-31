@@ -4,6 +4,7 @@
 //! only relays the players' Opus frames: to the players near the speaker in their level, and to
 //! the speaker's group wherever they are ([`protocol`]).
 use horizon_mod_sdk::{
+    messages::Messages,
     server::{
         Datagram, GameMode, Player, Registration, ServerMod, channels, network, players, random,
     },
@@ -31,9 +32,16 @@ fn send_all(packets: Vec<(String, Vec<u8>)>) {
     }
 }
 
+/// The messages and their defaults, worded in `data/messages`.
+const MESSAGES: &[(&str, &str)] = &[(
+    "version_mismatch",
+    "Your voice chat mod doesn't match the server's version (server {server}, yours {yours}).",
+)];
+
 struct Voice {
     clients: Clients,
     port: u16,
+    messages: Messages,
 }
 
 impl Voice {
@@ -94,10 +102,10 @@ impl Voice {
             return;
         };
         if version != protocol::COMPATIBILITY_VERSION {
-            let text = format!(
-                "Your voice chat mod doesn't match the server's version (server {}, yours {version}).",
-                protocol::COMPATIBILITY_VERSION
-            );
+            let server = protocol::COMPATIBILITY_VERSION;
+            let args: [(&str, &dyn std::fmt::Display); 2] =
+                [("server", &server), ("yours", &version)];
+            let text = self.messages.get("version_mismatch", &args);
             players::tell(&player.id, &text);
             return;
         }
@@ -139,6 +147,7 @@ impl ServerMod for Voice {
         let voice = Voice {
             clients: Clients::default(),
             port,
+            messages: Messages::load(MESSAGES),
         };
         Ok((voice, Registration::new().on_tick().on_joins()))
     }

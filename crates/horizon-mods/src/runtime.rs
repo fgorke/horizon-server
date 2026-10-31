@@ -227,14 +227,21 @@ pub enum Output {
     QuietCommands { mod_id: String, lines: Vec<String> },
     /// The mod was turned off: it trapped, overran or failed to start.
     Stopped { name: String, reason: String },
-    /// `players.tell`: a line after the mod's name, to the player with this id.
+    /// `players.tell`: a line after the mod's name (or its `prefix`), to the player with
+    /// this id.
     Tell {
         name: String,
         player: String,
         text: String,
+        /// The `prefix` of the mod's `data/messages`, markup, when it has one.
+        prefix: Option<String>,
     },
-    /// `players.broadcast`: a line after the mod's name, to every player.
-    Broadcast { name: String, text: String },
+    /// `players.broadcast`: a line after the mod's name (or its `prefix`), to every player.
+    Broadcast {
+        name: String,
+        text: String,
+        prefix: Option<String>,
+    },
     /// `players.action-bar`: a line above the player's hotbar, `§` colour codes kept.
     ActionBar {
         name: String,
@@ -269,6 +276,8 @@ pub enum Output {
         player: String,
         text: String,
         error: bool,
+        /// The mod's `prefix`, as on [`Output::Tell`].
+        prefix: Option<String>,
     },
     /// `world.set-blocks`: changes to make in `dimension`, in order, each
     /// state checked by the [`WorldView`] lent for the call.
@@ -471,6 +480,8 @@ struct State {
     browser: BrowserState,
     /// Capability `storage`'s folder; made on first `set`.
     data_dir: PathBuf,
+    /// The `prefix` of `data/messages`, read when the mod loads.
+    prefix: Option<String>,
     /// Bytes `storage::set` may still write before this hook call ends
     /// (reset per call in [`Mods::call`]): fuel bounds a mod's CPU time but
     /// not disk I/O time, so a loop of small-fuel, large-payload `set`s
@@ -705,6 +716,7 @@ impl Mods {
             far_terrain: None,
             input: InputState::default(),
             browser: BrowserState::default(),
+            prefix: message_prefix(&data_dir),
             data_dir,
             storage_budget: STORAGE_WRITE_BUDGET,
             limits: StoreLimitsBuilder::new()
@@ -1006,10 +1018,15 @@ impl Mods {
         let Some(i) = self.command_owner(true, name) else {
             return false;
         };
+        let prefix = self.entries[i]
+            .run
+            .as_ref()
+            .and_then(|r| r.store.data().prefix.clone());
         let reply = |text, error| Output::Reply {
             player: player.id.clone(),
             text,
             error,
+            prefix: prefix.clone(),
         };
         let arguments = self.entries[i]
             .run
@@ -1626,6 +1643,25 @@ impl State {
         }
     }
 }
+/// The `prefix` line of a mod's `data/messages` (`horizon_mod_sdk::messages`: `key = value`,
+/// `"quoted"` to keep spaces): what its chat lines start with instead of its name.
+fn message_prefix(data_dir: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(data_dir.join("messages")).ok()?;
+    text.lines().find_map(|line| {
+        let (key, value) = line.split_once('=')?;
+        if key.trim() != "prefix" {
+            return None;
+        }
+        let value = value.trim();
+        Some(
+            match value.strip_prefix('"').and_then(|v| v.strip_suffix('"')) {
+                Some(quoted) => quoted.replace("\\\"", "\"").replace("\\\\", "\\"),
+                None => value.to_owned(),
+            },
+        )
+    })
+}
+
 impl State {
     /// Queues a chat line unless the call already sent [`CHAT_PER_CALL`].
     fn say(&mut self, line: impl FnOnce(String) -> Output) -> bool {
@@ -1696,17 +1732,21 @@ impl players::Host for State {
         self.snapshot.players.clone()
     }
     fn tell(&mut self, player: String, text: String) -> bool {
+        let prefix = self.prefix.clone();
         self.snapshot.players.iter().any(|p| p.id == player)
             && self.say(|name| Output::Tell {
                 name,
                 player,
                 text: clip(text),
+                prefix,
             })
     }
     fn broadcast(&mut self, text: String) {
+        let prefix = self.prefix.clone();
         self.say(|name| Output::Broadcast {
             name,
             text: clip(text),
+            prefix,
         });
     }
     fn teleport(

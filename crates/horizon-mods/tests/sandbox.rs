@@ -1061,10 +1061,12 @@ fn a_server_mod_runs_only_where_the_world_does() {
             name: "Welcome".into(),
             player: alex.id.clone(),
             text: "Welcome, Alex! 0 other player(s) online.".into(),
+            prefix: None,
         },
         Output::Broadcast {
             name: "Welcome".into(),
             text: "Alex is here for the first time".into(),
+            prefix: None,
         },
     ];
     assert_eq!(mods.drain(), greeted);
@@ -1076,6 +1078,7 @@ fn a_server_mod_runs_only_where_the_world_does() {
         player: alex.id.clone(),
         text: text.into(),
         error: false,
+        prefix: None,
     };
     assert_eq!(
         mods.drain(),

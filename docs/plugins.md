@@ -49,6 +49,29 @@ server/
         └── data/           its storage
 ```
 
+## Messages
+
+A plugin's chat lines are worded in its `data/messages`, written with the plugin's defaults the
+first time it starts: one `key = "value"` per line, `#` for a comment, `{name}` filled in by the
+plugin. Restart the server after a change. `prefix` is what the plugin's chat lines start with,
+instead of its name; every plugin reads its own file, so give each the same `prefix` for one tag:
+
+```
+prefix = "<gradient:#40E0D0:#00008B>[Server]</gradient> &7"
+teleported = "&a<smallcaps>Teleported</smallcaps>"
+```
+
+| Markup | What it does |
+|---|---|
+| `&0`-`&f`, `&k`-`&o`, `&r` (or `§`) | The vanilla colours and decorations; `&r` resets |
+| `&#40E0D0`, `<#40E0D0>` | A colour by its hex code |
+| `<gradient:#40E0D0:#00008B>…</gradient>` | A colour per character, from the first stop to the last (two or more) |
+| `<font:minecraft:uniform>…</font>` | A font: `minecraft:default`, `uniform`, `alt` (the enchanting table's) and `illageralt` come with the game; others need a resource pack that has them |
+| `<smallcaps>…</smallcaps>` | Lowercase letters as small capitals (`ᴛᴇxᴛ`) |
+
+Anything else is text as written. The same markup works in what plugins send without a
+`data/messages` entry: their `tell`, `broadcast`, `action-bar` and command feedback.
+
 ## The sandbox
 
 Each plugin runs in its own wasmtime instance: no files, no clock, no threads, and the network only
