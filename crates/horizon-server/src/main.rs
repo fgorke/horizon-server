@@ -46,6 +46,9 @@ Usage: horizon-server [--dir DIR] <command>
               Run a console command on the running server and print what it answers
   console     Attach to the running server: its log as it comes, and each line typed runs as a
               console command. `exit`, Ctrl-D or Ctrl-C leave it; the server keeps running
+  report [SECONDS]
+              Record a performance report for SECONDS (default 60): where the ticks' time goes,
+              entities, chunks, network, memory; saved in reports/ (JSON and text, no player data)
   logs [-f] [-n N]
               The last N lines of the log (default 50); -f follows it
   backup [NAME]
@@ -109,6 +112,7 @@ fn main() -> ExitCode {
         Some("status") => cli::status(&dir, args[1..].iter().any(|a| a == "--json")),
         Some("cmd") => cli::command(&dir, &args[1..]),
         Some("console") => cli::console(&dir),
+        Some("report") => cli::report(&dir, &args[1..]),
         Some("logs") => logs(&dir, &args[1..]),
         Some("panel") => cli::panel(&dir),
         Some("backup") => cli::backup(&dir, args.get(1).map(String::as_str)),

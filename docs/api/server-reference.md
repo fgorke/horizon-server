@@ -25,6 +25,9 @@ Usage: horizon-server [--dir DIR] <command>
               Run a console command on the running server and print what it answers
   console     Attach to the running server: its log as it comes, and each line typed runs as a
               console command. `exit`, Ctrl-D or Ctrl-C leave it; the server keeps running
+  report [SECONDS]
+              Record a performance report for SECONDS (default 60): where the ticks' time goes,
+              entities, chunks, network, memory; saved in reports/ (JSON and text, no player data)
   logs [-f] [-n N]
               The last N lines of the log (default 50); -f follows it
   backup [NAME]
@@ -77,6 +80,7 @@ Horizon server settings (docs/server.md). The server writes them into server.pro
 | `enforce_whitelist` | `false` | `enforce-whitelist` | kick online players taken off the whitelist |
 | `view_distance` | `10` | `view-distance` | chunks sent around each player |
 | `simulation_distance` | `10` | `simulation-distance` | chunks around each player where mobs, crops and redstone tick |
+| `max_view_distance` | `0` | `horizon-max-view-distance` | past view_distance, saved chunks only, up to this (never generated; 0: off) |
 
 ### `[world]`
 

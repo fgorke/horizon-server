@@ -23,7 +23,7 @@ Vex.finalizeSpawn	port	crates/horizon-client/src/mobs/finalize.rs::Ctx::finalize
 Vex.populateDefaultEquipmentSlots	port	crates/horizon-client/src/mobs/finalize.rs::Ctx::populate	iron sword in hand with drop chance 0
 Witch.registerGoals	port	crates/horizon-client/src/mobs/witch.rs::register	gap: minor: raiders that hurt a witch are still targeted back (vanilla ignores them)
 Witch.handleEntityEvent	missing		player: a witch shows purple magic puffs about once a minute while idle; not drawn here (the RNG draw is kept in ai_step)
-Witch.getDamageAfterMagicAbsorb	missing		player: witches take full magic, indirect magic, sonic boom and thorns damage; vanilla cuts it to 15% and ignores its own hits
+Witch.getDamageAfterMagicAbsorb	port	crates/horizon-client/src/mobs.rs::Mob::damage_with	85% less from #witch_resistant_to, nothing from its own hit
 Zoglin.initCoreActivity	inline	crates/horizon-client/src/mobs/piglin.rs::register_zoglin	gap: minor: look-at-target and move-to-target sinks are not separate; the goal set stands in for them
 Zoglin.initIdleActivity	inline	crates/horizon-client/src/mobs/piglin.rs::register_zoglin	gap: minor: idle is a stroll only; no look-target sometimes and no do-nothing pauses
 Zoglin.initFightActivity	inline	crates/horizon-client/src/mobs/piglin.rs::register_zoglin	gap: player: melee cooldown is 20 ticks; vanilla is 40 for adults and 15 for babies, so zoglins hit faster
@@ -101,7 +101,7 @@ SulfurCube.requiresCustomPersistence	port	crates/horizon-client/src/mobs/ai.rs::
 SulfurCube.hurtServer	port	crates/horizon-client/src/mobs/sulfur_cube.rs::accepts_damage	fire or explosion primes; a held block shrugs off blows and only knocks back
 SulfurCube.matchingArchetypes	port	crates/horizon-client/src/mobs/sulfur_cube.rs::archetype_of	one archetype per item, not a list
 SulfurCube.tickFuse	inline	crates/horizon-client/src/mobs/sulfur_cube.rs::ai_step	gap: minor: fuse countdown and blast, but no leash drop or on-death effects at the blast
-SulfurCube.primeWhenOnPoweredPosition	missing		player: an explosive cube sitting on a powered block does not prime itself; no signal check here
+SulfurCube.primeWhenOnPoweredPosition	port	crates/horizon-client/src/game/sulfur_cubes.rs::Game::sulfur_cube_power_priming	lit when the best neighbour signal at the cube is not 0; no block has an own signal
 SulfurCube.customServerAiStep	port	crates/horizon-client/src/mobs/sulfur_cube.rs::ai_step	timers, buoyancy, facing, growing up and player push
 SulfurCube.collectEquipmentChanges	inline	crates/horizon-client/src/mobs/sulfur_cube.rs::ai_step	goals are disabled while a block is held; archetype effects are read on demand, not applied as modifiers
 SulfurCube.equipItem	port	crates/horizon-client/src/game/sulfur_cubes.rs::Game::interact_sulfur_cube	swallows the item; the old block is ejected

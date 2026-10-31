@@ -12,7 +12,7 @@ The contract between Horizon and its mods: the WIT package `horizon:mods@0.1.0`,
 | `hud` | [`hud`](#hud) | draw text on your screen |
 | `storage` | [`storage`](#storage) | save its own settings to disk |
 | `command` | [`command`](#command) | run commands as you, with your permissions |
-| `registries` | data files (`assets/`, `data/`), no interface | add blocks and items to your worlds |
+| `registries` | data files (`assets/`, `data/`), no interface | add blocks, items and mob effects to your worlds |
 | `ui` | [`ui`](#ui) | show its own screens and a settings page |
 | `render` | [`render`](#render) | draw on your screen, shake and zoom the camera |
 | `input` | [`input`](#input) | see the keys you hold and your clicks, take over the use button on its own items and the mouse wheel, and add keys |

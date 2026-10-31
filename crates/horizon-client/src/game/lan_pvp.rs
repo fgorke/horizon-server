@@ -107,6 +107,7 @@ impl Game<'_> {
         if let Some(strike) = self.pvp_strike()
             && self.pvp_land(&mut host, Victim::Guest(conn), &strike)
         {
+            self.weapon_hit_player(Self::pvp_victim_on_ground(&host, Victim::Guest(conn), None));
             self.pvp_exhaustion();
             if strike.stops_sprint() {
                 self.stop_sprint_after_extra_knockback();
@@ -114,6 +115,23 @@ impl Game<'_> {
         }
         self.lan = Some(host);
         true
+    }
+
+    /// Whether the player a hit landed on stands on the ground (the host's
+    /// `ground` is passed in as `host_on_ground` when the host is the victim).
+    pub(super) fn pvp_victim_on_ground(
+        host: &LanHost,
+        victim: Victim,
+        host_on_ground: Option<bool>,
+    ) -> bool {
+        match victim {
+            Victim::Host => host_on_ground.unwrap_or(true),
+            Victim::Guest(conn) => host
+                .hub
+                .guest(conn)
+                .and_then(|g| g.motion.as_deref())
+                .is_some_and(|p| p.ground.on_ground),
+        }
     }
 
     /// The player `id` that guest `conn` attacks, if it is one.
@@ -170,26 +188,6 @@ impl Game<'_> {
             knockback_attack,
             team: self.player_team().cloned(),
         })
-    }
-
-    /// The attacking player's entity id and display name (`attacker`: the
-    /// guest's connection, none for the host), for the victim's death message.
-    fn pvp_attacker(
-        &self,
-        host: &LanHost,
-        attacker: Option<u32>,
-    ) -> Option<(u32, horizon_client::text::Text)> {
-        match attacker {
-            Some(conn) => {
-                let g = host.hub.guest(conn)?;
-                Some((g.entity_id as u32, self.player_text(&g.name, g.uuid)))
-            }
-            None if self.options.dedicated.is_none() => Some((
-                host.host_entity as u32,
-                horizon_client::text::Text::literal(super::chat::PLAYER_NAME),
-            )),
-            None => None,
-        }
     }
 
     /// The guests by connection, with their entity ids.
@@ -298,12 +296,24 @@ impl Game<'_> {
         }
         // Player.attack: the hurt (with its knockback away from the
         // attacker), then causeExtraKnockback along the attacker's yaw.
-        let attacker = self.pvp_attacker(host, s.attacker);
+        // CombatTracker: the attacking player is the death message's killer.
+        // Without it the message is built with one argument and a template
+        // that names a killer ("%1$s was slain by %2$s") shows as written.
+        let attacker_note = match s.attacker {
+            Some(conn) => host
+                .hub
+                .guest(conn)
+                .map(|a| (a.entity_id, self.player_text(&a.name, a.uuid))),
+            None => Some((
+                host.host_entity,
+                self.player_text(&host.host_name, host.host_uuid),
+            )),
+        };
         let land = |g: &mut Self| {
-            if let Some((id, name)) = &attacker {
-                g.note_named_attacker("minecraft:player_attack", *id, name.clone());
-            }
             g.combat.player_attacker = Some((s.from, s.disable_blocking));
+            if let Some((id, name)) = attacker_note.clone() {
+                g.note_named_attacker("minecraft:player_attack", id as u32, name);
+            }
             let hurt = g.mob_hits_player(s.amount, s.from, "minecraft:player_attack");
             g.combat.player_attacker = None;
             let (strength, xd, zd) = s.knockback;
@@ -489,11 +499,7 @@ impl Game<'_> {
             }
         }
         let (xd, zd) = sweep.knockback;
-        let attacker = self.pvp_attacker(host, sweep.attacker);
         let land = |g: &mut Self| {
-            if let Some((id, name)) = &attacker {
-                g.note_named_attacker("minecraft:player_attack", *id, name.clone());
-            }
             let hurt = g.mob_hits_player(sweep.damage, sweep.from, "minecraft:player_attack");
             if hurt {
                 g.knock_back_player(0.4, xd, zd);
