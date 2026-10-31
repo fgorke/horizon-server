@@ -62,6 +62,8 @@ Open the ones you use in your firewall. Both start with the server, when their p
 | `/spawnelytra off` | Operators | Remove the region; `/spawnelytra` alone shows it (plugin `elytra`) |
 | `/dimension nether\|end on\|off` | Operators | Open or close a dimension |
 | `/tps` | Everyone | Tick rate, MSPT, players and loaded chunks |
+| `/plugins` | Everyone | The plugins and how each runs |
+| `/plugins reload` | Operators (level 3) | Stop the plugins and read `plugins/` again: new or changed plugins and their `data/` take effect without a restart |
 
 The settings these commands write live next to the world (`horizon-dimensions.json`, the End) or in their plugin's `data/` folder (the spawn, the spawn elytra region, the AFK times). The Nether switch is the vanilla game rule `allow_entering_nether_using_portals`.
 

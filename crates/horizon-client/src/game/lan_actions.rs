@@ -2367,6 +2367,18 @@ impl Game<'_> {
             );
             return;
         }
+        if words[0] == "plugins" {
+            let reply = self.plugins_command(host, conn, &words[1..]);
+            let content = horizon_client::lan::data::component_nbt(&reply.component());
+            host.hub.send_to(
+                conn,
+                &C::SystemChat(play::SystemChat {
+                    content,
+                    overlay: false,
+                }),
+            );
+            return;
+        }
         if words == ["tps"] {
             let content =
                 horizon_client::lan::data::component_nbt(&self.tps_reply(host).component());

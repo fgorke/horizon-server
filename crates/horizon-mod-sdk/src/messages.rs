@@ -69,7 +69,7 @@ fn file(defaults: &[(&str, &str)]) -> String {
     let mut out = String::from(
         "# This plugin's messages. Colours: &0-&f, &l bold, &o italic, &r reset, &#RRGGBB;\n\
          # <gradient:#40E0D0:#00008B>text</gradient>, <font:minecraft:uniform>text</font>,\n\
-         # <smallcaps>text</smallcaps>. {name} is filled in. Restart the server after a change.\n\
+         # <smallcaps>text</smallcaps>. {name} is filled in. /plugins reload after a change.\n\
          # What the plugin's chat lines start with, instead of its name:\n\
          # prefix = \"<gradient:#40E0D0:#00008B>[Server]</gradient> &7\"\n",
     );

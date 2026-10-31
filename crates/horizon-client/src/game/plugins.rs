@@ -61,6 +61,13 @@ pub(super) struct Plugins {
     /// Command lines plugins queued, run as the console at the tick's end: (line, quiet).
     #[cfg(feature = "plugins")]
     console: Vec<(String, bool)>,
+    /// `/plugins reload`: the ticks until `plugins/` is read again, and who asked.
+    #[cfg(feature = "plugins")]
+    reload: Option<(u32, u32)>,
+    /// How many reloads ran: part of the command tree's key, since a fresh set of plugins
+    /// starts its generation again.
+    #[cfg(feature = "plugins")]
+    reloads: u64,
 }
 
 impl Game<'_> {
@@ -134,6 +141,14 @@ impl Game<'_> {
     }
     pub(super) fn plugin_command(&mut self, _host: &mut LanHost, _conn: u32, _line: &str) -> bool {
         false
+    }
+    pub(super) fn plugins_command(
+        &mut self,
+        _host: &LanHost,
+        _conn: u32,
+        _args: &[&str],
+    ) -> horizon_client::text::Text {
+        horizon_client::text::Text::legacy("§cThis server was built without plugins.")
     }
     pub(super) fn apply_plugin_block_writes(&mut self) {}
     pub(super) fn plugin_swap_hands(&mut self, _host: &mut LanHost, _conn: u32) -> bool {
@@ -212,7 +227,7 @@ fn plugin_paths(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
 /// A command name plugins may not take: vanilla's, and this server's own.
 #[cfg_attr(not(feature = "plugins"), allow(dead_code))]
 fn reserved_command(name: &str) -> bool {
-    const OWN: [&str; 3] = ["dimension", "tps", "list"];
+    const OWN: [&str; 4] = ["dimension", "tps", "list", "plugins"];
     let d = horizon_command::vanilla::game_dispatcher();
     OWN.contains(&name)
         || d.nodes[0]
@@ -407,9 +422,15 @@ mod run {
         }
     }
 
+    /// `/plugins reload`'s permission level.
+    const RELOAD_LEVEL: u8 = 3;
+    /// Ticks between stopping the plugins and starting them again: their sockets' threads let
+    /// go of the ports within `plugin_io`'s 100 ms poll.
+    const RELOAD_TICKS: u32 = 5;
+
     impl Game<'_> {
-        /// Reads `plugins/` and starts every plugin there, logging each.
-        fn start_plugins(&mut self) {
+        /// Reads `plugins/` and starts every plugin there, logging each: the lines logged.
+        fn start_plugins(&mut self) -> Vec<String> {
             self.plugins.started = true;
             let dir = self.plugins_dir();
             if let Err(e) = std::fs::create_dir_all(&dir) {
@@ -420,6 +441,7 @@ mod run {
             }
             let paths = super::plugin_paths(&dir);
             let mods = horizon_mods::Mods::load_plugins(&paths, reserved_command);
+            let mut lines = Vec::new();
             for e in mods.entries() {
                 let name = e.manifest.as_ref().map_or_else(
                     || e.path.display().to_string(),
@@ -434,11 +456,85 @@ mod run {
                     ),
                 };
                 super::super::dedicated::log(level, &line);
+                lines.push(line);
             }
             self.plugins.mods = mods;
             self.set_plugin_files();
             self.plugins.running = self.plugins.mods.runs_server();
             self.plugins.world = self.plugins.mods.wants_world();
+            lines
+        }
+
+        /// `/plugins`: each plugin and how it runs. `/plugins reload` (operators): the plugins
+        /// stop, each told the players online left, and [`RELOAD_TICKS`] later `plugins/` is
+        /// read again, so new and changed plugins and their `data/` (messages, settings) take
+        /// effect without a restart; the players online then join them afresh.
+        pub(in crate::game) fn plugins_command(
+            &mut self,
+            host: &LanHost,
+            conn: u32,
+            args: &[&str],
+        ) -> Text {
+            match args {
+                [] => self.plugin_list(),
+                ["reload"] => {
+                    if host
+                        .hub
+                        .guest(conn)
+                        .is_none_or(|g| g.permission < RELOAD_LEVEL)
+                    {
+                        return Text::legacy("§cYou need to be an operator for that.");
+                    }
+                    if self.plugins.reload.is_some() {
+                        return Text::legacy("§eThe plugins are reloading already.");
+                    }
+                    for p in std::mem::take(&mut self.plugins.players) {
+                        self.plugins.mods.player_left(&p);
+                    }
+                    // Dropped, they free their ports and threads; what they said last is not shown.
+                    self.plugins.mods = horizon_mods::Mods::default();
+                    self.plugins.running = false;
+                    self.plugins.world = false;
+                    self.plugins.events.clear();
+                    self.plugins.reload = Some((RELOAD_TICKS, conn));
+                    super::super::dedicated::log("INFO", "Plugins stopped for a reload");
+                    Text::legacy("§eReloading the plugins...")
+                }
+                _ => Text::legacy("§eUsage: /plugins [reload]"),
+            }
+        }
+
+        fn plugin_list(&self) -> Text {
+            let entries = self.plugins.mods.entries();
+            if entries.is_empty() {
+                return Text::legacy("§7No plugins in plugins/.");
+            }
+            let mut out = Text::legacy(&format!("§7Plugins ({}):", entries.len()));
+            for e in entries {
+                let name = e.manifest.as_ref().map_or_else(
+                    || e.path.display().to_string(),
+                    |m| format!("{} {}", m.name, m.version),
+                );
+                let line = match &e.status {
+                    Status::Running => format!("\n§a{name}"),
+                    Status::Failed(reason) => format!("\n§c{name}: {reason}"),
+                    Status::Off | Status::Elsewhere => format!("\n§7{name}: not a server plugin"),
+                };
+                out.spans.extend(Text::legacy(&line).spans);
+            }
+            out
+        }
+
+        /// A reload's wait, then `plugins/` read again: who asked and what was logged, once.
+        fn finish_plugin_reload(&mut self) -> Option<(u32, Vec<String>)> {
+            let (left, by) = self.plugins.reload?;
+            if left > 0 {
+                self.plugins.reload = Some((left - 1, by));
+                return None;
+            }
+            self.plugins.reload = None;
+            self.plugins.reloads += 1;
+            Some((by, self.start_plugins()))
         }
 
         /// The tick's end: joins and leaves, the tick's events, the tick hook.
@@ -449,9 +545,23 @@ mod run {
             if !self.plugins.started {
                 self.start_plugins();
             }
+            let reloaded = self.finish_plugin_reload();
             let Some(mut host) = self.lan.take() else {
                 return;
             };
+            if let Some((conn, lines)) = reloaded {
+                for line in lines {
+                    let content =
+                        component_nbt(&Text::literal(line).with_color(text::GRAY).component());
+                    host.hub.send_to(
+                        conn,
+                        &C::SystemChat(play::SystemChat {
+                            content,
+                            overlay: false,
+                        }),
+                    );
+                }
+            }
             self.send_plugin_commands(&mut host);
             if self.plugins.running {
                 self.run_plugin_tick(&mut host);
@@ -560,7 +670,11 @@ mod run {
         /// Players' command trees list the plugins' commands after vanilla's, whenever they
         /// change.
         fn send_plugin_commands(&mut self, host: &mut LanHost) {
-            let key = self.plugins.mods.generation();
+            let key = self
+                .plugins
+                .mods
+                .generation()
+                .wrapping_add(self.plugins.reloads << 32);
             if host.hub.mod_commands_key() == Some(key) {
                 return;
             }

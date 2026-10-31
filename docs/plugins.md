@@ -53,7 +53,7 @@ server/
 
 A plugin's chat lines are worded in its `data/messages`, written with the plugin's defaults the
 first time it starts: one `key = "value"` per line, `#` for a comment, `{name}` filled in by the
-plugin. Restart the server after a change. `prefix` is what the plugin's chat lines start with,
+plugin. After a change, `/plugins reload` (or a restart). `prefix` is what the plugin's chat lines start with,
 instead of its name; every plugin reads its own file, so give each the same `prefix` for one tag:
 
 ```
@@ -71,6 +71,15 @@ teleported = "&a<smallcaps>Teleported</smallcaps>"
 
 Anything else is text as written. The same markup works in what plugins send without a
 `data/messages` entry: their `tell`, `broadcast`, `action-bar` and command feedback.
+
+## Reload
+
+`/plugins` lists the plugins and how each runs. `/plugins reload` (operators of level 3) stops
+every plugin, telling each the players online left, and reads `plugins/` again a quarter of a
+second later: plugins added, changed or removed, and what their `data/` holds, take effect
+without a restart. The players online then join the plugins afresh. What a plugin held only in
+memory is gone: a `/spawn` countdown, and voice chat's connections (players with the voice chat
+mod reconnect it, or rejoin).
 
 ## The sandbox
 
