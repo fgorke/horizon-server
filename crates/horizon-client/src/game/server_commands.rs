@@ -3,6 +3,7 @@
 //! markup (`horizon_client_core::markup`).
 use super::{Game, lan::LanHost, lan_actions::GuestCommand};
 use horizon_client::text::Text;
+use std::sync::atomic::Ordering;
 
 /// A rule either side of a title: struck-through spaces.
 const RULE: &str = "&8&m              &r";
@@ -48,7 +49,7 @@ pub(super) fn not_operator() -> Text {
 impl Game<'_> {
     /// `/tps`: the tick rate against its target, the milliseconds per tick (average, then the
     /// percentiles `/tick query` prints), how much of the tick's budget they use, players and
-    /// loaded chunks.
+    /// their ping, entities and loaded chunks in every level, and the server's memory.
     pub(super) fn tps_reply(&self, host: &LanHost) -> Text {
         let millis = |nanos: u64| nanos as f64 / 1e6;
         let target = f64::from(self.clock.rate());
@@ -67,7 +68,14 @@ impl Game<'_> {
         let load = if budget > 0.0 { average / budget } else { 0.0 };
         let tps_grade = grade(tps / target, 0.975, 0.75);
         let load_grade = grade(1.0 - load, 0.4, 0.0);
-        let players = host.hub.guests.iter().filter(|g| g.placed).count();
+        let pings: Vec<i32> = host
+            .hub
+            .guests
+            .iter()
+            .filter(|g| g.placed)
+            .map(|g| g.latency.load(Ordering::Relaxed).max(0))
+            .collect();
+        let players = pings.len();
         let max = host.hub.lan.shared.max_players();
         let mut out = title("Server");
         out += &row(
@@ -94,14 +102,42 @@ impl Game<'_> {
                 bar(load, load_grade)
             ),
         );
+        let ping = match (pings.iter().max(), pings.len() as i64) {
+            (Some(worst), n) => {
+                let average = pings.iter().map(|&p| i64::from(p)).sum::<i64>() / n;
+                format!(
+                    "   &7Ping: &{}{average} ms &8(max {worst})",
+                    grade(-(average as f64), -80.0, -200.0)
+                )
+            }
+            (None, _) => String::new(),
+        };
+        out += &row("Players", &format!("&f{players}&8/{max}{ping}"));
+        let (mobs, items, chunks) = self.entity_counts();
         out += &row(
-            "Players",
+            "Entities",
             &format!(
-                "&f{players}&8/{max}   &7Chunks: &f{}",
-                self.world.chunks.len()
+                "&f{} &8({mobs} mobs · {items} items)   &7Chunks: &f{chunks}",
+                mobs + items
             ),
         );
+        if let Some(bytes) = horizon_bench::rss_bytes(std::process::id()) {
+            out += &row("RAM", &format!("&f{} MB", bytes >> 20));
+        }
         Text::markup(&out)
+    }
+
+    /// Mobs, then item entities and experience orbs, then loaded chunks: in the level in place and
+    /// the parked ones.
+    fn entity_counts(&self) -> (usize, usize, usize) {
+        let alive = |mobs: &[horizon_client::mobs::Mob]| mobs.iter().filter(|m| !m.removed).count();
+        let mut mobs = alive(&self.mobs[..]);
+        let mut chunks = self.world.chunks.len();
+        for dim in self.levels.parked_dims() {
+            mobs += self.levels.parked_mobs(dim).map_or(0, alive);
+            chunks += self.levels.parked_world(dim).map_or(0, |w| w.chunks.len());
+        }
+        (mobs, self.dropped.len() + self.orbs.len(), chunks)
     }
 
     /// `/dimension`: whether the Nether and the End are open, for everyone; `/dimension

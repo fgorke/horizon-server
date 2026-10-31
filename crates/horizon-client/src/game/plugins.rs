@@ -531,10 +531,6 @@ mod run {
         /// Each plugin, `✔` running, `✖` failed (and why), `○` not a server plugin.
         fn plugin_list(&self, heading: &str) -> Text {
             let entries = self.plugins.mods.entries();
-            let running = entries
-                .iter()
-                .filter(|e| matches!(e.status, Status::Running))
-                .count();
             let mut out = sc::title(heading);
             if entries.is_empty() {
                 out += "\n &8» &7No plugins in &fplugins/&7.";
@@ -553,9 +549,6 @@ mod run {
                         format!("\n &7○ &7{name} &8{version} – not a server plugin")
                     }
                 };
-            }
-            if !entries.is_empty() {
-                out += &format!("\n &8{running} of {} running", entries.len());
             }
             Text::markup(&out)
         }
