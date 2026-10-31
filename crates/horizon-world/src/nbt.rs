@@ -21,9 +21,10 @@ impl JavaString {
 
 pub type Compound = BTreeMap<JavaString, Tag>;
 
-/// Float and double variants hold their IEEE bit patterns. Java canonicalizes
-/// NaNs on binary output. Loading, like vanilla's valueOf factories, normalizes
-/// negative zero to positive zero.
+/// Float and double variants hold their IEEE bit patterns. Java's disk output
+/// canonicalizes NaNs (`DataOutputStream.writeFloat`); its network output
+/// keeps their bits (Netty's `ByteBuf.writeFloat`). Loading, like vanilla's
+/// valueOf factories, normalizes negative zero to positive zero.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Tag {
     End,
@@ -469,6 +470,9 @@ struct Writer {
     bytes: Vec<u8>,
     limits: Limits,
     nodes: usize,
+    /// `DataOutputStream.writeFloat`/`writeDouble` (`floatToIntBits`): a NaN
+    /// is written as the canonical one. The network writer keeps its bits.
+    canonical_nan: bool,
 }
 impl Writer {
     fn error(&self, reason: &'static str) -> Error {
@@ -529,7 +533,7 @@ impl Writer {
             Tag::Int(v) => self.put(&v.to_be_bytes())?,
             Tag::Long(v) => self.put(&v.to_be_bytes())?,
             Tag::Float(v) => self.put(
-                &if f32::from_bits(*v).is_nan() {
+                &if self.canonical_nan && f32::from_bits(*v).is_nan() {
                     0x7fc0_0000_u32
                 } else {
                     *v
@@ -537,7 +541,7 @@ impl Writer {
                 .to_be_bytes(),
             )?,
             Tag::Double(v) => self.put(
-                &if f64::from_bits(*v).is_nan() {
+                &if self.canonical_nan && f64::from_bits(*v).is_nan() {
                     0x7ff8_0000_0000_0000_u64
                 } else {
                     *v
@@ -614,6 +618,7 @@ pub fn write_named(root: &NamedTag, limits: Limits) -> Result<Vec<u8>, Error> {
         bytes: Vec::new(),
         limits,
         nodes: 0,
+        canonical_nan: true,
     };
     writer.put(&[root.tag.id()])?;
     if root.tag.id() != 0 {
@@ -628,6 +633,7 @@ pub fn write_network(tag: &Tag, limits: Limits) -> Result<Vec<u8>, Error> {
         bytes: Vec::new(),
         limits,
         nodes: 0,
+        canonical_nan: false,
     };
     writer.put(&[tag.id()])?;
     writer.payload(tag, 0)?;
@@ -994,15 +1000,29 @@ mod tests {
         );
     }
     #[test]
-    fn duplicate_keys_last_wins_and_nan_output_is_canonical() {
+    fn duplicate_keys_last_wins_and_nan_output_is_canonical_on_disk() {
         let bytes = [10, 1, 0, 1, b'x', 1, 1, 0, 1, b'x', 2, 0];
         assert_eq!(
             read_network(&bytes, Limits::default()).unwrap().0.get("x"),
             Some(&Tag::Byte(2))
         );
+        // Vanilla 26.3 (#5064): `FriendlyByteBuf.writeNbt` keeps a NaN's bits,
+        // `NbtIo.write` writes the canonical NaN.
+        let nan = |bits: u32| NamedTag {
+            name: "".into(),
+            tag: Tag::compound([("v", Tag::Float(bits))]),
+        };
         assert_eq!(
             write_network(&Tag::Float(0xff80_0001), Limits::default()).unwrap(),
-            [5, 0x7f, 0xc0, 0, 0]
+            [5, 0xff, 0x80, 0, 1]
+        );
+        assert_eq!(
+            write_network(&Tag::Double(0x7ff0_0000_0000_0001), Limits::default()).unwrap(),
+            [6, 0x7f, 0xf0, 0, 0, 0, 0, 0, 1]
+        );
+        assert_eq!(
+            write_named(&nan(0x7f80_0001), Limits::default()).unwrap(),
+            [10, 0, 0, 5, 0, 1, b'v', 0x7f, 0xc0, 0, 0, 0]
         );
         assert_eq!(
             write_network(&Tag::Double((-0.0_f64).to_bits()), Limits::default()).unwrap()[1],

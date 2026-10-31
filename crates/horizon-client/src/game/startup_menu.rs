@@ -34,6 +34,7 @@ impl StartupMenu {
                 address: address.clone(),
                 name: options.player_name(),
                 cookies: None,
+                lan: false,
             })
         } else {
             options
@@ -131,10 +132,11 @@ impl StartupMenu {
                 creative,
                 create: Some(Box::new(options)),
             },
-            Action::Connect { address } => PendingWorldEntry::Server {
+            Action::Connect { address, lan } => PendingWorldEntry::Server {
                 address,
                 name: player_name,
                 cookies: None,
+                lan,
             },
             _ => return,
         };
@@ -701,7 +703,13 @@ impl Loading {
     }
 
     pub(super) fn draw_menu(&mut self, batch: &mut HudBatch) {
-        let Some(gui) = &self.gui else { return };
+        let logs = horizon_client::logging::recent_lines();
+        let Some(gui) = &self.gui else {
+            // The pack's screens do not exist yet: the boot screen holds the
+            // window, the wordmark and the console's lines while they load.
+            horizon_client::ui_theme::draw_boot(&self.boot, batch, &logs);
+            return;
+        };
         if self.menu.pending.is_some() {
             horizon_client::level_loading::draw_loading_overlay(
                 batch,
@@ -734,8 +742,13 @@ impl Loading {
                 self.settings.save(&Game::options_path());
             }
             let _ = title.update_toast(self.settings.notification_display_time);
-            title.draw(
+            let items = match &self.loaded {
+                Some(Ok(loaded)) => Some(&*loaded.pack.item_renderer),
+                _ => None,
+            };
+            title.draw_with_items(
                 &gui.atlas,
+                items,
                 batch,
                 self.menu.cursor,
                 self.settings.file.bool("hideSplashTexts"),
@@ -800,6 +813,7 @@ mod tests {
         Loading {
             window: None,
             renderer: None,
+            boot: horizon_client::hud::HudAtlas::boot(),
             gui: None,
             settings: Settings::default(),
             fullscreen: horizon_client::window::FullscreenState::new(false),
@@ -874,16 +888,17 @@ mod tests {
     }
 
     #[test]
-    fn queued_server_keeps_address_and_player_identity() {
+    fn queued_server_keeps_address_player_identity_and_lan_kind() {
         let mut menu = StartupMenu::default();
         menu.queue_entry(
             Action::Connect {
                 address: "localhost:25565".into(),
+                lan: true,
             },
             "Guest".into(),
         );
         assert!(
-            matches!(menu.pending.take(), Some(PendingWorldEntry::Server { address, name, .. })
+            matches!(menu.pending.take(), Some(PendingWorldEntry::Server { address, name, lan: true, .. })
             if address == "localhost:25565" && name == "Guest")
         );
         assert!(menu.pending.take().is_none(), "an entry is consumed once");

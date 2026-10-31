@@ -195,6 +195,36 @@ fn load_anticheat() -> horizon_anticheat::Config {
     }
 }
 
+/// The secret for Velocity's player information forwarding, from `forwarding.secret` beside server.properties.
+/// No file means no forwarding. A file that is empty or can't be read stops the start, because an empty secret
+/// would let anyone sign a login, and a typo must not leave a server open that was meant to be behind a proxy.
+fn forwarding_secret(online: bool) -> Result<Option<Vec<u8>>> {
+    const FILE: &str = "forwarding.secret";
+    if !std::path::Path::new(FILE).exists() {
+        return Ok(None);
+    }
+    if online {
+        log(
+            "WARN",
+            "forwarding.secret is ignored: the proxy authenticates the players, so set \"online-mode\" to \"false\".",
+        );
+        return Ok(None);
+    }
+    let text = std::fs::read(FILE).map_err(|e| format!("{FILE}: {e}"))?;
+    let secret = text.trim_ascii().to_vec();
+    if secret.is_empty() {
+        return Err(format!(
+            "{FILE} is empty: put the proxy's forwarding secret in it, or remove the file"
+        )
+        .into());
+    }
+    log(
+        "INFO",
+        "Velocity player information forwarding is on (forwarding.secret)",
+    );
+    Ok(Some(secret))
+}
+
 /// Log4j's console pattern: `[HH:mm:ss] [thread/LEVEL]: message`.
 pub(super) fn log(level: &str, message: &str) {
     log_from("Server thread", level, message);
@@ -704,6 +734,8 @@ impl Game<'_> {
         self.server_lists = Some(lists.clone());
         log("INFO", &format!("Preparing level \"{level_name}\""));
         let folder = world_dir.to_string_lossy().into_owned();
+        // MinecraftServer.loadLevel's start: nothing is loaded yet.
+        self.native_server_about_to_start(true);
         self.native_lifecycle_open_started();
         // The registries the server sends are read while the world prepares.
         let sync = super::lan::preload_sync_data(&self.options.resources);
@@ -766,6 +798,8 @@ impl Game<'_> {
         let favicon = std::fs::read("server-icon.png")
             .ok()
             .filter(|b| png_size(b) == Some((64, 64)));
+        // Behind a Velocity proxy: `forwarding.secret` in the server folder, like the proxy's own file.
+        let forwarding_secret = forwarding_secret(online.is_some())?;
         let net = NetConfig {
             bind: (!props.server_ip.is_empty())
                 .then(|| props.server_ip.parse().ok())
@@ -793,6 +827,7 @@ impl Game<'_> {
             })),
             gate: Some(gate),
             online,
+            forwarding_secret,
             log: Some(NetLog {
                 write: Arc::new(log_from),
                 lang: Arc::new(horizon_client::net::load_language(&self.options.resources)),
@@ -1039,11 +1074,12 @@ impl Game<'_> {
     /// nobody is online a dedicated server keeps none (vanilla has no spawn
     /// ticket), an integrated one the spawn chunk's.
     pub(super) fn update_dedicated_streaming(&mut self) {
+        let rule = self.ui.rules.bool("spectators_generate_chunks");
         let guest = self.lan.as_ref().and_then(|h| {
             h.hub
                 .guests
                 .iter()
-                .find(|g| h.hub.here(g))
+                .find(|g| h.hub.here(g) && super::game_mode::loads_chunks(rule, g.spectator()))
                 .map(|g| g.chunk())
         });
         if self.standalone_server() {
@@ -1677,6 +1713,8 @@ impl Game<'_> {
     fn stop_dedicated(&mut self) -> Result<()> {
         // The close request starts before player and world saves.
         self.native_lifecycle.begin_close();
+        // MinecraftServer.stopServer's start: everyone is still here.
+        self.native_server_stopping(true);
         log("INFO", "Stopping server");
         log("INFO", "Saving players");
         if let Some(host) = self.lan.take() {

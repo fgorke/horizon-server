@@ -1934,7 +1934,13 @@ impl Game<'_> {
                 self.creatures.projectiles.retain(|p| p.id != id);
             }
             Target::Stand(id) => self.armor_stands.retain(|a| a.id != id),
-            Target::Frame(id) => self.item_frames.retain(|f| f.id != id),
+            Target::Frame(id) => {
+                // ItemFrame.onKilled.
+                if let Some(frame) = self.item_frames.iter().find(|f| f.id == id).cloned() {
+                    self.remove_framed_map(&frame);
+                }
+                self.item_frames.retain(|f| f.id != id);
+            }
             Target::Painting(id) => self.paintings.retain(|p| p.id != id),
             Target::Boat(id) => {
                 // AbstractBoat.remove: a killed boat drops its lead.

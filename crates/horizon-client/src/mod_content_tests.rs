@@ -178,7 +178,8 @@ fn allocated_ids_follow_mod_and_entry_order_after_vanilla() {
             "minecraft:block":{"entries":{"minecraft:stone":{"protocol_id":7},
             "minecraft:iron_block":{"protocol_id":11}}},
             "minecraft:mob_effect":{"entries":{"minecraft:speed":{"protocol_id":0},
-            "minecraft:luck":{"protocol_id":25}}}}"#,
+            "minecraft:luck":{"protocol_id":25}}},
+            "minecraft:block_entity_type":{"entries":{"minecraft:chest":{"protocol_id":1}}}}"#,
     )
     .unwrap();
     fs::create_dir_all(base.join("assets/minecraft/blockstates")).unwrap();
@@ -260,7 +261,8 @@ fn allocated_ids_follow_mod_and_entry_order_after_vanilla() {
                 "minecraft:block":{"entries":{"minecraft:stone":{"protocol_id":7},
                 "minecraft:iron_block":{"protocol_id":11}}},
                 "minecraft:mob_effect":{"entries":{"minecraft:speed":{"protocol_id":0},
-                "minecraft:luck":{"protocol_id":25}}}}"#,
+                "minecraft:luck":{"protocol_id":25}}},
+                "minecraft:block_entity_type":{"entries":{"minecraft:chest":{"protocol_id":1}}}}"#,
         )
         .unwrap();
         plan.json("registries.json", &mut registry).unwrap();
@@ -281,6 +283,11 @@ fn allocated_ids_follow_mod_and_entry_order_after_vanilla() {
         assert_eq!(id("minecraft:block", "minecraft:iron_block"), 11);
         assert_eq!(id("minecraft:block", "alpha:zblock"), 12);
         assert_eq!(id("minecraft:block", "ruby:zblock"), 13);
+        // Each mod block names a block entity type, after vanilla's.
+        assert_eq!(id("minecraft:block_entity_type", "minecraft:chest"), 1);
+        assert_eq!(id("minecraft:block_entity_type", "alpha:zblock"), 2);
+        assert_eq!(id("minecraft:block_entity_type", "ruby:zblock"), 3);
+
         assert_eq!(id("minecraft:mob_effect", "minecraft:luck"), 25);
         assert_eq!(id("minecraft:mob_effect", "alpha:dull"), 26);
         assert_eq!(id("minecraft:mob_effect", "alpha:zap"), 27);
@@ -1292,6 +1299,102 @@ fn a_replacing_mod_tag_reaches_the_root() {
     let _ = fs::remove_dir_all(&scratch);
 }
 
+/// `StructureCheck.onStructureLoad`: the references a chunk saved for its start
+/// count, so a map skips a start a vanilla map already pointed at.
+#[test]
+#[ignore = "full content root: CI and pr_ready run it"]
+fn exploration_maps_skip_the_starts_a_chunk_saved_as_referenced() {
+    let Some(base) = prepared() else {
+        return;
+    };
+    let assets = Assets::load(&base).unwrap();
+    let biomes = crate::biome::Biomes::load(&base).unwrap();
+    let terrain = crate::vanillagen::VanillaTerrain::new(
+        &base.join("worldgen"),
+        assets.registry,
+        &biomes,
+        1234,
+    )
+    .unwrap();
+    let names = ["minecraft:buried_treasure".to_owned()];
+    let first = terrain
+        .locate_for_map(&names, [0, 64, 0], 50, true)
+        .unwrap();
+    // Another terrain, on the same seed, whose chunks saved one reference for it.
+    let fresh = crate::vanillagen::VanillaTerrain::new(
+        &base.join("worldgen"),
+        assets.registry,
+        &biomes,
+        1234,
+    )
+    .unwrap();
+    let (name, at) = (first.0.clone(), (first.1[0] >> 4, first.1[2] >> 4));
+    fresh.set_saved_references(std::sync::Arc::new(move |n, x, z| {
+        i32::from(n == name && (x, z) == at)
+    }));
+    let next = fresh.locate_for_map(&names, [0, 64, 0], 50, true).unwrap();
+    assert_ne!(next.1, first.1, "the saved reference is skipped");
+    assert_eq!(
+        fresh.locate_for_map(&names, [0, 64, 0], 50, false).unwrap(),
+        first,
+        "a map that does not skip still finds it"
+    );
+}
+
+/// `ChunkGenerator.findNearestMapStructure` with `createReference`: an
+/// exploration map that skips known structures points at a start no map
+/// pointed at before, and a reopened world remembers which.
+#[test]
+#[ignore = "full content root: CI and pr_ready run it"]
+fn exploration_maps_skip_the_structures_maps_pointed_at() {
+    let Some(base) = prepared() else {
+        return;
+    };
+    let scratch = std::env::temp_dir().join(format!("horizon-map-refs-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&scratch);
+    let assets = Assets::load(&base).unwrap();
+    let biomes = crate::biome::Biomes::load(&base).unwrap();
+    let open = || {
+        let terrain = crate::vanillagen::VanillaTerrain::new(
+            &base.join("worldgen"),
+            assets.registry,
+            &biomes,
+            1234,
+        )
+        .unwrap();
+        terrain.set_reference_file(scratch.join("refs.json"));
+        terrain
+    };
+    let names = ["minecraft:buried_treasure".to_owned()];
+    let terrain = open();
+    let first = terrain
+        .locate_for_map(&names, [0, 64, 0], 50, true)
+        .unwrap();
+    assert_eq!(
+        terrain.locate(&names, [0, 64, 0], 50).unwrap(),
+        first,
+        "/locate still finds the nearest"
+    );
+    let second = terrain
+        .locate_for_map(&names, [0, 64, 0], 50, true)
+        .unwrap();
+    assert_ne!(second.1, first.1, "the second map points elsewhere");
+    let again = terrain
+        .locate_for_map(&names, [0, 64, 0], 50, false)
+        .unwrap();
+    assert_eq!(
+        again, first,
+        "without skipping the nearest is still the first"
+    );
+    drop(terrain);
+    let third = open().locate_for_map(&names, [0, 64, 0], 50, true).unwrap();
+    assert!(
+        third.1 != first.1 && third.1 != second.1,
+        "a reopened world remembers {first:?} and {second:?}, found {third:?}"
+    );
+    let _ = fs::remove_dir_all(&scratch);
+}
+
 #[test]
 #[ignore = "full content root: needs prepared vanilla data"]
 fn content_shapes_drive_outline_and_collision() {
@@ -1482,4 +1585,80 @@ fn shapes_reject_unknown_or_missing_template_values() {
         assert!(e.contains("shapetest:rod"), "{e}");
     }
     fs::remove_dir_all(scratch).unwrap();
+}
+
+/// A recipe's `result` is a stack's fields or a bare item id, as vanilla's `ItemStackTemplate`
+/// codec reads it (#4904): a mod's recipes make its own items either way.
+#[test]
+#[ignore = "full content root: CI and pr_ready run it"]
+fn mod_recipe_results_are_an_item_stack_or_a_bare_item_id() {
+    if prepared().is_none() {
+        return;
+    }
+    let scratch = std::env::temp_dir().join(format!("horizon-mod-results-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&scratch);
+    let dir = scratch.join("ruby");
+    let _ = ruby_mod(&dir);
+    // Each recipe takes one item no vanilla recipe crafts alone and makes one of the mod's.
+    let cases = [
+        (
+            "stack",
+            "minecraft:diamond",
+            r#"{"id": "ruby:ruby"}"#,
+            "ruby:ruby",
+            1,
+        ),
+        (
+            "bare_id",
+            "minecraft:flint",
+            r#""ruby:ruby""#,
+            "ruby:ruby",
+            1,
+        ),
+        (
+            "bare_block_item",
+            "minecraft:ghast_tear",
+            r#""ruby:ruby_block""#,
+            "ruby:ruby_block",
+            1,
+        ),
+        (
+            "counted",
+            "minecraft:ender_pearl",
+            r#"{"id": "ruby:ruby_block", "count": 3}"#,
+            "ruby:ruby_block",
+            3,
+        ),
+    ];
+    for (name, input, result, _, _) in cases {
+        let recipe = format!(
+            r#"{{"type": "minecraft:crafting_shapeless", "ingredients": ["{input}"], "result": {result}}}"#
+        );
+        fs::write(dir.join(format!("data/ruby/recipe/{name}.json")), recipe).unwrap();
+    }
+    let package = horizon_mods::Package::read(&dir).unwrap();
+    let m = ContentMod {
+        id: "ruby".into(),
+        content: Content::read(&dir, &package.manifest).unwrap(),
+    };
+    let relative = Path::new("../../.local/horizon-client/26.3");
+    let root = resource_root(relative, std::slice::from_ref(&m), &scratch.join("cache")).unwrap();
+    let assets = Assets::load(&root).unwrap();
+    let new = assets.registry;
+    let facts = BlockFacts::load(&root, new).unwrap();
+    let items = Items::load(&root, new, &facts, &PackOverlay::NONE).unwrap();
+    let recipes = crate::crafting::Recipes::load(&root, &items, &PackOverlay::NONE).unwrap();
+    for (name, input, _, item, count) in cases {
+        let grid = [
+            Some(crate::items::ItemStack::new(input, 1)),
+            None,
+            None,
+            None,
+        ];
+        let (_, made) = recipes
+            .find(&grid, 2)
+            .unwrap_or_else(|| panic!("{name}: no recipe"));
+        assert_eq!((&*made.item, made.count), (item, count), "{name}");
+    }
+    fs::remove_dir_all(&scratch).unwrap();
 }
