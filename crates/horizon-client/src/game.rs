@@ -207,6 +207,7 @@ mod potent_sulfur;
 mod potions;
 mod powder_snow;
 mod prediction;
+mod protection;
 mod pumpkin;
 mod raids;
 mod recipe_book;

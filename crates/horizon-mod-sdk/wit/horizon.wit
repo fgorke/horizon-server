@@ -708,6 +708,40 @@ interface %world {
     /// in order after this call returns, before that dimension's next tick;
     /// one in a chunk not loaded then is skipped. At most 4096 per call.
     set-blocks: func(dimension: string, blocks: list<block-change>) -> result<_, string>;
+    /// What a protected region keeps players from doing.
+    enum protected-action {
+        /// Breaking blocks, and hitting item frames, paintings and armor stands.
+        break-blocks,
+        /// Placing blocks and using items on them (buckets, flint and steel, bone meal...).
+        place-blocks,
+        /// Doors, trapdoors, fence gates, buttons, levers and the other blocks a click uses,
+        /// and item frames and armor stands.
+        use-blocks,
+        /// Chests, barrels, furnaces, hoppers, shulker boxes and the other containers.
+        containers,
+        /// Hitting other players, where either one stands.
+        pvp,
+        /// Survival and adventure players taking damage of any kind.
+        damage,
+        /// Hitting mobs and animals.
+        hurt-mobs,
+    }
+    record region {
+        dimension: string,
+        /// Opposite corners, in any order, both blocks included.
+        pos1: tuple<s32, s32, s32>,
+        pos2: tuple<s32, s32, s32>,
+        deny: list<protected-action>,
+        /// Players (ids, as `players.online` gives them) the region does not stop.
+        exempt: list<string>,
+        /// The action bar of a player it stops, in the plugins' markup; empty: nothing.
+        message: string,
+    }
+    /// The plugin's protected regions, in place of those it gave before (at most 256, each
+    /// exempting at most 256 players). The server checks them where vanilla checks spawn
+    /// protection, before anything happens; where regions overlap, one that denies an action
+    /// to a player is enough.
+    protect: func(regions: list<region>) -> result<_, string>;
 }
 
 /// What the server calls in a server mod (manifest `api = "0.3"`,

@@ -62,7 +62,7 @@ jobs:
           cargo test --release --locked -p horizon-world --lib
           cargo test --release --locked -p horizon-release-sign
           cargo test --release --locked -p horizon-mods --features runtime --lib
-          cargo test --release --locked -p horizon-plugin-elytra -p horizon-plugin-stats -p horizon-plugin-voice
+          cargo test --release --locked -p horizon-plugin-elytra -p horizon-plugin-regions -p horizon-plugin-stats -p horizon-plugin-voice
       - name: The server builds
         run: |
           cargo build --release --locked -p horizon-client --no-default-features --features plugins --bin horizon-client

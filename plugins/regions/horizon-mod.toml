@@ -1,0 +1,8 @@
+id = "regions"
+name = "Regions"
+version = "0.1.0"
+description = "Protected regions: operators mark a box with /region and turn breaking, placing, using blocks, containers, pvp, damage and hurting mobs on or off in it."
+authors = ["fgorke"]
+api = "0.3"
+side = "server"
+capabilities = ["players", "world", "storage"]

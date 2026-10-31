@@ -17,6 +17,7 @@ release's files); their source is in [`plugins/`](../plugins).
 | --- | --- |
 | [`spawn`](../plugins/spawn/src/lib.rs) | `/setspawn` (operators) sets the spawn spot where you stand, looking where you look; `/spawn` (everyone) takes you there after 5 seconds standing still, the seconds left in the action bar; moving cancels it |
 | [`elytra`](../plugins/elytra/src/lib.rs) | Spawn elytra: in the region an operator marks with `/spawnelytra pos1` and `pos2`, survival players who fall or double-jump glide without an elytra, boost once with `F` and land without fall damage |
+| [`regions`](../plugins/regions/src/lib.rs) | Protected regions: an operator marks a box with `/region pos1` and `pos2` and names it with `/region define <name> [full]`; `/region flag <name> <flag> on|off` turns each protection on or off (`break`, `place`, `use`: doors, trapdoors, fence gates, buttons..., `containers`, `pvp`, `damage`, `mobs`); members (`/region member`) and operators with `/region bypass` aren't stopped. The server checks them before anything happens (`world.protect`) |
 | [`stats`](../plugins/stats/src/lib.rs) | A web page on port 8100 (`data/port`) with every player's statistics, live for the players online, and their time away from the keyboard; its language in `data/lang` (`en_us`, `de_de`, ...) |
 | [`voice`](../plugins/voice/src/lib.rs) | A server for the [Simple Voice Chat](https://modrinth.com/plugin/simple-voice-chat) mod on UDP port 24454 (`data/port`): proximity voice, whispering and groups |
 

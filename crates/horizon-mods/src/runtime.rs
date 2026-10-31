@@ -57,7 +57,7 @@ pub use server_bindings::{
         Argument, ArgumentKind, ArgumentValue, BlockPos, ServerCommand,
     },
     horizon::mods::players::{GameMode, Player as ServerPlayer},
-    horizon::mods::world::BlockChange,
+    horizon::mods::world::{BlockChange, ProtectedAction, Region},
 };
 type ClientEvents = bindings::exports::horizon::mods::events::Guest;
 type ServerEvents = server_bindings::exports::horizon::mods::server_events::Guest;
@@ -286,6 +286,8 @@ pub enum Output {
         dimension: String,
         blocks: Vec<BlockChange>,
     },
+    /// `world.protect`: the plugin's protected regions, in place of its previous ones.
+    Protect { name: String, regions: Vec<Region> },
     /// `ui.open-screen`: the mod's entry in `entries()`; what it shows is
     /// [`Mods::screen`].
     OpenScreen { owner: usize },
@@ -1726,7 +1728,31 @@ impl mod_world::Host for State {
         }
         Ok(())
     }
+    fn protect(&mut self, regions: Vec<Region>) -> Result<(), String> {
+        if regions.len() > MAX_REGIONS {
+            return Err(format!("{} regions: at most {MAX_REGIONS}", regions.len()));
+        }
+        if regions.iter().any(|r| r.exempt.len() > MAX_REGIONS) {
+            return Err(format!("a region exempts at most {MAX_REGIONS} players"));
+        }
+        let regions = regions
+            .into_iter()
+            .map(|mut r| {
+                r.message = r.message.chars().take(MAX_REGION_MESSAGE).collect();
+                r
+            })
+            .collect();
+        self.out.push(Output::Protect {
+            name: self.name.clone(),
+            regions,
+        });
+        Ok(())
+    }
 }
+/// `world.protect`: regions per plugin, and players each exempts.
+const MAX_REGIONS: usize = 256;
+/// `world.protect`: a region's message, in characters.
+const MAX_REGION_MESSAGE: usize = 256;
 impl players::Host for State {
     fn online(&mut self) -> Vec<ServerPlayer> {
         self.snapshot.players.clone()

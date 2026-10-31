@@ -6,7 +6,8 @@
 //! host, and every world change they cause reaches all players through the
 //! block log, the level events and the entity tracker.
 use super::{
-    Dim, Game, GuestUse, Hit, Mining, Screen, lan::LanHost, respawn_anchor::RespawnConfig,
+    Dim, Game, GuestUse, Hit, Mining, Screen, lan::LanHost, protection::Guard,
+    respawn_anchor::RespawnConfig,
 };
 use horizon_client::{
     command::vanilla,
@@ -1364,6 +1365,10 @@ impl Game<'_> {
                         self.spawn_protection_message(host, conn, a.pos);
                         return;
                     }
+                    // Plugins' protected regions (game/protection.rs), as spawn protection.
+                    if self.guarded(host, gi, a.pos, Guard::Break) {
+                        return;
+                    }
                     // mayInteract: a block outside the world border can't be
                     // dug (the ack puts it back on the client).
                     if !self
@@ -1586,6 +1591,8 @@ impl Game<'_> {
                 }
                 if self.under_spawn_protection(host, gi, p.pos) {
                     self.spawn_protection_message(host, conn, p.pos);
+                } else if self.guarded_use(host, gi, p.pos, face) {
+                    // A protected region: nothing used or placed, as under spawn protection.
                 } else if self
                     .border
                     .contains(f64::from(p.pos[0]), f64::from(p.pos[2]))
@@ -1643,6 +1650,10 @@ impl Game<'_> {
                 if spectator {
                     return;
                 }
+                // Plugins' protected regions: no bucket filled or emptied in one.
+                if self.guarded_bucket(host, gi, p.hand == 1) {
+                    return;
+                }
                 // handleUseItem: the client's rotation (absSnapRotationTo, which
                 // sends nothing back), then the item alone. What it looked at a
                 // moment ago (a block, a mob) is UseItemOn's or Interact's.
@@ -1678,6 +1689,16 @@ impl Game<'_> {
                         || self.as_guest(host, conn, |g| {
                             g.within_entity_interaction_range(&target, 3.0)
                         }) != Some(true))
+                {
+                    return;
+                }
+                // Plugins' protected regions: item frames and armor stands are used as blocks.
+                if let Some((kind, at)) = self.level_entity(p.id).map(|t| {
+                    (
+                        self.target_type(t),
+                        self.target_position(t).unwrap_or_default(),
+                    )
+                }) && self.guarded_entity_use(host, gi, &kind, at)
                 {
                     return;
                 }
@@ -2424,6 +2445,12 @@ impl Game<'_> {
                 )
             })
         };
+        // Plugins' protected regions: no blow at a player, a mob or a decoration in one.
+        if let Some((kind, at)) = &aimed
+            && self.guarded_attack(host, gi, kind, *at)
+        {
+            return;
+        }
         if let Some((kind, at)) = aimed
             && self.as_guest(host, conn, |g| {
                 let mut canceled = false;

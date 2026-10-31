@@ -542,6 +542,9 @@ pub struct Expect {
     /// The panel's lines (`[]`: no panel) and its corner.
     panel: Option<Vec<String>>,
     corner: Option<String>,
+    /// Server plugins (capability `world`): the regions of the step's last `protect`, each as
+    /// `"dimension x1 y1 z1 x2 y2 z2 deny=break-blocks,pvp exempt=1: message"`.
+    protected: Option<Vec<String>>,
     /// Blocks of the Overworld after the step, the mod's changes made
     /// (capability `world`).
     blocks: Option<Vec<BlockSet>>,
@@ -878,6 +881,14 @@ impl Step {
                 _ => {}
             }
         }
+        let protected: Vec<String> = out
+            .iter()
+            .rev()
+            .find_map(|o| match o {
+                Output::Protect { regions, .. } => Some(regions.iter().map(region_line).collect()),
+                _ => None,
+            })
+            .unwrap_or_default();
         let stopped = out.iter().find_map(|o| match o {
             Output::Stopped { reason, .. } => Some(reason.as_str()),
             _ => None,
@@ -972,6 +983,9 @@ impl Step {
         if let Some(want) = &e.udp {
             same("udp", want, &udp)?;
         }
+        if let Some(want) = &e.protected {
+            same("protected", want, &protected)?;
+        }
         if let Some((status, kind, body)) = &response {
             if let Some(want) = e.http_status {
                 same("http-status", &want, status)?;
@@ -1035,4 +1049,30 @@ fn same<T: PartialEq + std::fmt::Debug>(what: &str, want: &T, got: &T) -> Result
     Err(format!(
         "{what}\n    expected: {want:?}\n    got:      {got:?}"
     ))
+}
+
+/// A protected region as `expect.protected` writes it.
+fn region_line(r: &crate::Region) -> String {
+    use crate::ProtectedAction as A;
+    let deny: Vec<&str> = r
+        .deny
+        .iter()
+        .map(|a| match a {
+            A::BreakBlocks => "break-blocks",
+            A::PlaceBlocks => "place-blocks",
+            A::UseBlocks => "use-blocks",
+            A::Containers => "containers",
+            A::Pvp => "pvp",
+            A::Damage => "damage",
+            A::HurtMobs => "hurt-mobs",
+        })
+        .collect();
+    let ((x1, y1, z1), (x2, y2, z2)) = (r.pos1, r.pos2);
+    format!(
+        "{} {x1} {y1} {z1} {x2} {y2} {z2} deny={} exempt={}: {}",
+        r.dimension,
+        deny.join(","),
+        r.exempt.len(),
+        r.message
+    )
 }

@@ -1,0 +1,84 @@
+# /region marks a box (operators) and gives the server its protections (world.protect).
+
+[[step]]
+join = "Alex"
+expect.commands = ["region", "rg"]
+expect.protected = []
+
+[[step]]
+command = "region pos1"
+expect.error = "You need to be an operator for that."
+
+[[step]]
+player = { x = -10.5, y = 60.0, z = -10.5, permission = 2 }
+command = "region define spawn"
+expect.error = "Set pos1 and pos2 first (/region pos1, /region pos2)."
+
+[[step]]
+command = "region pos1"
+expect.feedback = "pos1 set: -11 60 -11"
+
+[[step]]
+player = { x = 10.5, y = 80.0, z = 10.5 }
+command = "rg pos2"
+expect.feedback = "pos2 set: 10 80 10"
+
+[[step]]
+command = "region define spawn"
+expect.feedback = "Region spawn defined: break, place, use, containers"
+expect.protected = [
+    "minecraft:overworld -11 60 -11 10 80 10 deny=break-blocks,place-blocks,use-blocks,containers exempt=0: §cYou can't do that here.",
+]
+
+[[step]]
+command = "region flag spawn pvp on"
+expect.feedback = "spawn: pvp on"
+expect.protected = [
+    "minecraft:overworld -11 60 -11 10 80 10 deny=break-blocks,place-blocks,use-blocks,containers,pvp exempt=0: §cYou can't do that here.",
+]
+
+[[step]]
+command = "region flag spawn place off"
+expect.feedback = "spawn: place off"
+
+[[step]]
+command = "region flag spawn fly on"
+expect.error = "Flags: break, place, use, containers, pvp, damage, mobs"
+
+[[step]]
+command = "region member spawn add Alex"
+expect.feedback = "Alex is a member of spawn."
+expect.protected = [
+    "minecraft:overworld -11 60 -11 10 80 10 deny=break-blocks,use-blocks,containers,pvp exempt=1: §cYou can't do that here.",
+]
+
+[[step]]
+command = "region member spawn remove Alex"
+expect.feedback = "Alex is no longer a member of spawn."
+
+# Kept across a restart, and given to the server again when the plugin starts.
+[[step]]
+reload = true
+player = { x = 0.5, y = 70.0, z = 0.5, permission = 2 }
+command = "region info"
+expect.feedback = "spawn (minecraft:overworld -11 60 -11 to 10 80 10) · protects: break, use, containers, pvp · members: nobody"
+
+[[step]]
+command = "region list"
+expect.feedback = "Regions: spawn"
+
+[[step]]
+command = "region bypass"
+expect.feedback = "Bypass on: regions don't stop you."
+expect.protected = [
+    "minecraft:overworld -11 60 -11 10 80 10 deny=break-blocks,use-blocks,containers,pvp exempt=1: §cYou can't do that here.",
+]
+
+[[step]]
+command = "region remove spawn"
+expect.feedback = "Region spawn removed."
+expect.protected = []
+
+[[step]]
+command = "region info"
+expect.feedback = "No region here."

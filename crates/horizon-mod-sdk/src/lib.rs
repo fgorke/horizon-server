@@ -207,7 +207,7 @@ pub mod server {
         ServerCommand,
     };
     pub use horizon::mods::players::{self, GameMode, Player};
-    pub use horizon::mods::world::{self, BlockChange};
+    pub use horizon::mods::world::{self, BlockChange, ProtectedAction, Region};
     /// API level 10: capabilities `movement`, `channels`, `network` and `statistics`, and
     /// `random` for every plugin.
     pub use horizon::mods::{channels, movement, network, random, statistics};

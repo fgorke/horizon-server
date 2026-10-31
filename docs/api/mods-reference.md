@@ -701,11 +701,37 @@ Capability `world`, server mods only (manifest `api = "0.3"`, experimental): the
 | `z` | `s32` |  |
 | `state` | `string` | `minecraft:oak_log[axis=y]`; properties left out take the block's defaults, `minecraft:stone` alone is the default state. |
 
+### enum `protected-action`
+
+What a protected region keeps players from doing.
+
+| Case | |
+| --- | --- |
+| `break-blocks` | Breaking blocks, and hitting item frames, paintings and armor stands. |
+| `place-blocks` | Placing blocks and using items on them (buckets, flint and steel, bone meal...). |
+| `use-blocks` | Doors, trapdoors, fence gates, buttons, levers and the other blocks a click uses, and item frames and armor stands. |
+| `containers` | Chests, barrels, furnaces, hoppers, shulker boxes and the other containers. |
+| `pvp` | Hitting other players, where either one stands. |
+| `damage` | Survival and adventure players taking damage of any kind. |
+| `hurt-mobs` | Hitting mobs and animals. |
+
+### record `region`
+
+| Field | Type | |
+| --- | --- | --- |
+| `dimension` | `string` |  |
+| `pos1` | `tuple<s32, s32, s32>` | Opposite corners, in any order, both blocks included. |
+| `pos2` | `tuple<s32, s32, s32>` |  |
+| `deny` | `list<protected-action>` |  |
+| `exempt` | `list<string>` | Players (ids, as `players.online` gives them) the region does not stop. |
+| `message` | `string` | The action bar of a player it stops, in the plugins' markup; empty: nothing. |
+
 | Function | Signature | What it does |
 | --- | --- | --- |
 | `get-block` | `func(dimension: string, x: s32, y: s32, z: s32) -> option<string>` | The block state at a position in a dimension (`minecraft:overworld`, ...), as `minecraft:oak_log[axis=y]`, as of this call: none where the server has no chunk loaded there. |
 | `get-biome` | `func(dimension: string, x: s32, y: s32, z: s32) -> option<string>` | The biome at a position (`minecraft:plains`, ...), as the server stores it (one per 4 x 4 x 4 cell): none where no chunk is loaded. |
 | `set-blocks` | `func(dimension: string, blocks: list<block-change>) -> result<_, string>` | Sets blocks as `/setblock` does: the old block entity removed, neighbours and shapes updated, light, and every player told. Every state is checked now (an error queues nothing); the changes are made in order after this call returns, before that dimension's next tick; one in a chunk not loaded then is skipped. At most 4096 per call. |
+| `protect` | `func(regions: list<region>) -> result<_, string>` | The plugin's protected regions, in place of those it gave before (at most 256, each exempting at most 256 players). The server checks them where vanilla checks spawn protection, before anything happens; where regions overlap, one that denies an action to a player is enough. |
 
 ## `movement`
 

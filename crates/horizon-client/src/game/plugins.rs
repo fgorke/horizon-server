@@ -68,6 +68,12 @@ pub(super) struct Plugins {
     /// starts its generation again.
     #[cfg(feature = "plugins")]
     reloads: u64,
+    /// Plugins' protected regions (`world.protect`), with the plugin that gave each.
+    #[cfg(feature = "plugins")]
+    pub(super) regions: Vec<(String, horizon_mods::Region)>,
+    /// The guests a region keeps from damage now (`game/protection.rs`).
+    #[cfg(feature = "plugins")]
+    pub(super) shielded: std::collections::HashSet<u128>,
 }
 
 impl Game<'_> {
@@ -517,6 +523,7 @@ mod run {
                     }
                     // Dropped, they free their ports and threads; what they said last is not shown.
                     self.plugins.mods = horizon_mods::Mods::default();
+                    self.plugins.regions.clear();
                     self.plugins.running = false;
                     self.plugins.world = false;
                     self.plugins.events.clear();
@@ -589,6 +596,7 @@ mod run {
                 );
             }
             self.send_plugin_commands(&mut host);
+            self.shield_guests(&mut host);
             if self.plugins.running {
                 self.run_plugin_tick(&mut host);
             }
@@ -876,6 +884,11 @@ mod run {
                                 "plugin {name} set more blocks than wait for their level: {over} dropped"
                             );
                         }
+                    }
+                    Output::Protect { name, regions } => {
+                        let all = &mut self.plugins.regions;
+                        all.retain(|(owner, _)| *owner != name);
+                        all.extend(regions.into_iter().map(|r| (name.clone(), r)));
                     }
                     Output::Stopped { name, reason } => {
                         super::super::dedicated::log(
