@@ -158,76 +158,117 @@ pub fn command(dir: &Path, words: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-/// The log lines `console` shows from before it attached.
-const CONSOLE_BACKLOG: usize = 20;
-
-/// How often `console` asks for new log lines while nothing is typed.
-const CONSOLE_POLL: Duration = Duration::from_millis(250);
-
-/// `console`: the running server's log as it comes, and each line typed run as a console command (its
-/// answer is in the log), as `run`'s own console takes them. The server keeps running when it is left.
-pub fn console(dir: &Path) -> Result<(), String> {
-    let client = running(dir)?;
-    let reply = client.call("GET", "/api/v1/logs?since=0", None)?;
-    let lines = reply["lines"].as_array().cloned().unwrap_or_default();
-    for line in &lines[lines.len().saturating_sub(CONSOLE_BACKLOG)..] {
-        println!("{}", line.as_str().unwrap_or_default());
+/// `players [--json]`: who is online, the operators, the whitelist and the bans; a stopped server's lists
+/// are read from its files.
+pub fn players(dir: &Path, as_json: bool) -> Result<(), String> {
+    let v = match Client::open(dir)? {
+        Some(client) => client.call("GET", "/api/v1/players", None)?,
+        None => serde_json::from_str(
+            &crate::admin::players(&crate::api::Shared::with_install(dir, None)).body,
+        )
+        .map_err(|e| e.to_string())?,
+    };
+    if as_json {
+        println!("{v}");
+        return Ok(());
     }
-    let mut next = reply["next"].as_u64().unwrap_or(0);
+    let list = |key: &str, describe: &dyn Fn(&Value) -> String| -> String {
+        let items: Vec<String> = v[key]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(describe)
+            .collect();
+        if items.is_empty() {
+            "none".into()
+        } else {
+            items.join(", ")
+        }
+    };
+    let name = |p: &Value| p["name"].as_str().unwrap_or_default().to_owned();
+    let because = |b: &Value| match b["reason"].as_str() {
+        Some(reason) => format!(" ({reason})"),
+        None => String::new(),
+    };
+    let online = list("online", &|p| match p["op_level"].as_i64() {
+        Some(level) if level > 0 => format!("{} (op {level}, {} ms)", name(p), p["ping_ms"]),
+        _ => format!("{} ({} ms)", name(p), p["ping_ms"]),
+    });
+    match v["max_players"].as_u64() {
+        Some(max) => println!(
+            "Online ({}/{max}): {online}",
+            v["online"].as_array().map_or(0, Vec::len)
+        ),
+        None => println!("Online: the game isn't running"),
+    }
     println!(
-        "-- Attached: type console commands. `exit` or Ctrl-D leaves; the server keeps running."
+        "Operators: {}",
+        list("ops", &|o| format!("{} ({})", name(o), o["level"]))
     );
-    signals::install();
-    let typed = typed_lines();
-    while signals::requests() == 0 {
-        match typed.recv_timeout(CONSOLE_POLL) {
-            Ok(line) => {
-                let line = line.trim();
-                if leaves_console(line) {
-                    break;
-                }
-                if !line.is_empty()
-                    && let Err(e) =
-                        client.call("POST", "/api/v1/command", Some(&json!({ "line": line })))
-                {
-                    eprintln!("horizon-server: {e}");
-                }
-            }
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
-            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+    let white: Vec<String> = v["whitelist"]["players"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(name)
+        .collect();
+    println!(
+        "Whitelist ({}): {}",
+        if v["whitelist"]["enabled"] == true {
+            "on"
+        } else {
+            "off"
+        },
+        if white.is_empty() {
+            "none".into()
+        } else {
+            white.join(", ")
         }
-        let Ok(reply) = client.call("GET", &format!("/api/v1/logs?since={next}"), None) else {
-            println!("-- The server is gone.");
-            return Ok(());
-        };
-        for line in reply["lines"].as_array().into_iter().flatten() {
-            println!("{}", line.as_str().unwrap_or_default());
-        }
-        next = reply["next"].as_u64().unwrap_or(next);
-    }
-    println!("-- Detached; the server is still running.");
+    );
+    println!(
+        "Banned: {}",
+        list("bans", &|b| format!("{}{}", name(b), because(b)))
+    );
+    println!(
+        "Banned addresses: {}",
+        list("ip_bans", &|b| format!(
+            "{}{}",
+            b["ip"].as_str().unwrap_or_default(),
+            because(b)
+        ))
+    );
     Ok(())
 }
 
-/// Whether a line typed into `console` leaves it rather than going to the server.
-fn leaves_console(line: &str) -> bool {
-    matches!(line, "exit" | "quit" | "/exit" | "/quit")
-}
-
-/// This program's stdin, line by line; the channel closes at its end (Ctrl-D).
-fn typed_lines() -> std::sync::mpsc::Receiver<String> {
-    let (tx, rx) = std::sync::mpsc::channel();
-    let _ = std::thread::Builder::new()
-        .name("console".into())
-        .spawn(move || {
-            for line in std::io::BufRead::lines(std::io::stdin().lock()) {
-                let Ok(line) = line else { break };
-                if tx.send(line).is_err() {
-                    break;
-                }
+/// `kick NAME [REASON]`, `ban NAME [REASON]`, `pardon NAME`, `ban-ip ADDRESS|NAME [REASON]`, `pardon-ip
+/// ADDRESS`: the vanilla command on the running server, through the control API.
+pub fn moderate(dir: &Path, command: &str, words: &[String]) -> Result<(), String> {
+    let Some(target) = words.first() else {
+        return Err(format!(
+            "{command} needs a player's name{}",
+            if command.ends_with("-ip") {
+                " or an address"
+            } else {
+                ""
             }
-        });
-    rx
+        ));
+    };
+    let mut body = json!({});
+    let key = if target.parse::<std::net::IpAddr>().is_ok() {
+        "ip"
+    } else {
+        "name"
+    };
+    body[key] = json!(target);
+    if words.len() > 1 {
+        body["reason"] = json!(words[1..].join(" "));
+    }
+    let client = running(dir)?;
+    wait_running(&client, None)?;
+    let reply = client.call("POST", &format!("/api/v1/players/{command}"), Some(&body))?;
+    for line in reply["output"].as_array().into_iter().flatten() {
+        println!("{}", line.as_str().unwrap_or_default());
+    }
+    Ok(())
 }
 
 /// `report [SECONDS]`: the running game records a performance report for that long (60 s by default,
@@ -556,16 +597,6 @@ pub fn logs(dir: &Path, follow: bool, count: usize) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn console_leaves_on_exit_words_only() {
-        for word in ["exit", "quit", "/exit", "/quit"] {
-            assert!(leaves_console(word), "{word}");
-        }
-        for line in ["stop", "list", "say exit", "exits", ""] {
-            assert!(!leaves_console(line), "{line}");
-        }
-    }
 
     #[test]
     fn status_reads_well() {

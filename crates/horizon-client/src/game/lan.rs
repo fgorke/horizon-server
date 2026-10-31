@@ -1513,6 +1513,8 @@ impl Game<'_> {
         if let Some(g) = host.hub.guests.iter().find(|g| g.uuid == uuid && g.placed) {
             playerdata::store(g, &mut self.level, vehicle);
             self.save_guest_records(host, g);
+        } else if let Some(saved) = host.owner.as_ref().and_then(|o| o.saved.as_ref()) {
+            self.level.position = saved.position;
         }
     }
 
@@ -1815,13 +1817,16 @@ impl Game<'_> {
                         self.lan_log_event(event);
                     }
                     HostEvent::PlayerChat { sender, text } => {
-                        if let Some(conn) = host
-                            .hub
-                            .guests
-                            .iter()
-                            .find(|g| g.uuid == sender)
-                            .map(|g| g.conn)
-                        {
+                        if let Some(g) = host.hub.guests.iter().find(|g| g.uuid == sender) {
+                            if self.options.dedicated.is_some() {
+                                super::dedicated::events::record(
+                                    "chat",
+                                    &g.name,
+                                    sender,
+                                    serde_json::json!({ "message": text }),
+                                );
+                            }
+                            let conn = g.conn;
                             self.detect_rate_spam(&mut host, conn, false);
                         }
                         self.plugin_chat(sender, &text);
@@ -1833,6 +1838,12 @@ impl Game<'_> {
                         {
                             // PlayerList.placeNewPlayer, then the broadcast join message.
                             super::dedicated::player_joined(g.uuid, &g.name);
+                            super::dedicated::events::record(
+                                "join",
+                                &g.name,
+                                g.uuid,
+                                serde_json::json!({ "address": g.address.ip().to_string() }),
+                            );
                             let [x, y, z] = g.position;
                             super::dedicated::log(
                                 "INFO",
@@ -1886,6 +1897,12 @@ impl Game<'_> {
                         host.play.remove(&guest.conn);
                         self.guest_combat.remove(&guest.conn);
                         if self.options.dedicated.is_some() && guest.placed {
+                            super::dedicated::events::record(
+                                "leave",
+                                &guest.name,
+                                guest.uuid,
+                                serde_json::json!({ "reason": guest.left_reason }),
+                            );
                             super::dedicated::log(
                                 "INFO",
                                 &format!("{} lost connection: {}", guest.name, guest.left_reason),

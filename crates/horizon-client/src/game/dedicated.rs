@@ -34,6 +34,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+pub(super) mod events;
 mod report;
 mod status;
 
@@ -165,8 +166,8 @@ pub(super) fn player_joined(id: u128, name: &str) {
     }
 }
 
-/// `server.toml`'s `[anticheat]`, beside server.properties when horizon-server runs the game; off
-/// without the file or the section, or (with an error logged) when the section is wrong.
+/// `server.toml`'s `[anticheat]`, beside server.properties when horizon-server runs the game; the
+/// default (on) without the file or the section, off (with an error logged) when the section is wrong.
 fn load_anticheat() -> horizon_anticheat::Config {
     let Ok(text) = std::fs::read_to_string("server.toml") else {
         return Default::default();
@@ -174,7 +175,10 @@ fn load_anticheat() -> horizon_anticheat::Config {
     match horizon_anticheat::Config::from_server_toml(&text) {
         Ok(config) => {
             if config.enabled {
-                log("INFO", "Anticheat on (server.toml [anticheat])");
+                log(
+                    "INFO",
+                    "Anticheat on (server.toml [anticheat]; enabled = false turns it off)",
+                );
             }
             config
         }
@@ -183,7 +187,10 @@ fn load_anticheat() -> horizon_anticheat::Config {
                 "ERROR",
                 &format!("server.toml: {e}; the anticheat stays off"),
             );
-            Default::default()
+            horizon_anticheat::Config {
+                enabled: false,
+                ..Default::default()
+            }
         }
     }
 }
@@ -1636,6 +1643,14 @@ impl Game<'_> {
                 .collect();
             for conn in conns {
                 h.hub.kick(conn, reason.clone());
+                if let Some(g) = h.hub.guest(conn) {
+                    events::record(
+                        "kick",
+                        &g.name,
+                        uuid,
+                        serde_json::json!({ "reason": g.left_reason }),
+                    );
+                }
             }
         }
     }
