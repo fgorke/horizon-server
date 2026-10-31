@@ -185,6 +185,7 @@ pub const MATERIAL_INPUT: Struct = Struct {
         uv: "vec2<f32>" = "The texture coordinate inside the block atlas.",
         translucent: "bool" = "Drawn in the translucent pass (water, stained glass, ice).",
         tags: "u32" = "The pack's sprite tags this surface's sprite has: bit i for the manifest's i-th `[[tags]]`.",
+        screen: "vec2<f32>" = "Where the point is on the screen, 0..1 from the top left (`opaque_depth` and `opaque_color` at `screen * frame.resolution`).",
     },
 };
 

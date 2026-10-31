@@ -3390,9 +3390,11 @@ impl Game<'_> {
             let health = &motion.health;
             let freeze_immune = game.wears_freeze_immune();
             let burn_immune = game.wears_burn_from_stepping_immunity();
+            let boat = game.riding_boat_fluid_box();
             let Some(player) = game.player.as_mut() else {
                 return (Vec::new(), None);
             };
+            player.fluids.boat = boat;
             let mut w = MotionWorld {
                 entities: &[],
                 player,
@@ -3911,11 +3913,10 @@ impl Game<'_> {
         if mode == SPECTATOR || self.dropped.is_empty() {
             return;
         }
-        let near: Vec<usize> = self
+        let near: Vec<_> = self
             .dropped
             .iter()
-            .enumerate()
-            .filter(|(_, d)| {
+            .filter(|d| {
                 d.pickup_delay == 0
                     && d.target.is_none_or(|t| t == uuid)
                     && (d.position.x - position[0]).abs() < 1.5
@@ -3923,15 +3924,25 @@ impl Game<'_> {
                     && d.position.y > position[1] - 0.6
                     && d.position.y < position[1] + 2.4
             })
-            .map(|(i, _)| i)
+            .map(|d| d.id)
             .collect();
         let mut taken = Vec::new();
-        for i in near.into_iter().rev() {
-            let (stack, item_id) = (self.dropped[i].stack.clone(), self.dropped[i].id);
-            if self.as_guest(host, conn, |g| g.native_pickup_refused(&stack)) == Some(true) {
+        for item_id in near.into_iter().rev() {
+            let Some(item) = self.dropped.iter().find(|d| d.id == item_id) else {
+                continue;
+            };
+            let stack = item.stack.clone();
+            let refused =
+                self.as_guest(host, conn, |g| g.native_pickup_refused(&stack)) == Some(true);
+            // The hook can remove or change any item entity.
+            let Some(i) = self.dropped.iter().position(|d| d.id == item_id) else {
+                continue;
+            };
+            if refused {
                 self.dropped[i].pickup_delay = 10;
                 continue;
             }
+            let stack = self.dropped[i].stack.clone();
             let before = stack.count;
             let thrower = self.dropped[i].thrower;
             let rest = self.as_guest(host, conn, |g| g.give(stack)).flatten();

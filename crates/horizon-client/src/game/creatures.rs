@@ -720,7 +720,7 @@ impl Game<'_> {
     pub(super) fn tick_creatures(&mut self) -> Result<()> {
         self.attack_ticks = self.attack_ticks.saturating_add(1);
         self.tick_leads();
-        self.spawn_natural();
+        horizon_client::spans::time("spawn_natural", || self.spawn_natural());
         // ServerChunkCache.tickChunks: the custom spawners tick only with spawn_mobs.
         if self.ui.rules.bool("spawn_mobs") {
             self.tick_wandering_trader();
@@ -729,7 +729,7 @@ impl Game<'_> {
             self.tick_village_siege();
         }
         self.tick_raids();
-        self.tick_creature_entities()
+        horizon_client::spans::time("tick_creature_entities", || self.tick_creature_entities())
     }
     /// `DistanceManager.inEntityTickingRange` in an entity-ticking chunk
     /// (block coordinates), from every player's tickets (`update_chunk_tickets`).
@@ -1971,6 +1971,29 @@ impl Game<'_> {
                 // `Level.setBlockAndUpdate`: neighbour and shape updates, so a crop
                 // above trampled farmland breaks and drops.
                 MobEvent::SetBlock { pos, state } => self.level_set(pos, state)?,
+                MobEvent::CrackTurtleEgg { pos } => {
+                    let state = self.world.block(pos[0], pos[1], pos[2]);
+                    let eggs = self
+                        .pack
+                        .assets
+                        .registry
+                        .state(state)
+                        .filter(|s| s.name == "minecraft:turtle_egg")
+                        .and_then(|s| s.properties.get("eggs"))
+                        .and_then(|e| e.parse::<i32>().ok());
+                    if let Some(eggs) = eggs {
+                        let at = BlockPos::new(pos[0], pos[1], pos[2]);
+                        // decreaseEggs: the break sound and the remaining
+                        // eggs (a stack of one is destroyed after it).
+                        self.with_level(|b, level, ticks| {
+                            b.turtle_egg_destroyed_by_player(level, ticks, at, state);
+                            if eggs <= 1 {
+                                b.destroy_block(level, ticks, at, false);
+                            }
+                        });
+                        self.process_level_events()?;
+                    }
+                }
                 MobEvent::BedOccupied { pos, occupied } => self.set_bed_occupied(pos, occupied),
                 MobEvent::SetDoorOpen { pos, open } => {
                     let pos = BlockPos::new(pos[0], pos[1], pos[2]);

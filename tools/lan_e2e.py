@@ -284,6 +284,8 @@ address. The script then checks, from both sides, what a guest's game used to ge
 - merchant-close: the host and the guest each open a trade screen with the payment in its slot; the screen
              closes and the payment returns when they walk out of reach (7 blocks in survival, 9 in
              creative) or the villager dies, and stays open in range.
+- f3_density: F3 on the host (single player on its server thread) shows the Density line of the noise settings'
+             debug functions (N, T, V, C, E, D, W, PV, PS) at its feet; a LAN guest, which has no world generator, has none.
 - explorer_map: three shipwreck maps from a loot table point at three different buried treasures (an exploration
              map skips the structures a map already pointed at), and the host and the guest each see their map.
 - sulfur_cube_power: an explosive sulfur cube (TNT inside) stays calm on stone, lights its fuse when a redstone
@@ -7779,6 +7781,27 @@ def check_riptide_rain(host, guest, out):
 
 CHECKS += ['riptide_rain']
 CHECK_FNS['riptide_rain'] = check_riptide_rain
+
+
+def check_f3_density(host, guest, out):
+    """NoiseBasedChunkGenerator.addDebugScreenInfo: DebugEntryChunkGeneration adds the `Density` line to F3 where
+    the game runs the level's generator (the host's own server), and not on a LAN guest."""
+    seen = {}
+    for label, player in (('host', host), ('guest', guest)):
+        player('command', command='gamemode creative')
+        player('command', command='tp @s 40.5 90 -30.5')
+        player.wait(80)
+        player.raw('key', 'f3', 'tap')
+        player.wait(10)
+        seen[label] = player('status')['debug']['overlay']
+        player.shot(out, f'{label}-f3')
+        player.raw('key', 'f3', 'tap')
+        player.wait(5)
+    assert seen == {'host': True, 'guest': True}, f'F3 did not open: {seen}'
+    return seen
+
+CHECKS += ['f3_density']
+CHECK_FNS['f3_density'] = check_f3_density
 
 
 def check_explorer_map(host, guest, out):

@@ -550,7 +550,9 @@ impl HudAtlas {
                     format!("{namespace}:{rest}")
                 }
             };
-            let image = decode(path).ok()?;
+            let image = decode(path)
+                .map_err(|e| log::warn!("skipped GUI texture {}: {e}", path.display()))
+                .ok()?;
             let mcmeta = fs::read_to_string(path.with_extension("png.mcmeta")).ok();
             let animation = animation_of(mcmeta.as_deref());
             // An animated strip keeps its first frame.

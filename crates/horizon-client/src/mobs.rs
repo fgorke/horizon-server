@@ -749,6 +749,7 @@ impl Damage {
                 | DamageKind::Starve
                 | DamageKind::SulfurCubeHot
                 | DamageKind::Wither
+                | DamageKind::Spear
         )
     }
     pub fn is_projectile(&self) -> bool {
@@ -1488,6 +1489,12 @@ pub enum MobEvent {
     SetBlock {
         pos: [i32; 3],
         state: horizon_world::registry::BlockStateId,
+    },
+    /// `TurtleEggBlock.decreaseEggs` after a mob's step won its 1 in 100: the
+    /// break sound, then one egg fewer, or the block destroyed when it was
+    /// the last.
+    CrackTurtleEgg {
+        pos: [i32; 3],
     },
     /// `LivingEntity.startSleeping` / `stopSleeping`: the bed head at `pos`
     /// gets `occupied` (`setBlockAndUpdate`; the foot follows it).
@@ -3372,6 +3379,32 @@ mod elytra_tests {
         for (angle, resting) in wings.angles.iter().zip(ElytraAnimation::RESTING) {
             assert!((angle - resting).abs() < 0.00001);
         }
+    }
+}
+#[cfg(test)]
+mod spear_knockback_tests {
+    use super::sensor_scan_tests::kind;
+    use super::*;
+    use horizon_core::geometry::Vec3;
+
+    /// `spear` is in `#no_knockback`: the stab's hurt deals no default
+    /// knockback (the spear pushes with `causeExtraKnockback` itself).
+    #[test]
+    fn a_spear_stab_hurts_without_the_default_knockback() {
+        let mut m = Mob::new(1, kind(), Vec3::ZERO, 0.0);
+        let health = m.health;
+        assert!(m.damage(1.0, Damage::spear([2.0, 0.0, 0.0])));
+        assert_eq!(m.health, health - 1.0);
+        let v = m.velocity;
+        assert_eq!([v.x, v.y, v.z], [0.0; 3]);
+    }
+
+    /// a plain player hit still knocks the mob away from the attacker.
+    #[test]
+    fn a_player_hit_still_knocks_back() {
+        let mut m = Mob::new(1, kind(), Vec3::ZERO, 0.0);
+        assert!(m.damage(1.0, Damage::player([2.0, 0.0, 0.0])));
+        assert!(m.velocity.x < 0.0, "velocity {:?}", m.velocity);
     }
 }
 #[cfg(test)]

@@ -68,6 +68,24 @@ const POST_RESOURCES: [Resource; 6] = [
     },
 ];
 
+/// The material stage's resources: the frame, and the world as it was before translucent
+/// terrain drew (for water and glass to see what lies behind them).
+const MATERIAL_RESOURCES: [Resource; 3] = [
+    FRAME,
+    Resource {
+        binding: 6,
+        name: "opaque_depth",
+        ty: "var opaque_depth: texture_depth_2d",
+        doc: "The world's depth before translucent terrain (reversed, like `scene_depth`), for the translucent pass: `textureLoad(opaque_depth, vec2<i32>(input.screen * frame.resolution), 0)` is what lies behind water or glass. Stale while solid terrain draws.",
+    },
+    Resource {
+        binding: 11,
+        name: "opaque_color",
+        ty: "var opaque_color: texture_2d<f32>",
+        doc: "The world's picture before translucent terrain (sky, solid terrain, entities), the size of `opaque_depth`, for the translucent pass: what a surface refracts. Read it with `textureLoad`. Stale while solid terrain draws; black when the world draws straight to the window (a pack without `[[post]]` passes, at full resolution).",
+    },
+];
+
 /// Functions the post prelude gives packs.
 const POST_HELPERS: &str = "\
 // The world's depth at `uv` (reversed: 0 is the sky).
@@ -119,7 +137,8 @@ struct HorizonMaterialIn {
     @location(7) @interpolate(flat) tags: u32,
 }
 @fragment fn horizon_fs_material(in: HorizonMaterialIn) -> @location(0) vec4<f32> {
-    let input = MaterialInput(in.albedo, in.tint, in.light, in.lightmap, in.world, in.uv, in.translucent != 0u, in.tags);
+    let input = MaterialInput(in.albedo, in.tint, in.light, in.lightmap, in.world, in.uv, in.translucent != 0u, in.tags,
+        in.position.xy / frame.resolution);
     return material(input).color;
 }
 ";
@@ -183,7 +202,8 @@ impl StageKind {
     pub fn resources(self) -> &'static [Resource] {
         match self {
             StageKind::Post => &POST_RESOURCES,
-            StageKind::Sky | StageKind::Material => std::slice::from_ref(&FRAME),
+            StageKind::Sky => std::slice::from_ref(&FRAME),
+            StageKind::Material => &MATERIAL_RESOURCES,
         }
     }
 

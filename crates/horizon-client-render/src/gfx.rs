@@ -975,6 +975,10 @@ fn backends_name(backends: wgpu::Backends) -> &'static str {
         _ => "graphics",
     }
 }
+/// Whether an adapter renders on the CPU (WARP, llvmpipe).
+fn is_software(kind: wgpu::DeviceType) -> bool {
+    kind == wgpu::DeviceType::Cpu
+}
 /// A device and what it came from.
 struct Opened {
     instance: wgpu::Instance,
@@ -1056,6 +1060,32 @@ async fn open_device(
     api: GraphicsApi,
     layers: u32,
 ) -> Result<Opened> {
+    // A software adapter (WARP, llvmpipe) is a last resort: a later backend may
+    // have the real GPU (#3978: a Fermi GPU with no Vulkan and no DX12 driver
+    // still has OpenGL).
+    match open_device_with(window, offscreen, api, layers, false).await {
+        Ok(opened) => Ok(opened),
+        Err(first) => match open_device_with(window, offscreen, api, layers, true).await {
+            Ok(opened) => {
+                log::warn!(
+                    "Horizon renderer: no GPU adapter could be used ({first}); \
+                     rendering on the CPU, which is slow"
+                );
+                Ok(opened)
+            }
+            Err(_) => Err(first),
+        },
+    }
+}
+/// `open_device`, taking an adapter of the CPU type (software rendering) only
+/// when `allow_cpu`.
+async fn open_device_with(
+    window: &Arc<Window>,
+    offscreen: bool,
+    api: GraphicsApi,
+    layers: u32,
+    allow_cpu: bool,
+) -> Result<Opened> {
     let order = backend_order(
         api.with_env(),
         std::env::consts::OS,
@@ -1067,7 +1097,7 @@ async fn open_device(
         if attempt > 0 {
             log::warn!("Horizon renderer: trying {name} ({})", failures.join("; "));
         }
-        match open_with_retry(backends, window, offscreen, layers).await {
+        match open_with_retry(backends, window, offscreen, layers, allow_cpu).await {
             Ok(opened) => return Ok(opened),
             Err(e) => failures.push(e),
         }
@@ -1091,15 +1121,16 @@ async fn open_with_retry(
     window: &Arc<Window>,
     offscreen: bool,
     layers: u32,
+    allow_cpu: bool,
 ) -> std::result::Result<Opened, String> {
-    match open_backend(backends, window, offscreen, false, layers).await {
+    match open_backend(backends, window, offscreen, false, layers, allow_cpu).await {
         Err(NoDevice::NoAdapter(hidden)) => {
             log::warn!(
                 "Horizon renderer: {} has no conformant adapter ({hidden}); asking again for the \
                  ones wgpu hides as non-conformant",
                 backends_name(backends)
             );
-            match open_backend(backends, window, offscreen, true, layers).await {
+            match open_backend(backends, window, offscreen, true, layers, allow_cpu).await {
                 Ok(opened) => {
                     log::warn!(
                         "Horizon renderer: using {} although its driver reports no Vulkan \
@@ -1116,13 +1147,15 @@ async fn open_with_retry(
     }
 }
 /// Opens a device on `backends` alone: its surface, adapter and device, or what
-/// stopped it. `allow_nonconformant` is `open_with_retry`'s second try.
+/// stopped it. `allow_nonconformant` is `open_with_retry`'s second try; a
+/// software adapter is taken only when `allow_cpu`.
 async fn open_backend(
     backends: wgpu::Backends,
     window: &Arc<Window>,
     offscreen: bool,
     allow_nonconformant: bool,
     layers: u32,
+    allow_cpu: bool,
 ) -> std::result::Result<Opened, NoDevice> {
     let name = backends_name(backends);
     let instance = wgpu::Instance::new(instance_descriptor(
@@ -1150,6 +1183,15 @@ async fn open_backend(
         Ok(adapter) => adapter,
         Err(e) => return Err(NoDevice::NoAdapter(format!("{name}: {e}"))),
     };
+    // NoAdapter, so `open_with_retry` asks again: with the non-conformant
+    // adapters shown, wgpu ranks a real GPU (hasvk on Ivy Bridge or Haswell)
+    // above a software one. The second try's error is final either way.
+    if !allow_cpu && is_software(adapter.get_info().device_type) {
+        return Err(NoDevice::NoAdapter(format!(
+            "{name}: only a software adapter ({})",
+            adapter.get_info().name
+        )));
+    }
     describe_adapter(&adapter);
     let info = adapter.get_info();
     let limits = adapter.limits();
@@ -2207,8 +2249,9 @@ impl Renderer {
             CRUMBLING_BLEND,
             false,
         );
-        // RenderPipelines.ENTITY_SHADOW: translucent, depth test without
-        // writes. The quads lie exactly on the block tops like vanilla's, but
+        // RenderPipelines.ENTITY_SHADOW: translucent, back-face culled, depth
+        // test without writes. The quads lie exactly on the block tops like
+        // vanilla's, facing +Y so looking up from below culls them, but
         // terrain and shadows are separate draw paths, so their fp32 depth
         // interpolations disagree by a few dozen ulps of the fragment depth
         // and the shadow's rim z-fights with the block top (speckle that
@@ -2218,7 +2261,7 @@ impl Renderer {
         // the feet.
         let shadow_blob_pipeline = entity_pipeline_with(
             "Entity shadows",
-            None,
+            Some(wgpu::Face::Back),
             false,
             wgpu::CompareFunction::GreaterEqual,
             wgpu::DepthBiasState {
@@ -3066,7 +3109,8 @@ impl Renderer {
                 dimension: wgpu::TextureDimension::D2,
                 format: wgpu::TextureFormat::Depth32Float,
                 // TEXTURE_BINDING: a post effect may read the depth buffer.
-                // COPY_SRC: improved transparency copies it.
+                // COPY_SRC: improved transparency and a native shader pack's
+                // `opaque_depth` copy it.
                 usage: wgpu::TextureUsages::RENDER_ATTACHMENT
                     | wgpu::TextureUsages::TEXTURE_BINDING
                     | wgpu::TextureUsages::COPY_SRC,
@@ -5259,6 +5303,17 @@ impl Renderer {
             pass.set_bind_group(0, &self.group, &[]);
             sky.draw(&mut pass, &native.frame);
         }
+        // The material stage's copies of the world before translucent terrain, the size of
+        // this frame's targets.
+        if let Some(native) = &mut self.native
+            && native.material.is_some()
+            && !frame.title
+        {
+            let color = scaled.as_ref().map(|(c, _)| c.texture());
+            native
+                .frame
+                .fit_opaque(&self.device, world_depth.texture(), color);
+        }
         // One of Horizon's own packs with a material stage: terrain draws with its pipelines,
         // which read the pack's frame at group 3.
         let material = self
@@ -5269,6 +5324,9 @@ impl Renderer {
         let solid_pipeline = material.map_or(&self.solid, |(m, _)| &m.solid);
         let translucent_pipeline = material.map_or(&self.translucent, |(m, _)| &m.translucent);
         let pack_flat = material.and_then(|(m, _)| m.flat.as_ref());
+        // A material stage's translucent pass reads a copy of the depth the solid terrain
+        // left: it is stored across the pass that ends before the copy.
+        let keep_depth = keep_depth || material.is_some();
         let pack_frame = |pass: &mut wgpu::RenderPass<'_>| {
             if let Some((_, group)) = material {
                 pass.set_bind_group(horizon_shader_api::stages::GROUP, group, &[]);
@@ -5536,6 +5594,31 @@ impl Renderer {
                 pass.set_pipeline(&self.debug_lines_on_top);
                 pass.set_vertex_buffer(0, self.debug_line_buffer.slice(..));
                 pass.draw(0..4, debug_depth..debug_depth + debug_top);
+            }
+            // One of Horizon's own packs reads the world before translucent terrain
+            // (`opaque_depth`, `opaque_color`): the pass ends, the targets are copied, and a
+            // pass that loads both carries on.
+            if material.is_some()
+                && let Some(native) = &self.native
+            {
+                drop(pass);
+                let depth = world_depth.texture();
+                encoder.copy_texture_to_texture(
+                    depth.as_image_copy(),
+                    native.frame.opaque_depth.as_image_copy(),
+                    depth.size(),
+                );
+                if let Some((color, _)) = &scaled {
+                    let color = color.texture();
+                    encoder.copy_texture_to_texture(
+                        color.as_image_copy(),
+                        native.frame.opaque_color.as_image_copy(),
+                        color.size(),
+                    );
+                }
+                pass = world_pass_after_culling(&mut encoder, world_view, world_depth, keep_depth);
+                pass.set_bind_group(0, &self.group, &[]);
+                pack_frame(&mut pass);
             }
             match self.flat.as_ref().filter(|_| flat_frame) {
                 // The pack draws translucent terrain after its deferred programs.
@@ -6611,6 +6694,14 @@ mod tests {
                 .collect::<Vec<_>>(),
             [0, 1, 3, 4, 11, 2, 7, 9, 10, 5, 6, 8]
         );
+    }
+    #[test]
+    fn software_adapters_are_last_resort() {
+        use super::is_software;
+        assert!(is_software(wgpu::DeviceType::Cpu));
+        assert!(!is_software(wgpu::DeviceType::DiscreteGpu));
+        assert!(!is_software(wgpu::DeviceType::IntegratedGpu));
+        assert!(!is_software(wgpu::DeviceType::VirtualGpu));
     }
     #[test]
     fn auto_tries_vulkan_then_directx_12_then_opengl() {

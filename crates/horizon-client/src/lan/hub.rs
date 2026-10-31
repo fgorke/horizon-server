@@ -2718,9 +2718,9 @@ impl Hub {
                     g.max_unacknowledged = 10;
                 }
                 S::Pong(p) => self.anticheat_pong(i, p.id),
-                // handleAttack is the game's too: a move queued behind it would move the
-                // player (or land them, losing a falling attack's critical hit) before
-                // the game checks their reach and state.
+                // handleAttack is the game's too: a move queued behind an attack would move
+                // the player (or land them on the ground, losing a falling attack's critical
+                // hit) before the game checks their reach and state.
                 S::Attack(p) => {
                     if !self.anticheat_attack(i, p.id, events) {
                         events.push(HostEvent::Packet(conn, Box::new(S::Attack(p))));
@@ -2824,7 +2824,8 @@ impl Hub {
                         break;
                     }
                 }
-                // handleInteract, as handleAttack.
+                // handleInteract is the game's too, like handleAttack above: a move queued
+                // behind it waits for the next tick.
                 S::Interact(p) => {
                     events.push(HostEvent::Packet(conn, Box::new(S::Interact(p))));
                     if self.move_queued(i) {

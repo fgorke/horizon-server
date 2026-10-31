@@ -488,8 +488,10 @@ pub fn mob_to_nbt(
         map.insert("InLove".into(), Tag::Int(m.extra.in_love.max(0)));
     }
     let species = m.species();
-    if let Some((_, variant)) =
-        crate::mobs::finalize::species_variant_component(species, m.extra.variant)
+    // MushroomCow saves its variant under `Type` (below), not `variant`.
+    if species != crate::mobs::Species::Mooshroom
+        && let Some((_, variant)) =
+            crate::mobs::finalize::species_variant_component(species, m.extra.variant)
     {
         map.insert("variant".into(), string(&variant));
     }
@@ -1951,7 +1953,7 @@ pub fn orb_to_nbt(o: &ExperienceOrb, uuid: [i32; 4]) -> Tag {
     };
     let mut tag = base.tag(None);
     for (key, value) in [
-        ("Health", Tag::Short(5)),
+        ("Health", Tag::Short(o.health as i16)),
         ("Age", Tag::Short(o.age.min(i16::MAX as u32) as i16)),
         ("Value", Tag::Short(o.value.min(i16::MAX as u32) as i16)),
         ("Count", Tag::Int(o.count.min(i32::MAX as u32) as i32)),
@@ -1976,6 +1978,7 @@ pub fn orbs_from_nbt(tag: &Tag) -> Vec<ExperienceOrb> {
         on_ground: flag(tag, "OnGround"),
         count,
         ticks: 0,
+        health: number(tag.get("Health")).unwrap_or(5) as i32,
     };
     vec![orb]
 }
@@ -2894,6 +2897,7 @@ mod tests {
             on_ground: false,
             count: 3,
             ticks: 0,
+            health: 5,
         };
         let tag = orb_to_nbt(&o, [0; 4]);
         let back = orbs_from_nbt(&tag);
@@ -3739,6 +3743,20 @@ mod item_component_tests {
         assert_eq!(hen.extra.variant, 0);
         apply_item_components(&mut hen, &egg);
         assert_eq!(hen.extra.variant, 1, "minecraft:warm, not the biome's");
+        // MushroomCow.applyImplicitComponents: the egg's variant, and the
+        // component the mob reports back.
+        let mut egg = crate::items::ItemStack::new("minecraft:mooshroom_spawn_egg", 1);
+        egg.data_mut().set_other(
+            "minecraft:mooshroom/variant",
+            Some(string("minecraft:brown")),
+        );
+        let mut mooshroom = spawn("minecraft:mooshroom", 3);
+        apply_item_components(&mut mooshroom, &egg);
+        let (id, variant) = crate::mobs::finalize::variant_component(&mooshroom).unwrap();
+        assert_eq!(
+            (id, variant.as_str()),
+            ("minecraft:mooshroom/variant", "minecraft:brown")
+        );
         // Sheep.applyImplicitComponents: the egg's colour over the mob's.
         let mut egg = crate::items::ItemStack::new("minecraft:sheep_spawn_egg", 1);
         egg.data_mut()

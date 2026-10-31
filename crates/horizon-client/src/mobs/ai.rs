@@ -671,6 +671,17 @@ fn effects_from_blocks(
         if w.block_name(x, y, z) == "minecraft:magma_block" {
             m.damage(1.0, Damage::of(DamageKind::HotFloor));
         }
+        // TurtleEggBlock.stepOn: a mob never steps carefully, so an egg under
+        // it breaks one time in a hundred (`destroyEgg`), unless it is a turtle
+        // or a bat or mob griefing is off (`canDestroyEgg`); the roll is the
+        // level's and comes only after those checks.
+        if w.block_name(x, y, z) == "minecraft:turtle_egg"
+            && !matches!(m.species(), Species::Turtle | Species::Bat)
+            && w.mob_griefing
+            && level_random.next_int_bound(100).unwrap_or(1) == 0
+        {
+            events.push(MobEvent::CrackTurtleEgg { pos: [x, y, z] });
+        }
     }
     let mut visited: Vec<[i32; 3]> = Vec::new();
     let travel = m.position.subtract(m.previous);

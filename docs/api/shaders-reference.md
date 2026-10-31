@@ -52,6 +52,7 @@ One point of a block's surface, for `fn material(input: MaterialInput) -> Surfac
 | `uv` | `vec2<f32>` | The texture coordinate inside the block atlas. |
 | `translucent` | `bool` | Drawn in the translucent pass (water, stained glass, ice). |
 | `tags` | `u32` | The pack's sprite tags this surface's sprite has: bit i for the manifest's i-th `[[tags]]`. |
+| `screen` | `vec2<f32>` | Where the point is on the screen, 0..1 from the top left (`opaque_depth` and `opaque_color` at `screen * frame.resolution`). |
 
 ### `Surface`
 
@@ -66,6 +67,8 @@ Resources (bind group 3):
 | Binding | Declaration | Meaning |
 | --- | --- | --- |
 | 0 | `var<uniform> frame: Frame` | The frame (`Frame`). |
+| 6 | `var opaque_depth: texture_depth_2d` | The world's depth before translucent terrain (reversed, like `scene_depth`), for the translucent pass: `textureLoad(opaque_depth, vec2<i32>(input.screen * frame.resolution), 0)` is what lies behind water or glass. Stale while solid terrain draws. |
+| 11 | `var opaque_color: texture_2d<f32>` | The world's picture before translucent terrain (sky, solid terrain, entities), the size of `opaque_depth`, for the translucent pass: what a surface refracts. Read it with `textureLoad`. Stale while solid terrain draws; black when the world draws straight to the window (a pack without `[[post]]` passes, at full resolution). |
 
 ## post
 

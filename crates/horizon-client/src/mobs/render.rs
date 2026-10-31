@@ -2396,6 +2396,7 @@ mod tests {
             entity_tags: Default::default(),
             villager_hats: Default::default(),
             pois: Default::default(),
+            species_placements: Default::default(),
         };
         let atlas = |name: &str| {
             Some(if name.contains("_inner") {
@@ -2484,6 +2485,7 @@ mod tests {
             entity_tags: Default::default(),
             villager_hats: Default::default(),
             pois: Default::default(),
+            species_placements: Default::default(),
         };
         let atlas = |name: &str| {
             Some(if name.contains("copper_golem_eyes") {
@@ -2536,6 +2538,7 @@ mod tests {
             entity_tags: Default::default(),
             villager_hats: Default::default(),
             pois: Default::default(),
+            species_placements: Default::default(),
         };
         for left in [false, true] {
             let t = held_item_transform(&mob, 0.5, glam::DVec3::ZERO, &data, left).unwrap();
@@ -2644,6 +2647,7 @@ mod tests {
             entity_tags: Default::default(),
             villager_hats: Default::default(),
             pois: Default::default(),
+            species_placements: Default::default(),
         };
         let atlas = |_: &str| Some([0.0, 0.0, 0.25, 0.25]);
         let part = &kind.model;

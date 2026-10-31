@@ -102,6 +102,9 @@ stages.
 
 - 2026-10-30: sprite tags (`[[tags]]`, `MaterialInput.tags`) and the frame's `precipitation`, `temperature`,
   `downfall` and `wetness`.
+- 2026-10-30: API 0.1 (additions): the material stage's `MaterialInput.screen` and its
+  `opaque_depth` and `opaque_color`, the world as it was before translucent terrain drew, so
+  water and glass can see what lies behind them (depth under water, refraction).
 - 2026-10-26: the material stage in the game: terrain's surfaces through the pack's `material`.
 - 2026-10-26: the sky stage in the game: the pack's `sky` gets vanilla's colour along each ray.
 - 2026-10-26: the post stage in the game (`HORIZON_SHADER_PACK`, hot reload with the last good pack kept).

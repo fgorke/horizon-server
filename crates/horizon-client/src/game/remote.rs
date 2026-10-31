@@ -2144,6 +2144,7 @@ impl Game<'_> {
                 on_ground: false,
                 count: 1,
                 ticks: 0,
+                health: 5,
             });
         }
         if let Some(t) = mob_type {
@@ -6448,6 +6449,10 @@ impl Game<'_> {
     /// the server, and whether the click ends there is what this client's
     /// copy of the entity answers (`MultiPlayerGameMode.interact`).
     fn remote_use_entity(&mut self, hand: Hand) -> bool {
+        // A menu this use opens (a chest minecart's) is no clicked block's.
+        if let Some(r) = self.remote.as_mut() {
+            r.use_target = None;
+        }
         let sneaking = self.keys.contains(&KeyCode::ShiftLeft);
         // A boat, minecart, item frame, armor stand or painting nearer than
         // any mob: the server uses it (AbstractBoat.interact boards it).
@@ -8166,8 +8171,8 @@ impl Game<'_> {
             .unwrap_or_default();
         let target = self
             .remote
-            .as_ref()
-            .and_then(|r| r.use_target)
+            .as_mut()
+            .and_then(|r| r.use_target.take())
             .map(|t| (t[0], t[1], t[2]));
         if menu == "minecraft:lectern" {
             // LecternScreen: the book and page come in the menu's content and data.
@@ -8266,7 +8271,7 @@ impl Game<'_> {
             let key = target.filter(holds).unwrap_or((i32::MIN, 0, 0));
             self.world.block_entities.insert(key, entity);
             self.container = Some(key);
-            self.open_native_screen(key, target, p.container);
+            self.open_native_screen(key, target, p.container, &menu);
         }
         self.screen = Screen::Inventory;
         self.capture(false);

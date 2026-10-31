@@ -1305,7 +1305,7 @@ impl Game<'_> {
                             p[2],
                         ]);
                         g.throw_from_eyes(rest, eye, false);
-                        if let Some(item) = g.dropped.last_mut() {
+                        if let Some(item) = g.just_spawned_item() {
                             item.thrower = None;
                             item.pickup_delay = 0;
                             item.target = uuid;
@@ -2059,7 +2059,18 @@ impl Game<'_> {
                         on_ground: false,
                         count: 1,
                         ticks: 0,
+                        health: 5,
                     });
+                    // tryAddFreshEntityWithPassengers refused: ERROR_DUPLICATE_UUID.
+                    if !self.native_entity_joins(
+                        self.next_entity,
+                        "minecraft:experience_orb",
+                        pos,
+                        false,
+                    ) {
+                        self.orbs.pop();
+                        return Err(err("commands.summon.failed.uuid", &[]));
+                    }
                     name = Text::translate("entity.minecraft.experience_orb", &[]);
                 }
                 "lightning_bolt" => {

@@ -30,16 +30,60 @@ pub struct NativePost {
     format: wgpu::TextureFormat,
 }
 
-/// The `frame` every stage of a pack reads (group 3, binding 0), written once a frame.
+/// The `frame` every stage of a pack reads (group 3, binding 0), written once a frame, and
+/// what the material stage reads besides.
 pub struct NativeFrame {
     pub(super) buffer: wgpu::Buffer,
-    /// Group 3 of the stages that read only the frame (the sky).
+    /// Group 3 of the sky and material stages.
     pub layout: wgpu::BindGroupLayout,
     pub group: wgpu::BindGroup,
+    /// The world's depth before translucent terrain (the material stage's `opaque_depth`,
+    /// binding 6), copied each frame.
+    pub opaque_depth: wgpu::Texture,
+    /// The world's colour before translucent terrain (`opaque_color`, binding 11), copied
+    /// with it; 1×1 while the world draws straight to the window.
+    pub opaque_color: wgpu::Texture,
     start: std::time::Instant,
     frames: u32,
     /// `frame.wetness`, and when it was last written.
     wetness: (f32, Option<std::time::Instant>),
+}
+
+/// A depth texture of `size` the world's depth is copied into.
+fn depth_copy(device: &wgpu::Device, size: [u32; 2]) -> wgpu::Texture {
+    copy_target(
+        device,
+        "Native shader pack opaque depth",
+        size,
+        wgpu::TextureFormat::Depth32Float,
+    )
+}
+
+/// A colour texture of `size` and `format` the world's colour is copied into.
+fn color_copy(device: &wgpu::Device, size: [u32; 2], format: wgpu::TextureFormat) -> wgpu::Texture {
+    copy_target(device, "Native shader pack opaque colour", size, format)
+}
+
+fn copy_target(
+    device: &wgpu::Device,
+    label: &str,
+    size: [u32; 2],
+    format: wgpu::TextureFormat,
+) -> wgpu::Texture {
+    device.create_texture(&wgpu::TextureDescriptor {
+        label: Some(label),
+        size: wgpu::Extent3d {
+            width: size[0].max(1),
+            height: size[1].max(1),
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    })
 }
 
 /// The uniform `frame` at binding 0, read by `visibility`.
@@ -66,24 +110,91 @@ impl NativeFrame {
         });
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Native shader pack frame"),
-            entries: &[frame_entry(wgpu::ShaderStages::VERTEX_FRAGMENT)],
+            entries: &[
+                frame_entry(wgpu::ShaderStages::VERTEX_FRAGMENT),
+                texture_entry(6, wgpu::TextureSampleType::Depth),
+                texture_entry(11, wgpu::TextureSampleType::Float { filterable: false }),
+            ],
         });
-        let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Native shader pack frame"),
-            layout: &layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: buffer.as_entire_binding(),
-            }],
-        });
+        let opaque_depth = depth_copy(device, [1, 1]);
+        let opaque_color = color_copy(device, [1, 1], wgpu::TextureFormat::Rgba8Unorm);
+        let group = Self::group(device, &layout, &buffer, &opaque_depth, &opaque_color);
         Self {
             buffer,
             layout,
             group,
+            opaque_depth,
+            opaque_color,
             start: std::time::Instant::now(),
             frames: 0,
             wetness: (0.0, None),
         }
+    }
+
+    fn group(
+        device: &wgpu::Device,
+        layout: &wgpu::BindGroupLayout,
+        buffer: &wgpu::Buffer,
+        opaque_depth: &wgpu::Texture,
+        opaque_color: &wgpu::Texture,
+    ) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Native shader pack frame"),
+            layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: wgpu::BindingResource::TextureView(
+                        &opaque_depth.create_view(&Default::default()),
+                    ),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 11,
+                    resource: wgpu::BindingResource::TextureView(
+                        &opaque_color.create_view(&Default::default()),
+                    ),
+                },
+            ],
+        })
+    }
+
+    /// Keeps the opaque copies the size of the world's depth `depth` and, where the world's
+    /// colour `color` can be copied (the scaled target, not the window's own), its size and
+    /// format; the group is made again when they change.
+    pub fn fit_opaque(
+        &mut self,
+        device: &wgpu::Device,
+        depth: &wgpu::Texture,
+        color: Option<&wgpu::Texture>,
+    ) {
+        let size = [depth.width(), depth.height()];
+        let (color_size, format) = match color {
+            Some(c) => ([c.width(), c.height()], c.format()),
+            None => ([1, 1], self.opaque_color.format()),
+        };
+        let color_fits = [self.opaque_color.width(), self.opaque_color.height()] == color_size
+            && self.opaque_color.format() == format;
+        let depth_fits = [self.opaque_depth.width(), self.opaque_depth.height()] == size;
+        if depth_fits && color_fits {
+            return;
+        }
+        if !color_fits {
+            self.opaque_color = color_copy(device, color_size, format);
+        }
+        if !depth_fits {
+            self.opaque_depth = depth_copy(device, size);
+        }
+        self.group = Self::group(
+            device,
+            &self.layout,
+            &self.buffer,
+            &self.opaque_depth,
+            &self.opaque_color,
+        );
     }
 
     /// Writes this frame's inputs, for a world of `size`.
