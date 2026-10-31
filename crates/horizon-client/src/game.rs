@@ -227,6 +227,7 @@ mod scoreboard;
 mod screens;
 mod sculk;
 mod sculk_fixture;
+mod server_commands;
 mod server_links;
 mod server_packs;
 mod server_travel;

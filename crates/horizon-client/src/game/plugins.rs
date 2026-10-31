@@ -239,6 +239,7 @@ fn reserved_command(name: &str) -> bool {
 #[cfg(feature = "plugins")]
 mod run {
     use super::{Event, Game, LanHost, Who, reserved_command};
+    use crate::game::server_commands as sc;
     use horizon_client::chunk_map::ChunkMap;
     use horizon_client::{
         lan::data::component_nbt,
@@ -334,10 +335,36 @@ mod run {
             }
             root.insert(c.name.clone(), literal);
         }
-        if root.is_empty() {
-            return Value::Null;
+        for (name, node) in own_commands() {
+            root.entry(name).or_insert(node);
         }
         json!({"type": "root", "children": root})
+    }
+
+    /// Horizon Server's own commands (`game/lan_actions.rs`): in the tree players get, so their
+    /// chat box colours and completes them as vanilla's.
+    fn own_commands() -> [(String, Value); 3] {
+        let leaf = json!({"type": "literal", "executable": true});
+        let on_off = json!({
+            "type": "literal",
+            "executable": false,
+            "children": {"on": leaf.clone(), "off": leaf.clone()},
+        });
+        [
+            ("tps".into(), leaf.clone()),
+            (
+                "plugins".into(),
+                json!({"type": "literal", "executable": true, "children": {"reload": leaf}}),
+            ),
+            (
+                "dimension".into(),
+                json!({
+                    "type": "literal",
+                    "executable": true,
+                    "children": {"nether": on_off.clone(), "end": on_off},
+                }),
+            ),
+        ]
     }
 
     /// `minecraft:oak_log[axis=y]`.
@@ -429,8 +456,8 @@ mod run {
     const RELOAD_TICKS: u32 = 5;
 
     impl Game<'_> {
-        /// Reads `plugins/` and starts every plugin there, logging each: the lines logged.
-        fn start_plugins(&mut self) -> Vec<String> {
+        /// Reads `plugins/` and starts every plugin there, logging each.
+        fn start_plugins(&mut self) {
             self.plugins.started = true;
             let dir = self.plugins_dir();
             if let Err(e) = std::fs::create_dir_all(&dir) {
@@ -441,7 +468,6 @@ mod run {
             }
             let paths = super::plugin_paths(&dir);
             let mods = horizon_mods::Mods::load_plugins(&paths, reserved_command);
-            let mut lines = Vec::new();
             for e in mods.entries() {
                 let name = e.manifest.as_ref().map_or_else(
                     || e.path.display().to_string(),
@@ -456,13 +482,11 @@ mod run {
                     ),
                 };
                 super::super::dedicated::log(level, &line);
-                lines.push(line);
             }
             self.plugins.mods = mods;
             self.set_plugin_files();
             self.plugins.running = self.plugins.mods.runs_server();
             self.plugins.world = self.plugins.mods.wants_world();
-            lines
         }
 
         /// `/plugins`: each plugin and how it runs. `/plugins reload` (operators): the plugins
@@ -476,17 +500,17 @@ mod run {
             args: &[&str],
         ) -> Text {
             match args {
-                [] => self.plugin_list(),
+                [] => self.plugin_list("Plugins"),
                 ["reload"] => {
                     if host
                         .hub
                         .guest(conn)
                         .is_none_or(|g| g.permission < RELOAD_LEVEL)
                     {
-                        return Text::legacy("§cYou need to be an operator for that.");
+                        return sc::not_operator();
                     }
                     if self.plugins.reload.is_some() {
-                        return Text::legacy("§eThe plugins are reloading already.");
+                        return Text::markup("&e⟳ &7The plugins are reloading already.");
                     }
                     for p in std::mem::take(&mut self.plugins.players) {
                         self.plugins.mods.player_left(&p);
@@ -498,35 +522,46 @@ mod run {
                     self.plugins.events.clear();
                     self.plugins.reload = Some((RELOAD_TICKS, conn));
                     super::super::dedicated::log("INFO", "Plugins stopped for a reload");
-                    Text::legacy("§eReloading the plugins...")
+                    Text::markup("&e⟳ &7Reloading the plugins…")
                 }
-                _ => Text::legacy("§eUsage: /plugins [reload]"),
+                _ => Text::markup("&7Usage: &8/plugins [reload]"),
             }
         }
 
-        fn plugin_list(&self) -> Text {
+        /// Each plugin, `✔` running, `✖` failed (and why), `○` not a server plugin.
+        fn plugin_list(&self, heading: &str) -> Text {
             let entries = self.plugins.mods.entries();
+            let running = entries
+                .iter()
+                .filter(|e| matches!(e.status, Status::Running))
+                .count();
+            let mut out = sc::title(heading);
             if entries.is_empty() {
-                return Text::legacy("§7No plugins in plugins/.");
+                out += "\n &8» &7No plugins in &fplugins/&7.";
             }
-            let mut out = Text::legacy(&format!("§7Plugins ({}):", entries.len()));
             for e in entries {
-                let name = e.manifest.as_ref().map_or_else(
-                    || e.path.display().to_string(),
-                    |m| format!("{} {}", m.name, m.version),
+                let (name, version) = e.manifest.as_ref().map_or_else(
+                    || (e.path.display().to_string(), String::new()),
+                    |m| (m.name.clone(), m.version.to_string()),
                 );
-                let line = match &e.status {
-                    Status::Running => format!("\n§a{name}"),
-                    Status::Failed(reason) => format!("\n§c{name}: {reason}"),
-                    Status::Off | Status::Elsewhere => format!("\n§7{name}: not a server plugin"),
+                out += &match &e.status {
+                    Status::Running => format!("\n &a✔ &f{name} &8{version}"),
+                    Status::Failed(reason) => {
+                        format!("\n &c✖ &f{name} &8{version} &7– &c{reason}")
+                    }
+                    Status::Off | Status::Elsewhere => {
+                        format!("\n &7○ &7{name} &8{version} – not a server plugin")
+                    }
                 };
-                out.spans.extend(Text::legacy(&line).spans);
             }
-            out
+            if !entries.is_empty() {
+                out += &format!("\n &8{running} of {} running", entries.len());
+            }
+            Text::markup(&out)
         }
 
-        /// A reload's wait, then `plugins/` read again: who asked and what was logged, once.
-        fn finish_plugin_reload(&mut self) -> Option<(u32, Vec<String>)> {
+        /// A reload's wait, then `plugins/` read again: who asked, once.
+        fn finish_plugin_reload(&mut self) -> Option<u32> {
             let (left, by) = self.plugins.reload?;
             if left > 0 {
                 self.plugins.reload = Some((left - 1, by));
@@ -534,7 +569,8 @@ mod run {
             }
             self.plugins.reload = None;
             self.plugins.reloads += 1;
-            Some((by, self.start_plugins()))
+            self.start_plugins();
+            Some(by)
         }
 
         /// The tick's end: joins and leaves, the tick's events, the tick hook.
@@ -549,18 +585,15 @@ mod run {
             let Some(mut host) = self.lan.take() else {
                 return;
             };
-            if let Some((conn, lines)) = reloaded {
-                for line in lines {
-                    let content =
-                        component_nbt(&Text::literal(line).with_color(text::GRAY).component());
-                    host.hub.send_to(
-                        conn,
-                        &C::SystemChat(play::SystemChat {
-                            content,
-                            overlay: false,
-                        }),
-                    );
-                }
+            if let Some(conn) = reloaded {
+                let content = component_nbt(&self.plugin_list("Plugins reloaded").component());
+                host.hub.send_to(
+                    conn,
+                    &C::SystemChat(play::SystemChat {
+                        content,
+                        overlay: false,
+                    }),
+                );
             }
             self.send_plugin_commands(&mut host);
             if self.plugins.running {
