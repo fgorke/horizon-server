@@ -61,6 +61,7 @@ jobs:
       - name: Tests
         run: |
           cargo test --release --locked -p horizon-client --no-default-features --features plugins --lib
+          cargo test --release --locked -p horizon-client-lib --no-default-features --lib
           cargo test --release --locked -p horizon-server --bin horizon-server
           cargo test --release --locked -p horizon-world --lib
           cargo test --release --locked -p horizon-release-sign
