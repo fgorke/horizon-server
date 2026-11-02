@@ -484,7 +484,11 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             self.level_event(2001, pos, state.0 as i32);
         }
         self.game_event(pos, "minecraft:block_destroy");
-        self.remove_block(pos, false)
+        let removed = self.remove_block(pos, false);
+        if removed {
+            self.destroyed_moving_piston(pos, state);
+        }
+        removed
     }
     /// `TurtleEggBlock.playerDestroy` (after the drops): `decreaseEggs` plays the
     /// break and puts back all but one egg of the mined stack. `destroyed` is the

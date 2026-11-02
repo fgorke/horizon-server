@@ -344,9 +344,6 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             // PistonMovingBlockEntity.preRemoveSideEffects -> finalTick; the
             // block is already replaced, so only the entity goes away.
             self.remove_moving_piston(pos);
-            // MovingPistonBlock.destroy: the extended base the head belonged to
-            // goes with it, so a broken moving piston leaves no extended piston.
-            self.destroy_moving_piston_base(pos, old);
         } else if block_changed
             && (self.b.has_flag(old, super::data::state_flags::BLOCK_ENTITY)
                 || self.level.has_mod_block_entity(pos))
@@ -387,6 +384,13 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         let tags = &self.b.tags;
         (tags.copper_chests.contains(new) && tags.copper_chests.contains(old))
             || (tags.copper_golem_statues.contains(new) && tags.copper_golem_statues.contains(old))
+    }
+    /// `MovingPistonBlock.destroy`, for a block that was destroyed (broken, not
+    /// replaced by its piston move finishing, which never calls `destroy`).
+    pub(super) fn destroyed_moving_piston(&mut self, pos: BlockPos, state: BlockStateId) {
+        if self.block_of(state) == self.b.named.moving_piston {
+            self.destroy_moving_piston_base(pos, state);
+        }
     }
     /// `MovingPistonBlock.destroy`: a `moving_piston` that goes away takes the
     /// piston base behind it with it when that base is extended (a head that was
@@ -431,6 +435,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         let destroyed = self.set_block_limit(pos, legacy, 3, limit);
         if destroyed {
             self.game_event_state(pos, "minecraft:block_destroy", state);
+            self.destroyed_moving_piston(pos, state);
         }
         destroyed
     }
