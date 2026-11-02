@@ -17,12 +17,13 @@ use horizon_protocol::{
     servers::parse_address,
     text::{Language, plain, translatable},
 };
+use horizon_world::nbt::{JavaString, Tag};
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU32, Ordering},
         mpsc::{Receiver, Sender, channel},
     },
     thread::JoinHandle,
@@ -45,6 +46,10 @@ pub enum Event {
     QuietCommands,
     /// The server carries mod messages (`horizon_protocol::mod_net`).
     ModNet,
+    /// The server samples far terrain for this client (`lod_net`).
+    FarTerrain(crate::lod_net::Offer),
+    /// ClientConfigurationPacketListenerImpl.handleEnabledFeatures.
+    Features(Vec<String>),
     /// Configuration finished: the play state begins with these registries.
     Joined {
         registries: Arc<Dynamic>,
@@ -86,6 +91,9 @@ pub enum Event {
     /// failing (auto-reconnect retries only failures and shutdowns).
     Disconnected {
         reason: String,
+        /// The reason's translation key, when it had one
+        /// (`reconnect::allowed` classifies by it).
+        key: Option<String>,
         from_server: bool,
     },
 }
@@ -104,6 +112,8 @@ pub struct Session {
     pub cookies: Cookies,
     /// HORIZON_NET_DEBUG=1 logs every packet sent from the game thread.
     debug: bool,
+    /// The far terrain requests waiting for the server (`lod_net`).
+    far: Arc<crate::lod_net::Inbox>,
 }
 impl Session {
     /// Start connecting in the background, as `auth`'s account when there is one.
@@ -197,6 +207,8 @@ impl Session {
         let (thread_writer, thread_counters, thread_cookies) =
             (writer.clone(), counters.clone(), cookies.clone());
         let thread_configuring = configuring.clone();
+        let far = Arc::new(crate::lod_net::Inbox::default());
+        let thread_far = far.clone();
         let (address_owned, name_owned) = (address.to_owned(), name.to_owned());
         let thread = std::thread::Builder::new()
             .name("horizon-net".into())
@@ -213,17 +225,20 @@ impl Session {
                     &thread_configuring,
                     &thread_counters,
                     &thread_cookies,
+                    &thread_far,
                     transferred,
                     &resources,
                     lan,
                 );
+                thread_far.cancel();
                 let from_server = result.is_ok();
-                let reason = result.unwrap_or_else(|e| e);
+                let why = result.unwrap_or_else(|e| e);
                 if let Some(w) = thread_writer.lock().unwrap().take() {
                     w.shutdown();
                 }
                 let _ = send.send(Event::Disconnected {
-                    reason,
+                    reason: why.text,
+                    key: why.key,
                     from_server,
                 });
             })
@@ -239,6 +254,7 @@ impl Session {
             counters,
             cookies,
             debug,
+            far,
         }
     }
     /// Everything received since the last poll.
@@ -271,6 +287,36 @@ impl Session {
         {
             w.shutdown();
         }
+    }
+    /// Far terrain the server samples, as it offered (`Event::FarTerrain`):
+    /// biomes named by this client's indices, block states below `states`.
+    pub fn far_terrain(
+        &self,
+        offer: crate::lod_net::Offer,
+        biomes: HashMap<String, u16>,
+        states: u32,
+    ) -> Arc<crate::lod_net::RemoteSource> {
+        crate::lod_net::RemoteSource::new(self.far.clone(), offer, biomes, states)
+    }
+    /// The far terrain requests its samplers queued go to the server, from
+    /// the game thread, among its other packets.
+    pub fn send_far_terrain(&self) {
+        for data in self.far.requests() {
+            self.send(play::Serverbound::CustomPayload(cfg::CustomPayload {
+                channel: crate::lod_net::CHANNEL.into(),
+                data,
+            }));
+        }
+    }
+    /// The far terrain made with [`Self::far_terrain`] ends: its samplers
+    /// stop waiting for the server.
+    pub fn cancel_far_terrain(&self) {
+        self.far.cancel();
+    }
+    /// The connection is configured again (a proxy's next server): requests
+    /// the old server held never come back, so their slots are freed.
+    pub fn reset_far_terrain(&self) {
+        self.far.reset();
     }
     /// ServerboundResourcePackPacket, in whichever phase the connection is.
     pub fn send_pack_status(&self, id: u128, action: i32) {
@@ -369,7 +415,7 @@ pub fn save_friends_relay(relay: &str) {
 
 /// Reach the friend's world from the code (directly, or through a relay)
 /// and open the tunnel: the loopback address to connect to.
-fn join_friend(code: &str, lang: &Language, send: &Sender<Event>) -> Result<(String, u16), String> {
+fn join_friend(code: &str, lang: &Language, send: &Sender<Event>) -> Result<(String, u16), Reason> {
     use horizon_friends::{
         PathMode,
         guest::{self, GuestConfig},
@@ -382,16 +428,18 @@ fn join_friend(code: &str, lang: &Language, send: &Sender<Event>) -> Result<(Str
         game: horizon_protocol::GAME_VERSION.to_owned(),
         path: PathMode::from_env(),
     })
-    .map_err(|e| e.to_string())?;
+    .map_err(|e| Reason::plain(e.to_string()))?;
     status(
         send,
-        if tunnel.direct {
-            "Connected straight to your friend..."
+        &if tunnel.direct {
+            tr(lang, "horizon.multiplayer.connected_friend_direct")
         } else {
-            "Connected to your friend through the relay..."
+            tr(lang, "horizon.multiplayer.connected_friend_relay")
         },
     );
-    let (port, _) = tunnel.serve_loopback().map_err(|e| e.to_string())?;
+    let (port, _) = tunnel
+        .serve_loopback()
+        .map_err(|e| Reason::plain(e.to_string()))?;
     Ok(("127.0.0.1".to_owned(), port))
 }
 
@@ -405,6 +453,83 @@ pub const NOT_SIGNED_IN: &str = "This server is in online mode. Sign in with you
 /// A translation, or the key itself (Language.getOrDefault).
 fn tr(lang: &Language, key: &str) -> String {
     lang.get(key).cloned().unwrap_or_else(|| key.to_owned())
+}
+
+/// Why a connection ended: the shown text and, when the reason was a
+/// translatable component or a known Horizon error, its translation key —
+/// the auto-reconnect classifies by key (`reconnect::allowed`), the
+/// English keyword scan of the text is the fallback for plain reasons.
+#[derive(Clone)]
+pub struct Reason {
+    pub text: String,
+    pub key: Option<String>,
+}
+impl Reason {
+    fn plain(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            key: None,
+        }
+    }
+    /// A vanilla key's text in the session's language, with the key.
+    fn keyed(key: &str, lang: &Language) -> Self {
+        Self {
+            text: tr(lang, key),
+            key: Some(key.to_owned()),
+        }
+    }
+    /// A Horizon key's text with a `%s` argument filled.
+    fn keyed_arg(key: &str, lang: &Language, arg: &str) -> Self {
+        let mut r = Self::keyed(key, lang);
+        r.text = r.text.replacen("%s", arg, 1);
+        r
+    }
+    /// A server's disconnect component: the resolved text and the
+    /// `translate` key when the component named one (servers' literal
+    /// kicks have none; their text is the server's own language).
+    fn component(reason_json: &str, lang: &Language) -> Self {
+        match serde_json::from_str::<serde_json::Value>(reason_json) {
+            Ok(v) => Self {
+                text: json_text(&v, lang),
+                key: v["translate"].as_str().map(str::to_owned),
+            },
+            Err(_) => Self::plain(reason_json),
+        }
+    }
+    /// The play/configuration phases' disconnect: the reason arrives as
+    /// an NBT component.
+    fn tag(tag: &Tag, lang: &Language) -> Self {
+        let key = match tag {
+            Tag::Compound(map) => map
+                .get(&JavaString::from("translate"))
+                .and_then(|t| match t {
+                    Tag::String(s) => s.to_string().ok(),
+                    _ => None,
+                }),
+            _ => None,
+        };
+        Self {
+            text: plain(tag, lang),
+            key,
+        }
+    }
+}
+
+/// `ConnectScreen.connect`'s log line, as vanilla writes it from its "Server Connector #N" thread:
+/// the address as the player gave it, and the port (25565 when none was given), before any SRV
+/// lookup. Other launchers read the last one from `latest.log` to offer the server again.
+fn connecting_line(host: &str, port: u16) -> String {
+    format!("Connecting to {host}, {port}")
+}
+fn log_connecting(host: &str, port: u16) {
+    // ConnectScreen.UNIQUE_THREAD_ID: the first connector is #1.
+    static CONNECTORS: AtomicU32 = AtomicU32::new(0);
+    let n = CONNECTORS.fetch_add(1, Ordering::Relaxed) + 1;
+    crate::logging::write_as(
+        &format!("Server Connector #{n}"),
+        log::Level::Info,
+        &connecting_line(host, port),
+    );
 }
 
 /// `Connection$1.initChannel`: a client socket's pipeline starts with
@@ -469,10 +594,11 @@ fn run(
     configuring: &AtomicBool,
     shared_counters: &Mutex<Option<Arc<Counters>>>,
     cookies: &Cookies,
+    far: &crate::lod_net::Inbox,
     transferred: bool,
     resources: &Path,
     lan: bool,
-) -> Result<String, String> {
+) -> Result<Reason, Reason> {
     let (host, port, mut c) = if let Some(pipe) = local {
         (address.to_owned(), 0, Connection::local(pipe))
     } else {
@@ -480,17 +606,25 @@ fn run(
             Some(code) => join_friend(code, lang, send)?,
             None => {
                 let Some(target) = parse_address(address) else {
-                    return Ok(format!("Invalid server address: {address}"));
+                    // A refusal: never retried (`horizon.multiplayer
+                    // .invalid_address` is in reconnect's key list).
+                    return Err(Reason::keyed_arg(
+                        "horizon.multiplayer.invalid_address",
+                        lang,
+                        address,
+                    ));
                 };
                 status(send, &tr(lang, "connect.connecting"));
+                log_connecting(&target.0, target.1);
                 target
             }
         };
-        let (c, host, port) = connect_tcp(&host, port, address.starts_with(FRIEND), READ_TIMEOUT)?;
+        let (c, host, port) = connect_tcp(&host, port, address.starts_with(FRIEND), READ_TIMEOUT)
+            .map_err(Reason::plain)?;
         (host, port, c)
     };
     *shared_counters.lock().unwrap() = Some(c.reader.counters.clone());
-    let e = |e: horizon_protocol::Error| connection_lost(e, lang);
+    let e = |e: horizon_protocol::Error| Reason::plain(connection_lost(e, lang));
     c.send(
         &handshake::Serverbound::Intention(handshake::Intention {
             protocol: PROTOCOL_VERSION,
@@ -525,39 +659,42 @@ fn run(
                 break p.profile;
             }
             login::Clientbound::Disconnect(p) => {
-                let reason = serde_json::from_str::<serde_json::Value>(&p.reason_json)
-                    .map(|v| json_text(&v, lang))
-                    .unwrap_or(p.reason_json);
-                return Ok(reason);
+                return Ok(Reason::component(&p.reason_json, lang));
             }
             login::Clientbound::Hello(hello) => {
                 status(send, &tr(lang, "connect.authorizing"));
                 let key = RsaPublicKey::from_der(&hello.public_key)
-                    .map_err(|err| format!("Protocol error: {err}"))?;
+                    .map_err(|err| Reason::plain(format!("Protocol error: {err}")))?;
                 let secret = generate_secret().map_err(e)?;
                 if hello.should_authenticate {
                     let signed_in = auth.is_some();
-                    let authenticated =
-                        auth.ok_or_else(|| NOT_SIGNED_IN.to_owned())
-                            .and_then(|account| {
-                                let hash =
-                                    server_hash(&hello.server_id, &secret, &hello.public_key);
-                                crate::auth::join_server(account, &hash).map_err(|err| {
-                                    let reason = match err.reason() {
-                                        Ok(key) => tr(lang, key),
-                                        Err(message) => message.to_owned(),
-                                    };
-                                    plain(
+                    let authenticated = auth
+                        .ok_or_else(|| Reason::keyed("horizon.multiplayer.not_signed_in", lang))
+                        .and_then(|account| {
+                            let hash = server_hash(&hello.server_id, &secret, &hello.public_key);
+                            // The session service's refusal: the wrapped
+                            // `disconnect.loginFailedInfo` text is shown, and
+                            // the inner key (the reason's own) classifies
+                            // (`reconnect::allowed`).
+                            crate::auth::join_server(account, &hash).map_err(|err| {
+                                let (reason, key) = match err.reason() {
+                                    Ok(key) => (tr(lang, key), Some(key.to_owned())),
+                                    Err(message) => (message.to_owned(), None),
+                                };
+                                Reason {
+                                    text: plain(
                                         &translatable("disconnect.loginFailedInfo", &[&reason]),
                                         lang,
-                                    )
-                                })
-                            });
+                                    ),
+                                    key,
+                                }
+                            })
+                        });
                     if let Err(reason) = authenticated {
                         if !continues_after_failed_join(lan, signed_in) {
                             return Err(reason);
                         }
-                        log::warn!("Authentication failed: {reason}");
+                        log::warn!("Authentication failed: {}", reason.text);
                     }
                 }
                 status(send, &tr(lang, "connect.encrypting"));
@@ -631,6 +768,7 @@ fn run(
         lang,
         send,
         cookies,
+        far,
         resources,
     )
 }
@@ -642,10 +780,13 @@ fn receive_play(
     lang: &Language,
     send: &Sender<Event>,
     cookies: &Cookies,
+    far: &crate::lod_net::Inbox,
     resources: &Path,
-) -> Result<String, String> {
+) -> Result<Reason, Reason> {
     loop {
-        let (id, payload) = reader.recv().map_err(|e| connection_lost(e, lang))?;
+        let (id, payload) = reader
+            .recv()
+            .map_err(|e| Reason::plain(connection_lost(e, lang)))?;
         let packet = match play::Clientbound::decode(id, &payload) {
             Ok(p) => p,
             Err(err) => {
@@ -712,15 +853,19 @@ fn receive_play(
                     host: p.host,
                     port: p.port,
                 });
-                return Ok(tr(lang, "disconnect.transfer"));
+                return Ok(Reason::keyed("disconnect.transfer", lang));
             }
-            play::Clientbound::Disconnect(d) => return Ok(plain(&d.reason, lang)),
+            play::Clientbound::Disconnect(d) => return Ok(Reason::tag(&d.reason, lang)),
             play::Clientbound::CustomPayload(p) if p.channel == "minecraft:brand" => {
                 receive_brand(&p, send);
             }
+            // A far tile, straight to the sampler waiting for it.
+            play::Clientbound::CustomPayload(p) if p.channel == crate::lod_net::CHANNEL => {
+                far.deliver(p.data);
+            }
             other => {
                 if send.send(Event::Packet(Box::new(other))).is_err() {
-                    return Ok("Disconnected".into());
+                    return Ok(Reason::plain("Disconnected"));
                 }
             }
         }
@@ -737,21 +882,29 @@ fn configure(
     send: &Sender<Event>,
     cookies: &Cookies,
     resources: &Path,
-) -> Result<Dynamic, String> {
+) -> Result<Dynamic, Reason> {
     let mut registries = Dynamic::default();
-    let reply = |p: cfg::Serverbound| -> Result<(), String> {
+    let mut content_verified = false;
+    let reply = |p: cfg::Serverbound| -> Result<(), Reason> {
         match writer.lock().unwrap().as_mut() {
-            Some(w) => w.send(&p.encode()).map_err(|e| connection_lost(e, lang)),
-            None => Err("Disconnected".into()),
+            Some(w) => w
+                .send(&p.encode())
+                .map_err(|e| Reason::plain(connection_lost(e, lang))),
+            None => Err(Reason::plain("Disconnected")),
         }
     };
     loop {
-        let (id, payload) = reader.recv().map_err(|e| connection_lost(e, lang))?;
-        match cfg::Clientbound::decode(id, &payload).map_err(|e| connection_lost(e, lang))? {
+        let (id, payload) = reader
+            .recv()
+            .map_err(|e| Reason::plain(connection_lost(e, lang)))?;
+        match cfg::Clientbound::decode(id, &payload)
+            .map_err(|e| Reason::plain(connection_lost(e, lang)))?
+        {
             cfg::Clientbound::KeepAlive(k) => reply(cfg::Serverbound::KeepAlive(k))?,
             cfg::Clientbound::CustomPayload(p) if p.channel == crate::content_identity::CHANNEL => {
                 let hash = crate::content_identity::identity(resources)
-                    .map_err(|_| crate::content_identity::MISMATCH.to_string())?;
+                    .map_err(|_| Reason::plain(crate::content_identity::MISMATCH.to_string()))?;
+                content_verified = p.data == hash;
                 reply(cfg::Serverbound::CustomPayload(cfg::CustomPayload {
                     channel: crate::content_identity::CHANNEL.into(),
                     data: hash.to_vec(),
@@ -764,6 +917,9 @@ fn configure(
                 reply(cfg::Serverbound::SelectKnownPacks(cfg::SelectKnownPacks {
                     packs: vec![],
                 }))?
+            }
+            cfg::Clientbound::UpdateEnabledFeatures(p) => {
+                let _ = send.send(Event::Features(p.features));
             }
             cfg::Clientbound::RegistryData(r) => registries.add(r),
             cfg::Clientbound::UpdateTags(t) => registries.add_tags(&t),
@@ -802,14 +958,15 @@ fn configure(
                     host: p.host,
                     port: p.port,
                 });
-                return Err(tr(lang, "disconnect.transfer"));
+                return Err(Reason::keyed("disconnect.transfer", lang));
             }
-            cfg::Clientbound::Disconnect(d) => return Err(plain(&d.reason, lang)),
+            cfg::Clientbound::Disconnect(d) => return Err(Reason::tag(&d.reason, lang)),
             cfg::Clientbound::FinishConfiguration(_) => {
-                let mut w = writer.lock().unwrap();
-                let w = w.as_mut().ok_or("Disconnected")?;
+                registries.custom_components = content_verified;
+                let mut w = writer.lock().unwrap_or_else(|e| e.into_inner());
+                let w = w.as_mut().ok_or_else(|| Reason::plain("Disconnected"))?;
                 w.send(&cfg::Serverbound::FinishConfiguration(Empty).encode())
-                    .map_err(|e| connection_lost(e, lang))?;
+                    .map_err(|e| Reason::plain(connection_lost(e, lang)))?;
                 configuring.store(false, Ordering::Relaxed);
                 return Ok(registries);
             }
@@ -827,6 +984,10 @@ fn receive_brand(payload: &cfg::CustomPayload, send: &Sender<Event>) {
         let _ = send.send(Event::QuietCommands);
     } else if payload.channel == horizon_protocol::mod_net::CHANNEL {
         let _ = send.send(Event::ModNet);
+    } else if payload.channel == crate::lod_net::CHANNEL
+        && let Some(offer) = crate::lod_net::Offer::decode(&payload.data)
+    {
+        let _ = send.send(Event::FarTerrain(offer));
     }
 }
 
@@ -883,10 +1044,12 @@ pub fn load_language(resources: &std::path::Path) -> Language {
     if let Some(lang) = crate::lang::current() {
         return lang.map().clone();
     }
-    std::fs::read(resources.join("assets/minecraft/lang/en_us.json"))
-        .ok()
-        .and_then(|b| serde_json::from_slice(&b).ok())
-        .unwrap_or_default()
+    // No language screen ran (a dedicated server's log): en_us, with
+    // Horizon's own strings included — the net thread resolves keys with
+    // this map (`Reason::keyed`).
+    horizon_client_core::lang::Language::load(&[&resources.to_path_buf()], "en_us")
+        .map()
+        .clone()
 }
 
 /// Ask a server for its status (ServerStatusPinger): MOTD, players and the
@@ -1019,6 +1182,24 @@ fn continues_after_failed_join(lan: bool, signed_in: bool) -> bool {
 mod tests {
     use super::*;
 
+    /// Launchers find the last server joined in `latest.log` by vanilla's line.
+    #[test]
+    fn the_connecting_line_is_vanillas() {
+        let line = |address: &str| {
+            let (host, port) = parse_address(address).unwrap();
+            connecting_line(&host, port)
+        };
+        assert_eq!(
+            line("play.example.net"),
+            "Connecting to play.example.net, 25565"
+        );
+        assert_eq!(
+            line("play.example.net:25577"),
+            "Connecting to play.example.net, 25577"
+        );
+        assert_eq!(line("[::1]:25566"), "Connecting to ::1, 25566");
+    }
+
     #[test]
     fn direct_login_keeps_the_hostname_in_the_handshake() {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -1117,13 +1298,17 @@ mod tests {
                 &disconnect_language(),
                 &send,
                 &Cookies::default(),
+                &crate::lod_net::Inbox::default(),
                 Path::new("."),
             ));
         });
         let ended = result
             .recv_timeout(Duration::from_secs(10))
             .expect("the connection never timed out");
-        assert_eq!(ended, Err("Timed out".to_owned()));
+        assert_eq!(
+            ended.map(|r| r.text).map_err(|r| r.text),
+            Err("Timed out".to_owned())
+        );
     }
 
     #[test]
@@ -1233,6 +1418,7 @@ mod tests {
                 counters: Arc::new(Mutex::new(None)),
                 cookies: Cookies::default(),
                 debug: false,
+                far: Arc::default(),
             };
             let started = std::time::Instant::now();
             if explicit_disconnect {
@@ -1280,6 +1466,7 @@ mod tests {
                 &Language::new(),
                 &send,
                 &Cookies::default(),
+                &crate::lod_net::Inbox::default(),
                 Path::new("."),
             )
         });
@@ -1332,6 +1519,7 @@ mod tests {
             counters: Arc::new(Mutex::new(None)),
             cookies: Cookies::default(),
             debug: false,
+            far: Arc::default(),
         };
         let (thread_writer, thread_configuring) =
             (session.writer.clone(), session.configuring.clone());
@@ -1343,6 +1531,7 @@ mod tests {
                 &Language::new(),
                 &send,
                 &Cookies::default(),
+                &crate::lod_net::Inbox::default(),
                 Path::new("."),
             )
         });
@@ -1390,6 +1579,7 @@ mod tests {
                 &Language::new(),
                 &send,
                 &thread_cookies,
+                &crate::lod_net::Inbox::default(),
                 Path::new("."),
             )
         });
@@ -1465,8 +1655,10 @@ mod tests {
             let port = listener.local_addr().unwrap().port();
             let worker = std::thread::spawn(move || {
                 let (stream, _) = listener.accept().unwrap();
+                // Generous: a debug build's key generation on a busy CI runner takes seconds. A pass
+                // never waits for these.
                 stream
-                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .set_read_timeout(Some(Duration::from_secs(60)))
                     .unwrap();
                 let mut server = Connection::from_stream(stream).unwrap();
                 server.recv().unwrap(); // intention
@@ -1510,18 +1702,26 @@ mod tests {
             } else {
                 Session::connect
             };
+            // The session's language carries Horizon's bundled strings
+            // (`load_language`), so the keyed refusal resolves.
+            let lang: Language = [(
+                "horizon.multiplayer.not_signed_in".to_owned(),
+                NOT_SIGNED_IN.to_owned(),
+            )]
+            .into_iter()
+            .collect();
             let session = connect(
                 &address,
                 "Tester",
                 None,
                 cfg::ClientInformation::new(8),
-                Arc::new(Language::new()),
+                Arc::new(lang),
                 PathBuf::new(),
             );
             let reason = loop {
                 if let Event::Disconnected { reason, .. } = session
                     .events
-                    .recv_timeout(Duration::from_secs(10))
+                    .recv_timeout(Duration::from_secs(60))
                     .unwrap()
                 {
                     break reason;

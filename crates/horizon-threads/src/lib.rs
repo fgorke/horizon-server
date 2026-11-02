@@ -4,6 +4,8 @@
 /// The game window's boot screen, before wgpu's first frame paints over it.
 #[cfg(target_os = "windows")]
 pub mod boot_paint;
+pub mod jobs;
+pub mod memory_limit;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -220,6 +222,36 @@ pub fn configure_allocator() {
     }
 }
 
+/// The bytes the allocator has committed now and at its peak (mimalloc's
+/// process info), for `horizon-ctl memory`.
+pub fn allocator_commit() -> (usize, usize) {
+    let mut info = [0usize; 8];
+    let [
+        elapsed,
+        user,
+        system,
+        rss,
+        peak_rss,
+        commit,
+        peak_commit,
+        faults,
+    ] = &mut info;
+    // SAFETY: writes eight integers through pointers to them.
+    unsafe {
+        libmimalloc_sys::mi_process_info(
+            elapsed,
+            user,
+            system,
+            rss,
+            peak_rss,
+            commit,
+            peak_commit,
+            faults,
+        );
+    }
+    (info[5], info[6])
+}
+
 /// Give back to the OS the memory the allocator holds free, after something
 /// large was dropped: mimalloc's free pages, then the system heap's, which
 /// native libraries still use: glibc keeps freed pages in the arena of the
@@ -328,8 +360,58 @@ pub fn junction(target: &std::path::Path, at: &std::path::Path) -> std::io::Resu
     set
 }
 
+/// Keep this process's standard handles out of the processes it starts. Windows hands a child
+/// every inheritable handle of its parent, not only the three standard handles it is given
+/// (CreateProcessW with bInheritHandles, as `std::process::Command` starts it). horizon-ctl's own
+/// standard handles are inheritable when its caller gave it pipes (a script that reads its output,
+/// an MCP client), so the game it launches would hold the caller's pipe open for its whole life and
+/// the caller, waiting for the end of horizon-ctl's output, would wait until the game quits. A
+/// child given `Stdio::inherit()` still gets them: `Command` duplicates the handles it passes.
+/// Unix needs none of this: a child's 0-2 are replaced and the rest are close-on-exec.
+#[cfg(windows)]
+pub fn keep_stdio_from_children() {
+    use windows_sys::Win32::Foundation::{
+        HANDLE_FLAG_INHERIT, INVALID_HANDLE_VALUE, SetHandleInformation,
+    };
+    use windows_sys::Win32::System::Console::{
+        GetStdHandle, STD_ERROR_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE,
+    };
+    for which in [STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE] {
+        // SAFETY: GetStdHandle has no preconditions; SetHandleInformation only gets a handle this
+        // process holds, and when it fails (no console, a pseudo-handle) the handle stays as it was.
+        unsafe {
+            let handle = GetStdHandle(which);
+            if !handle.is_null() && handle != INVALID_HANDLE_VALUE {
+                SetHandleInformation(handle, HANDLE_FLAG_INHERIT, 0);
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    /// After it, this process's standard output is no longer handed to the processes it starts.
+    #[cfg(windows)]
+    #[test]
+    fn standard_handles_stay_out_of_children() {
+        use windows_sys::Win32::Foundation::{
+            GetHandleInformation, HANDLE_FLAG_INHERIT, INVALID_HANDLE_VALUE,
+        };
+        use windows_sys::Win32::System::Console::{GetStdHandle, STD_OUTPUT_HANDLE};
+        super::keep_stdio_from_children();
+        // SAFETY: reads the flags of this process's own standard output handle.
+        unsafe {
+            let handle = GetStdHandle(STD_OUTPUT_HANDLE);
+            let mut flags = 0;
+            if !handle.is_null()
+                && handle != INVALID_HANDLE_VALUE
+                && GetHandleInformation(handle, &mut flags) != 0
+            {
+                assert_eq!(flags & HANDLE_FLAG_INHERIT, 0);
+            }
+        }
+    }
+
     /// The hint holds on the platforms that take it.
     #[test]
     fn favouring_a_thread_takes_where_the_os_allows_it() {

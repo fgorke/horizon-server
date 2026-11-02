@@ -1,5 +1,7 @@
 //! `PistonMovingBlockEntity.moveCollidedEntities` and `moveStuckEntities` for
-//! the entities the game moves itself: the players and the mobs.
+//! the entities the game moves itself: the players and the mobs. The shulker
+//! box lid's push (`ShulkerBoxBlockEntity.moveCollidedEntities`) rides along,
+//! with `Entity.move(MoverType.SHULKER_BOX, …)` taking the same path.
 //!
 //! The geometry is in [`horizon_world::piston_push`]; this file supplies the
 //! bodies and applies the movement the way `Entity.move(MoverType.PISTON, …)`
@@ -7,18 +9,27 @@
 //! then run through the block collision scan, so a pushed entity stops at a
 //! wall instead of passing through it.
 //!
-use super::Game;
+use super::{
+    Game,
+    entity::{Entity, EntityHandle, with_entity, with_entity_mut},
+};
 use horizon_client::collisions::{EntityCollisions, SceneCollisions, with_piston_noclip};
 use horizon_core::geometry::{Aabb, Axis, Direction, ShapeOp, Vec3, border::BorderGeometry};
 use horizon_core::position::BlockPos;
 use horizon_world::{
-    block_collision_scan::BlockCollisionWorld, level::pistons::MovingPiston,
-    piston_movement::PistonMovement, piston_push, world_movement::EntityMovementWorld,
+    block_collision_scan::BlockCollisionWorld, level::data::PushReaction::IgnoreEntity,
+    level::pistons::MovingPiston, piston_movement::PistonMovement, piston_push,
+    world_movement::EntityMovementWorld,
 };
 
 /// What one piston asks for this tick: where it is, its state, and the progress
 /// `moveCollidedEntities` runs at (before the tick stores it).
 pub(super) type Push = (BlockPos, MovingPiston, f32);
+
+/// What one shulker box asks for this tick (`moveCollidedEntities`): where it
+/// is, its facing as a 3D data value, and the lid box it swept
+/// (`Shulker.getProgressDeltaAabb`).
+pub(super) type ShulkerPush = ([i32; 3], u8, [f64; 6]);
 
 /// Which entity was pushed, so its storage can be reached after the world
 /// borrow ends.
@@ -26,13 +37,7 @@ pub(super) type Push = (BlockPos, MovingPiston, f32);
 enum Target {
     Player,
     Guest(u32),
-    Mob(usize),
-    Item(usize),
-    Boat(usize),
-    Cart(usize),
-    ArmorStand(usize),
-    /// Primed TNT (`PrimedTnt`): slime piston bounce (#4550).
-    Tnt(usize),
+    Entity(EntityHandle),
 }
 
 /// `Entity.getStepHeight` of each body, read before the push.
@@ -60,6 +65,61 @@ impl Game<'_> {
         for push in pushes {
             self.push_for_piston(push, &mut accumulators);
         }
+    }
+
+    /// `ShulkerBoxBlockEntity.moveCollidedEntities` for the bodies this game
+    /// moves itself: every entity the sweeping lid box meets moves out along
+    /// the box's facing by the box's own size plus 0.01
+    /// (`Entity.move(MoverType.SHULKER_BOX, …)`).
+    pub(super) fn push_shulker_entities(&mut self, pushes: Vec<ShulkerPush>) {
+        let steps = self.push_step_heights();
+        for (pos, facing, lid) in pushes {
+            self.push_for_shulker(pos, facing, lid, &steps);
+        }
+    }
+
+    /// One box's push, a body at a time. The move resolves as a piston's does
+    /// (`Entity.move` stops at the blocks and the world border), without a
+    /// piston's per-tick travel limit or its noclip.
+    fn push_for_shulker(&mut self, pos: [i32; 3], facing: u8, lid: [f64; 6], steps: &StepHeights) {
+        let direction = Direction::ALL[usize::from(facing) % Direction::ALL.len()];
+        let [x, y, z] = direction.normal();
+        let movement = Vec3::new(
+            (lid[3] - lid[0] + 0.01) * f64::from(x),
+            (lid[4] - lid[1] + 0.01) * f64::from(y),
+            (lid[5] - lid[2] + 0.01) * f64::from(z),
+        );
+        let area = Aabb::new(
+            Vec3::new(lid[0], lid[1], lid[2]),
+            Vec3::new(lid[3], lid[4], lid[5]),
+        );
+        let at = BlockPos::new(pos[0], pos[1], pos[2]);
+        self.push_targets().for_each(|target| {
+            let Some(body) = self.push_body(target, at, steps) else {
+                return;
+            };
+            if !body.bounds.intersects(area) {
+                return;
+            }
+            let Ok(moved) = pushed_movement(
+                SceneCollisions {
+                    world: &self.world,
+                    binding: self.collision,
+                    subject: None,
+                },
+                self.border.geometry(),
+                [body.position.x, body.position.z],
+                body.bounds,
+                movement,
+                body.step_height,
+                body.on_ground,
+            ) else {
+                return;
+            };
+            if moved.length_squared() > 0.0 {
+                self.apply_push(target, moved);
+            }
+        });
     }
 
     fn push_for_piston(
@@ -120,10 +180,11 @@ impl Game<'_> {
                 delta_progress,
             )
         });
-        let targets = self.push_targets();
-        for &target in &targets {
+        // `for_each`: a chain folds list by list, where `next` would re-check every
+        // link for each entity.
+        self.push_targets().for_each(|target| {
             let Some(body) = self.push_body(target, pos, &steps) else {
-                continue;
+                return;
             };
             let amount = piston_push::collided_amount(
                 &boxes,
@@ -174,11 +235,11 @@ impl Game<'_> {
                     );
                 }
             }
-        }
+        });
         // Vanilla selects honey passengers after all collided entities have moved.
         if honey && movement.normal()[1] == 0 {
             let area = piston_push::sticky_area(pos, piston.shape_state(), sticky_top);
-            for target in targets {
+            for target in self.push_targets() {
                 let Some(body) = self.push_body(target, pos, &steps) else {
                     continue;
                 };
@@ -278,33 +339,26 @@ impl Game<'_> {
 
     /// The entities a moving block can run into: the window's player, the LAN
     /// guests in the level, then the mobs.
-    fn push_targets(&self) -> Vec<Target> {
-        let mut targets = Vec::new();
-        if self.player.is_some() {
-            targets.push(Target::Player);
-        }
-        if let Some(host) = self.lan.as_ref() {
-            targets.extend(
-                host.hub
-                    .guests
-                    .iter()
-                    .filter(|g| host.hub.here(g) && g.loaded && !g.dead)
-                    .map(|g| Target::Guest(g.conn)),
-            );
-        }
-        targets.extend((0..self.mobs.len()).map(Target::Mob));
-        targets.extend((0..self.dropped.len()).map(Target::Item));
-        targets.extend((0..self.boats.len()).map(Target::Boat));
-        targets.extend((0..self.carts.len()).map(Target::Cart));
-        targets.extend((0..self.armor_stands.len()).map(Target::ArmorStand));
-        targets.extend((0..self.tnts.len()).map(Target::Tnt));
-        targets
+    fn push_targets(&self) -> impl Iterator<Item = Target> + use<> {
+        let player = self.player.is_some().then_some(Target::Player);
+        // Empty, and so unallocated, unless guests are here.
+        let guests: Vec<Target> = self.lan.as_ref().map_or_else(Vec::new, |host| {
+            host.hub
+                .guests
+                .iter()
+                .filter(|g| host.hub.here(g) && g.loaded && !g.dead)
+                .map(|g| Target::Guest(g.conn))
+                .collect()
+        });
+        player
+            .into_iter()
+            .chain(guests)
+            .chain(self.entity_handles().map(Target::Entity))
     }
 
     /// What the push needs from one entity, or `None` when it is not pushed:
     /// removed, dead, a spectator, or an armor-stand marker.
     fn push_body(&self, target: Target, pos: BlockPos, steps: &StepHeights) -> Option<Body> {
-        let at = [pos.x, pos.y, pos.z];
         match target {
             Target::Player => {
                 let p = self.player.as_ref()?;
@@ -340,72 +394,18 @@ impl Game<'_> {
                         .is_some_and(|m| m.ground.supporting_block == Some(pos)),
                 })
             }
-            Target::Mob(i) => {
-                let m = &self.mobs[i];
-                if m.removed || !m.alive() {
+            Target::Entity(handle) => with_entity!(self, handle, entity => {
+                if !entity.is_alive() || entity.get_piston_push_reaction() == IgnoreEntity {
                     return None;
                 }
                 Some(Body {
-                    bounds: m.bounds(),
-                    position: m.position,
-                    on_ground: m.on_ground,
-                    step_height: m.kind.step_height as f32,
-                    supported: m.supporting == Some(at),
+                    bounds: Entity::bounds(entity),
+                    position: entity.position(),
+                    on_ground: entity.on_ground(),
+                    step_height: entity.get_step_height(),
+                    supported: entity.is_supported_by(pos),
                 })
-            }
-            Target::Item(i) => {
-                let entity = &self.dropped[i];
-                Some(Body {
-                    bounds: entity.bounds(),
-                    position: entity.position,
-                    on_ground: entity.on_ground,
-                    step_height: 0.0,
-                    supported: false,
-                })
-            }
-            Target::Boat(i) => {
-                let entity = &self.boats[i];
-                Some(Body {
-                    bounds: entity.bounds(),
-                    position: entity.position,
-                    on_ground: entity.on_ground,
-                    step_height: 0.0,
-                    supported: false,
-                })
-            }
-            Target::Cart(i) => {
-                let entity = &self.carts[i];
-                Some(Body {
-                    bounds: entity.bounds(),
-                    position: entity.position,
-                    on_ground: entity.on_ground,
-                    step_height: 0.0,
-                    supported: false,
-                })
-            }
-            Target::ArmorStand(i) => {
-                let entity = &self.armor_stands[i];
-                if entity.marker {
-                    return None;
-                }
-                Some(Body {
-                    bounds: entity.bounds(),
-                    position: entity.position,
-                    on_ground: entity.on_ground,
-                    step_height: 0.0,
-                    supported: false,
-                })
-            }
-            Target::Tnt(i) => {
-                let entity = &self.tnts[i];
-                Some(Body {
-                    bounds: entity.bounds(),
-                    position: entity.position,
-                    on_ground: entity.on_ground,
-                    step_height: 0.0,
-                    supported: false,
-                })
-            }
+            }),
         }
     }
 
@@ -445,6 +445,12 @@ impl Game<'_> {
             )
             .unwrap_or(Vec3::ZERO)
         });
+        // Entity.move updates an authoritative living entity's ground flag
+        // even for a horizontal piston push. Keeping the old support flag
+        // would run Frost Walker while the stand is moving over open water.
+        if let Target::Entity(EntityHandle::ArmorStand(i)) = target {
+            self.armor_stands[i].on_ground = limited.y < 0.0 && limited.y != resolved.y;
+        }
         if resolved.length_squared() <= 1.0e-7
             && limited.length_squared() - resolved.length_squared() >= 1.0e-7
         {
@@ -473,7 +479,7 @@ impl Game<'_> {
                 let g = host.hub.guests.iter_mut().find(|g| g.conn == conn)?;
                 limit(&mut g.motion.as_deref_mut()?.piston)
             }
-            Target::Mob(i) => limit(&mut self.mobs[i].piston),
+            Target::Entity(EntityHandle::Mob(i)) => limit(&mut self.mobs[i].piston),
             _ => limit(accumulators.entry(target).or_default()),
         }
     }
@@ -499,24 +505,9 @@ impl Game<'_> {
                     }
                 }
             }
-            Target::Mob(i) => {
-                let m = &mut self.mobs[i];
-                m.position = m.position.add_vector(movement);
+            Target::Entity(handle) => {
+                with_entity_mut!(self, handle, entity => entity.move_by_piston(movement))
             }
-            Target::Item(i) => {
-                let item = &mut self.dropped[i];
-                item.position = item.position.add_vector(movement);
-                // Entity.move(MoverType.PISTON): onGround only if the push was down.
-                if movement.y != 0.0 {
-                    item.on_ground = movement.y < 0.0;
-                }
-            }
-            Target::Boat(i) => self.boats[i].position = self.boats[i].position.add_vector(movement),
-            Target::Cart(i) => self.carts[i].position = self.carts[i].position.add_vector(movement),
-            Target::ArmorStand(i) => {
-                self.armor_stands[i].position = self.armor_stands[i].position.add_vector(movement)
-            }
-            Target::Tnt(i) => self.tnts[i].position = self.tnts[i].position.add_vector(movement),
         }
     }
 
@@ -528,10 +519,6 @@ impl Game<'_> {
                     p.velocity = piston_push::bounce_velocity(movement, p.velocity);
                 }
             }
-            Target::Mob(i) => {
-                let m = &mut self.mobs[i];
-                m.velocity = piston_push::bounce_velocity(movement, m.velocity);
-            }
             Target::Guest(conn) => {
                 if let Some(host) = self.lan.as_mut()
                     && let Some(guest) = host.hub.guests.iter_mut().find(|g| g.conn == conn)
@@ -540,25 +527,8 @@ impl Game<'_> {
                     motion.velocity = piston_push::bounce_velocity(movement, motion.velocity);
                 }
             }
-            Target::Item(i) => self.dropped[i].piston_slime_bounce(movement),
-            Target::Boat(i) => {
-                self.boats[i].velocity =
-                    piston_push::bounce_velocity(movement, self.boats[i].velocity)
-            }
-            Target::Cart(i) => {
-                self.carts[i].velocity =
-                    piston_push::bounce_velocity(movement, self.carts[i].velocity)
-            }
-            Target::ArmorStand(i) => {
-                self.armor_stands[i].velocity =
-                    piston_push::bounce_velocity(movement, self.armor_stands[i].velocity)
-            }
-            Target::Tnt(i) => {
-                self.tnts[i].velocity =
-                    piston_push::bounce_velocity(movement, self.tnts[i].velocity);
-                // Leave the ground so the next tick does not apply the
-                // on-ground Y * -0.5 friction that cancels the launch.
-                self.tnts[i].on_ground = false;
+            Target::Entity(handle) => {
+                with_entity_mut!(self, handle, entity => Entity::piston_slime_bounce(entity, movement))
             }
         }
     }

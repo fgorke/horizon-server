@@ -179,7 +179,16 @@ impl Game<'_> {
             | Target::Cart(id)
             | Target::Crystal(id)
             | Target::Dragon(id)
+            | Target::Tnt(id)
+            | Target::Falling(id)
+            | Target::Rocket(id)
             | Target::Other(id) => Some(uuid_text(self.uuid_for(id))),
+            // It keeps its UUID with itself.
+            Target::Spawner(id) => self
+                .ominous_spawners
+                .iter()
+                .find(|s| s.id == id)
+                .map(|s| uuid_text(s.uuid)),
             // Orbs and projectiles have no UUID here.
             Target::Orb(_) | Target::Projectile(_) => None,
         }
@@ -199,22 +208,7 @@ impl Game<'_> {
             return Some(Target::Player);
         }
         let uuid = uuid_from_text(name).filter(|_| name.len() == 36)?;
-        if Some(uuid) == self.level.player_uuid {
-            return Some(Target::Player);
-        }
-        let id = self
-            .persist
-            .uuids
-            .iter()
-            .find(|(_, u)| **u == uuid)
-            .map(|(id, _)| *id)?;
-        if self.mobs.iter().any(|m| m.id == id) {
-            Some(Target::Mob(id))
-        } else if self.dropped.iter().any(|i| i.id == id) {
-            Some(Target::Item(id))
-        } else {
-            None
-        }
+        self.target_with_uuid(uuid)
     }
     /// `Entity.getTags` (the `Tags` list of the saved entity).
     pub(super) fn tags_of(&self, t: Target) -> Vec<String> {
@@ -226,13 +220,26 @@ impl Game<'_> {
             | Target::Painting(id)
             | Target::Boat(id)
             | Target::Cart(id)
+            | Target::Tnt(id)
+            | Target::Orb(id)
+            | Target::Projectile(id)
+            | Target::Crystal(id)
+            | Target::Dragon(id)
+            | Target::Rocket(id)
             | Target::Other(id) => self.persist.raw.get(&id),
             Target::Player => self.level.player_extra.as_ref(),
-            Target::Guest(_)
-            | Target::Orb(_)
-            | Target::Projectile(_)
-            | Target::Crystal(_)
-            | Target::Dragon(_) => None,
+            // A server's player: the saved compound the guest's file is written from.
+            Target::Guest(conn) => self.command_guest(conn).and_then(|g| g.saved.as_ref()),
+            Target::Spawner(id) => self
+                .ominous_spawners
+                .iter()
+                .find(|s| s.id == id)
+                .and_then(|s| s.raw.as_deref()),
+            Target::Falling(id) => self
+                .falling
+                .iter()
+                .find(|f| f.id == id)
+                .and_then(|f| f.saved.as_ref().map(|s| &s.1)),
         };
         match raw.and_then(|r| r.get("Tags")) {
             Some(Tag::List(l)) => l
@@ -445,17 +452,6 @@ impl Game<'_> {
                 board.for_all_objectives_with(criteria, &name, Some(&display), |_| value);
             }
         }
-    }
-    /// `ServerPlayer.die`: the death count.
-    pub(super) fn score_player_died(&mut self) {
-        let display = self.player_display_comp();
-        let me = self.acting_player_name().to_owned();
-        let board = &mut self.score.board;
-        board.for_all_objectives_with(sb::CRITERIA_DEATH_COUNT, &me, Some(&display), |v| {
-            v.wrapping_add(1)
-        });
-        // A respawned player has everything to record again.
-        self.score.recorded = Recorded::default();
     }
     /// `ServerPlayer.awardKillScore`: total kills and the team kill counts.
     pub(super) fn score_player_killed(&mut self, victim: Target) {
@@ -747,13 +743,9 @@ impl Game<'_> {
 }
 
 impl Game<'_> {
-    /// `Hud.extractTabList`: the player list while the player-list key is
-    /// held. A local world shows it with a joined LAN guest or a `list`
-    /// objective.
-    pub(super) fn draw_tab_list(&mut self, batch: &mut HudBatch) {
-        use horizon_client::tab_list::{self, TabInputs};
-        // Player heads and the player list both draw from the same skin
-        // slots: a new frame, with what the last one drew.
+    /// Advance the skin slots to a new frame with what the last one drew, and
+    /// store any finished skin downloads into the atlas.
+    pub(super) fn flush_skin_slots(&mut self) {
         let (ready, drawn) = {
             let mut downloads = self.skin_downloads.borrow_mut();
             (downloads.take_ready(), downloads.take_drawn())
@@ -762,6 +754,15 @@ impl Game<'_> {
         for (location, rgba) in ready {
             self.store_skin(location, rgba);
         }
+    }
+    /// `Hud.extractTabList`: the player list while the player-list key is
+    /// held. A local world shows it with a joined LAN guest or a `list`
+    /// objective.
+    pub(super) fn draw_tab_list(&mut self, batch: &mut HudBatch) {
+        use horizon_client::tab_list::{self, TabInputs};
+        // Player heads and the player list both draw from the same skin
+        // slots: a new frame, with what the last one drew.
+        self.flush_skin_slots();
         let key = self.screen == super::Screen::Playing
             && self.keys.contains(&winit::keyboard::KeyCode::Tab);
         let (mut players, online_mode, upside_down) = match self.remote_tab_players() {
@@ -792,7 +793,10 @@ impl Game<'_> {
             players.len(),
             has_objective,
         );
-        self.tab_list.set_visible(shown);
+        if self.tab_list.set_visible(shown) {
+            // PlayerTabOverlay.setVisible: the names, said as the list comes up.
+            self.say_system_now(&tab_list::narration(&players, &self.score.board));
+        }
         if !shown {
             return;
         }
@@ -828,7 +832,7 @@ impl Game<'_> {
 }
 
 /// The host and guests that have entered the world, rebuilt from live state.
-fn local_tab_players(me: TabPlayer, guests: &[Guest]) -> Vec<TabPlayer> {
+pub(super) fn local_tab_players(me: TabPlayer, guests: &[Guest]) -> Vec<TabPlayer> {
     let mut players = vec![me];
     players.extend(guests.iter().filter(|g| g.placed).map(|g| {
         let mut player = TabPlayer::new(g.uuid, &g.name);

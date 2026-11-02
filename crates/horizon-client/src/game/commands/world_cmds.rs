@@ -1,6 +1,6 @@
 //! `/recipe`, `/damage`, `/rotate`, `/swing`, `/playsound`, `/stopsound`,
 //! `/particle`, `/attribute`, `/ride` and `/spreadplayers`.
-use super::{Arg, Context, Game, R, Target, err};
+use super::{Arg, Context, Game, R, Target, err, wrap_degrees};
 use horizon_client::{
     mobs::{Damage, DamageKind, Who},
     scoreboard_cmd::{Holder, Tracker},
@@ -109,7 +109,8 @@ impl Game<'_> {
             "mob_attack" | "mob_attack_no_aggro" => DamageKind::MobAttack,
             "arrow" => DamageKind::Arrow,
             "thrown" | "trident" | "mob_projectile" => DamageKind::Thrown,
-            "fireball" | "unattributed_fireball" | "wither_skull" => DamageKind::Fireball,
+            "fireball" | "unattributed_fireball" => DamageKind::Fireball,
+            "wither_skull" => DamageKind::WitherSkull,
             "explosion" | "player_explosion" | "bad_respawn_point" => DamageKind::Explosion,
             "fall" | "ender_pearl" | "fly_into_wall" => DamageKind::Fall,
             "on_fire" => DamageKind::OnFire,
@@ -185,10 +186,13 @@ impl Game<'_> {
                     _ => Some(None),
                 };
                 self.for_player(target, |g| {
+                    if g.spectator() {
+                        return false;
+                    }
                     if let Some(name) = named {
                         g.note_direct_entity(&ty, name);
                     }
-                    !g.spectator() && g.hurt_player_from(amount, from, &ty, attacker)
+                    g.hurt_player_from(amount, from, &ty, attacker)
                 })
                 .unwrap_or(false)
             }
@@ -372,23 +376,8 @@ impl Game<'_> {
             let Some(p) = self.target_position(t) else {
                 continue;
             };
-            let d = [pos[0] - p[0], pos[1] - p[1], pos[2] - p[2]];
-            let dist2 = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
-            let (at, v) = if dist2 > f64::from(range) * f64::from(range) {
-                if min_volume <= 0.0 {
-                    continue;
-                }
-                let dist = dist2.sqrt();
-                (
-                    [
-                        p[0] + d[0] / dist * 2.0,
-                        p[1] + d[1] / dist * 2.0,
-                        p[2] + d[2] / dist * 2.0,
-                    ],
-                    min_volume,
-                )
-            } else {
-                (pos, volume)
+            let Some((at, v)) = playsound_placement(pos, p, range, volume, min_volume) else {
+                continue;
             };
             // The connection is sent the sound; the window's own player
             // plays it.
@@ -1169,7 +1158,7 @@ impl Game<'_> {
             };
             let vehicle_name = self.target_name(v);
             match target {
-                Target::Player => self.dismount_mount(),
+                Target::Player => self.stop_riding(),
                 Target::Mob(rider) => self.dismount_mob(rider),
                 _ => {}
             }
@@ -1202,33 +1191,89 @@ impl Game<'_> {
             }
             up = self.ride_vehicle(v);
         }
-        // Players and mobs can ride mobs.
-        let Target::Mob(mob_id) = vehicle else {
-            return Err(err(
-                "commands.ride.mount.failure.generic",
-                &[&name.plain(), &vehicle_name.plain()],
-            ));
-        };
         let rider = match target {
             Target::Mob(id) => Some(id),
             _ => None,
         };
-        if !(target == Target::Player || rider.is_some())
-            || !self.mobs.iter().any(|m| m.id == mob_id && m.alive())
-        {
-            return Err(err(
+        let generic = || {
+            err(
                 "commands.ride.mount.failure.generic",
                 &[&name.plain(), &vehicle_name.plain()],
-            ));
+            )
+        };
+        // Only players and mobs ride.
+        if !(target == Target::Player || rider.is_some()) {
+            return Err(generic());
+        }
+        // `RideCommand.mount` forces the ride (`startRiding(vehicle, true, true)`),
+        // which skips `canRide` and `canAddPassenger`: a boat under water still
+        // takes the rider. Horizon's boats seat at most `max_passengers`, so a
+        // full boat still refuses. Minecarts carry only players here: Horizon's
+        // carts have no mob passengers yet.
+        match vehicle {
+            Target::Boat(id) => {
+                let Some(i) = self.boats.iter().position(|b| b.id == id) else {
+                    return Err(generic());
+                };
+                if self.boat_passengers(id) >= self.boats[i].max_passengers() {
+                    return Err(generic());
+                }
+                if let Some(rider) = rider {
+                    if !self.try_mount_mob(rider, id) {
+                        return Err(generic());
+                    }
+                } else {
+                    if !self.native_may_board(id) {
+                        return Err(generic());
+                    }
+                    self.riding = Some(id);
+                    self.yaw = self.boats[i].yaw;
+                    // sendEventAndTriggers: START_RIDING_TRIGGER.
+                    self.trigger_player("minecraft:started_riding");
+                }
+                self.feedback(Text::translate(
+                    "commands.ride.mount.success",
+                    &[name, vehicle_name],
+                ));
+                return Ok(1);
+            }
+            Target::Cart(id) => {
+                if target != Target::Player
+                    || self.ridden_by_guest(id)
+                    || !self.native_may_board(id)
+                {
+                    return Err(generic());
+                }
+                self.riding = Some(id);
+                self.trigger_player("minecraft:started_riding");
+                self.feedback(Text::translate(
+                    "commands.ride.mount.success",
+                    &[name, vehicle_name],
+                ));
+                return Ok(1);
+            }
+            _ => {}
+        }
+        // Mobs carry players and mobs.
+        let Target::Mob(mob_id) = vehicle else {
+            return Err(generic());
+        };
+        if !self.mobs.iter().any(|m| m.id == mob_id && m.alive()) {
+            return Err(generic());
         }
         if let Some(rider) = rider {
             // Entity.startRiding.
-            self.mount_mob(rider, mob_id);
+            if !self.try_mount_mob(rider, mob_id) {
+                return Err(generic());
+            }
             self.feedback(Text::translate(
                 "commands.ride.mount.success",
                 &[name, vehicle_name],
             ));
             return Ok(1);
+        }
+        if !self.native_may_board(mob_id) {
+            return Err(generic());
         }
         if let Some(m) = self.mobs.iter_mut().find(|m| m.id == mob_id) {
             m.extra.flag = false;
@@ -1248,12 +1293,14 @@ impl Game<'_> {
     /// Entity.getVehicle: the player's mount, or a mob's.
     pub(super) fn ride_vehicle(&self, t: Target) -> Option<Target> {
         let id = match t {
-            Target::Player => return self.riding.map(Target::Mob),
+            Target::Player => self.riding?,
             Target::Mob(id) => self.mobs.iter().find(|m| m.id == id)?.extra.mount?,
             _ => return None,
         };
         Some(if self.boats.iter().any(|b| b.id == id) {
             Target::Boat(id)
+        } else if self.carts.iter().any(|c| c.id == id) {
+            Target::Cart(id)
         } else {
             Target::Mob(id)
         })
@@ -1265,9 +1312,13 @@ impl Game<'_> {
         let Some(i) = self.mobs.iter().position(|m| m.id == rider) else {
             return;
         };
-        let Some(v) = self.mobs[i].extra.mount.take() else {
+        let Some(v) = self.mobs[i].extra.mount else {
             return;
         };
+        if !self.native_mob_may_ride(rider, v, false) {
+            return;
+        }
+        self.mobs[i].extra.mount = None;
         let (width, yaw) = (f64::from(self.mobs[i].width()), self.mobs[i].yaw);
         let at = if let Some(b) = self.boats.iter().position(|b| b.id == v) {
             self.boat_dismount_target(b, width, yaw)
@@ -1433,7 +1484,7 @@ impl Game<'_> {
                     num(points.len()),
                     float(centre_f[0]),
                     float(centre_f[1]),
-                    Text::literal(format!("{min_distance:.2}")),
+                    Text::literal(super::percent_f(min_distance, 2)),
                 ],
             ));
         }
@@ -1487,7 +1538,7 @@ impl Game<'_> {
                 num(points.len()),
                 float(centre_f[0]),
                 float(centre_f[1]),
-                Text::literal(format!("{average:.2}")),
+                Text::literal(super::percent_f(average, 2)),
             ],
         ));
         Ok(points.len() as i32)
@@ -1546,11 +1597,124 @@ fn text_error(key: &str, args: &[Text]) -> horizon_client::command::CommandError
     horizon_client::command::CommandError::new(Text::translate(key, args))
 }
 
-/// `Entity.lookAt`: yaw and pitch from `from` towards `to`.
-fn look_at(from: [f64; 3], to: [f64; 3]) -> [f32; 2] {
+/// `PlaySoundCommand.playSound`: the point and the volume one target hears the
+/// sound at. A target past `range` hears nothing unless `minVolume` is above
+/// zero, and then the point moves two blocks from the target towards the sound
+/// and the volume is `minVolume`; a target exactly at `range` still hears it
+/// (the command's test is `>`, unlike `PlayerList.broadcast`'s `<`).
+fn playsound_placement(
+    pos: [f64; 3],
+    target: [f64; 3],
+    range: f32,
+    volume: f32,
+    min_volume: f32,
+) -> Option<([f64; 3], f32)> {
+    let d = [pos[0] - target[0], pos[1] - target[1], pos[2] - target[2]];
+    let dist2 = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
+    // PlaySoundCommand compares against Mth.square(float range): the square
+    // rounds in float and only then widens, so a point between that square and
+    // the double square is out of range in vanilla.
+    if dist2 <= f64::from(range * range) {
+        return Some((pos, volume));
+    }
+    if min_volume <= 0.0 {
+        return None;
+    }
+    let dist = dist2.sqrt();
+    Some((
+        [
+            target[0] + d[0] / dist * 2.0,
+            target[1] + d[1] / dist * 2.0,
+            target[2] + d[2] / dist * 2.0,
+        ],
+        min_volume,
+    ))
+}
+
+/// `Entity.lookAt`: yaw and pitch from `from` towards `to`, the yaw wrapped
+/// to -180..180 as `Mth.wrapDegrees` does.
+pub(super) fn look_at(from: [f64; 3], to: [f64; 3]) -> [f32; 2] {
     let (dx, dy, dz) = (to[0] - from[0], to[1] - from[1], to[2] - from[2]);
     let horizontal = (dx * dx + dz * dz).sqrt();
-    let pitch = (-(dy.atan2(horizontal).to_degrees())) as f32;
-    let yaw = (dz.atan2(dx).to_degrees() - 90.0) as f32;
-    [yaw.rem_euclid(360.0), pitch]
+    // `Entity.lookAt` turns radians to degrees with the float constant
+    // `57.2957763671875`, not `Math.toDegrees`.
+    let pitch = wrap_degrees((-(dy.atan2(horizontal) * 57.295_776_367_187_5)) as f32);
+    let yaw = (dz.atan2(dx) * 57.295_776_367_187_5) as f32 - 90.0;
+    [wrap_degrees(yaw), pitch]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{look_at, playsound_placement};
+
+    fn assert_angle(got: f32, want: f32) {
+        assert!((got - want).abs() < 1.0e-4, "{got} is not {want}");
+    }
+
+    /// `Entity.lookAt` wraps the yaw with `Mth.wrapDegrees`, so a target to
+    /// the north-west turns the entity to 135 degrees, not to -225, and a
+    /// target due north leaves -180 rather than 180.
+    #[test]
+    fn a_facing_target_wraps_the_yaw_to_180() {
+        let at = [0.0, 64.0, 0.0];
+        assert_angle(look_at(at, [-1.0, 64.0, -1.0])[0], 135.0);
+        assert_angle(look_at(at, [0.0, 64.0, -1.0])[0], -180.0);
+        assert_angle(look_at(at, [1.0, 64.0, 0.0])[0], -90.0);
+        assert_angle(look_at(at, [0.0, 64.0, 1.0])[0], 0.0);
+        assert_angle(look_at(at, [-1.0, 64.0, 0.0])[0], 90.0);
+        // The pitch is the elevation, unchanged; its own wrap is a no-op.
+        assert_angle(look_at(at, [0.0, 65.0, 1.0])[1], -45.0);
+    }
+
+    /// `PlaySoundCommand.playSound`: inside the range the point and volume are
+    /// the command's own, exactly on it still is, past it there is nothing
+    /// without a minimum volume, and with one the point is two blocks from the
+    /// target towards the sound and the volume is that minimum.
+    #[test]
+    fn a_target_past_the_range_hears_it_two_blocks_away() {
+        let pos = [0.0, 64.0, 0.0];
+        let near = [0.0, 64.0, 15.0];
+        assert_eq!(
+            playsound_placement(pos, near, 16.0, 3.0, 0.0),
+            Some((pos, 3.0))
+        );
+        let on_the_edge = [16.0, 64.0, 0.0];
+        assert_eq!(
+            playsound_placement(pos, on_the_edge, 16.0, 3.0, 0.0),
+            Some((pos, 3.0))
+        );
+        let far = [0.0, 64.0, 32.0];
+        assert_eq!(playsound_placement(pos, far, 16.0, 3.0, 0.0), None);
+        assert_eq!(
+            playsound_placement(pos, far, 16.0, 3.0, 0.5),
+            Some(([0.0, 64.0, 30.0], 0.5))
+        );
+    }
+
+    /// The range is squared as a float, as `Mth.square(getRange(volume))` is:
+    /// a point between that square and the double one is past the range in
+    /// vanilla, so it gets the `minVolume` placement rather than full volume.
+    #[test]
+    fn the_range_square_rounds_as_a_float() {
+        let volume = 1.1f32;
+        let range = 16.0 * volume;
+        let float_square = f64::from(range * range);
+        let double_square = f64::from(range) * f64::from(range);
+        assert!(float_square < double_square);
+        let dist2 = (float_square + double_square) / 2.0;
+        let pos = [0.0, 64.0, 0.0];
+        let target = [dist2.sqrt(), 64.0, 0.0];
+        assert_eq!(
+            playsound_placement(pos, target, range, volume, 0.0),
+            None,
+            "past the float range"
+        );
+        let moved = playsound_placement(pos, target, range, volume, 0.7);
+        let Some((point, heard)) = moved else {
+            panic!("minVolume should place it");
+        };
+        assert_eq!(heard, 0.7);
+        assert!((point[0] - (target[0] - 2.0)).abs() < 1e-9, "{point:?}");
+        assert_eq!(point[1..], [64.0, 0.0]);
+    }
 }

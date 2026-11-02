@@ -10,8 +10,7 @@ use horizon_client::{
     gizmos::Gizmos,
     hud::HudBatch,
     hud_layout, keybinds,
-    save::VERSION_NAME,
-    text::Text,
+    text::{ClickEvent, Style, Text},
 };
 use horizon_core::geometry::{Axis, Vec3};
 use horizon_protocol::packets::play::{BlockEntityTagQuery, EntityTagQuery, Serverbound};
@@ -41,6 +40,7 @@ impl DebugHost for Host<'_, '_> {
         let g = &mut *self.game;
         if without_menu && g.screen == Screen::Playing {
             g.pause_menu = !g.has_singleplayer_server() || g.is_published();
+            g.pause_focus = None;
             g.screen = Screen::Paused;
             g.capture(false);
             g.mining = None;
@@ -297,7 +297,6 @@ impl Game<'_> {
         {
             return;
         }
-        let on = |path: &str| self.debug_entries.enabled(path, self.debug, reduced);
         let framebuffer = size.map(|v| v as i32);
         let (scale, [width, height]) = debug_overlay::scale(
             framebuffer,
@@ -307,73 +306,7 @@ impl Game<'_> {
             [batch.width as i32, batch.height as i32],
         );
         let mut d = debug_overlay::Displayer::default();
-        // fps: DebugEntryFps.
-        if on("fps") {
-            self.debug_fps_line(&mut d);
-        }
-        // game_version: DebugEntryVersion (the launched version and brand).
-        if on("game_version") {
-            d.priority(format!("Minecraft {VERSION_NAME} ({VERSION_NAME}/horizon)"));
-        }
-        // player_position, player_section_position.
-        if let Some(p) = self.player.as_ref() {
-            let mut lines = debug_overlay::position(
-                [p.position.x, p.position.y, p.position.z],
-                self.yaw,
-                self.pitch,
-                self.dim.id(),
-                self.streaming.forced.len(),
-            );
-            let section = lines.pop().unwrap_or_default();
-            if on("player_position") {
-                d.group("position", lines);
-            }
-            if on("player_section_position") {
-                d.group("position", [section]);
-            }
-            // chunk_generation_stats: DebugEntryChunkGeneration, where the world is generated here.
-            // The window's server thread publishes its generators; the deprecated in-frame path
-            // (`end.locator`) is not extended.
-            if on("chunk_generation_stats") {
-                let terrain = self
-                    .integrated
-                    .as_ref()
-                    .and_then(|server| server.terrain(self.dim.id()));
-                // `DebugEntryChunkGeneration.display`: the feet block decides whether the line is
-                // sampled again; otherwise the last result is drawn.
-                let feet = [
-                    p.position.x.floor() as i32,
-                    p.position.y.floor() as i32,
-                    p.position.z.floor() as i32,
-                ];
-                let dim = self.dim.id();
-                let mut cache = self.debug_density.borrow_mut();
-                let line = cache.line(
-                    dim,
-                    feet,
-                    terrain.map(|t| move || t.density_debug_line(feet)),
-                );
-                if let Some(line) = line {
-                    d.group("chunk_generation", [line.to_owned()]);
-                }
-            }
-        }
-        if on("simple_performance_impactors") {
-            self.debug_performance_lines(&mut d);
-        }
-        if on("system_specs") {
-            self.debug_system_lines(&mut d, framebuffer);
-        }
-        // Horizon's own: the shader pack's GPU time per pass (an empty group would move others).
-        let pass_lines = self.renderer.as_ref().map_or_else(Vec::new, |r| {
-            debug_overlay::shader_pass_lines(&r.shader_pass_times())
-        });
-        if self.debug && !pass_lines.is_empty() {
-            d.group("shader pack", pass_lines);
-        }
-        if on("tps") {
-            self.debug_tps_line(&mut d);
-        }
+        self.debug_entry_lines(&mut d, framebuffer);
         // The chart keys and the charts only while the overlay is open.
         let footer = if self.debug {
             self.debug_chart_lines().to_vec()
@@ -410,7 +343,7 @@ impl Game<'_> {
         hud_layout::paint(batch, atlas, &draws);
     }
     /// `DebugEntryFps`.
-    fn debug_fps_line(&self, d: &mut debug_overlay::Displayer) {
+    pub(super) fn debug_fps_line(&self, d: &mut debug_overlay::Displayer) {
         let limit = self.framerate_limit();
         let present = self
             .renderer
@@ -430,8 +363,19 @@ impl Game<'_> {
             .map_or("0".into(), |mhz| {
                 debug_overlay::refresh_rate_label(f64::from(mhz) / 1000.0)
             });
+        // Horizon: with frame generation running, the frames reaching the screen too.
+        let generated = self
+            .renderer
+            .as_ref()
+            .and_then(|r| r.frame_generation_share())
+            .map_or(String::new(), |share| {
+                format!(
+                    " ({} fps FSR 3.1)",
+                    (self.fps * (1.0 + share)).round() as i32
+                )
+            });
         d.priority(format!(
-            "{} fps T: {}{present} @{refresh}Hz",
+            "{} fps{generated} T: {}{present} @{refresh}Hz",
             self.fps.round() as i32,
             if limit == 260 {
                 "inf".into()
@@ -441,7 +385,7 @@ impl Game<'_> {
         ));
     }
     /// `DebugEntrySimplePerformanceImpactors`.
-    fn debug_performance_lines(&self, d: &mut debug_overlay::Displayer) {
+    pub(super) fn debug_performance_lines(&self, d: &mut debug_overlay::Displayer) {
         let s = &self.settings;
         d.line(format!(
             "{}{}B: {}",
@@ -468,7 +412,11 @@ impl Game<'_> {
         ));
     }
     /// `DebugEntrySystemSpecs` (no Java line: Horizon has no JVM).
-    fn debug_system_lines(&self, d: &mut debug_overlay::Displayer, framebuffer: [i32; 2]) {
+    pub(super) fn debug_system_lines(
+        &self,
+        d: &mut debug_overlay::Displayer,
+        framebuffer: [i32; 2],
+    ) {
         if let Some(r) = self.renderer.as_ref() {
             static CPU: std::sync::OnceLock<String> = std::sync::OnceLock::new();
             d.group(
@@ -536,7 +484,7 @@ impl Game<'_> {
         }
     }
     /// `DebugEntryTps` for local and remote connections.
-    fn debug_tps_line(&self, d: &mut debug_overlay::Displayer) {
+    pub(super) fn debug_tps_line(&self, d: &mut debug_overlay::Displayer) {
         if self.player.is_some() {
             let [tx, rx] = self.debug_charts.packet_rates.map(|n| n.round() as i64);
             let (target, status) = if self.clock.sprinting() {
@@ -579,12 +527,17 @@ impl Game<'_> {
         let prefix = Text::translate("debug.prefix", &[])
             .with_color(color)
             .bold();
-        self.system_message(
+        self.show_debug_chat(
             Text::empty()
                 .append(prefix)
                 .append(Text::literal(" "))
                 .append(message),
         );
+    }
+    /// `Minecraft.showDebugChat`: a client system message the narrator says.
+    fn show_debug_chat(&mut self, message: Text) {
+        self.say_system_queued(&message);
+        self.system_message(message);
     }
     fn debug_feedback(&mut self, message: Text) {
         self.debug_decorated(YELLOW, message);
@@ -726,7 +679,7 @@ impl Game<'_> {
             DebugAction::DumpVersion => {
                 self.debug_translated("debug.version.header");
                 for line in self.version_lines() {
-                    self.system_message(line);
+                    self.show_debug_chat(line);
                 }
                 true
             }
@@ -757,11 +710,54 @@ impl Game<'_> {
                 self.toggle_debug_options();
                 true
             }
+            // Horizon's own: a repro recording for a bug report (game/repro.rs).
+            // Off unless the AI Agent page enables the shortcuts.
+            DebugAction::RecordSession if !self.settings.extras.repro_keys => false,
+            DebugAction::ExportRepro if !self.settings.extras.repro_keys => false,
+            DebugAction::RecordSession => {
+                self.toggle_recording_key();
+                true
+            }
+            DebugAction::ExportRepro => {
+                self.export_repro_key();
+                true
+            }
+            DebugAction::DumpDynamicTextures => {
+                // `KeyboardHandler`: `TextureUtil.getDebugTexturePath` is the game
+                // folder's `screenshots/debug`; `TextureManager.dumpAllSheets` then
+                // writes every dumpable texture there and the chat names the folder.
+                let dir = horizon_client::logging::player_dir()
+                    .join("screenshots")
+                    .join("debug");
+                match self
+                    .gui
+                    .atlas
+                    .dump_contents(&dir, "minecraft_textures_atlas_gui")
+                {
+                    Ok(_) => {
+                        log::info!("Dumped dynamic textures to {}", dir.display());
+                        let link = Text::styled(
+                            "screenshots/debug",
+                            Style {
+                                underlined: Some(true),
+                                click: Some(ClickEvent::OpenFile(
+                                    dir.to_string_lossy().into_owned(),
+                                )),
+                                ..Style::default()
+                            },
+                        );
+                        self.debug_feedback(Text::translate(
+                            "debug.dump_dynamic_textures",
+                            &[link],
+                        ));
+                    }
+                    Err(e) => log::error!("Failed to dump dynamic textures: {e}"),
+                }
+                true
+            }
             // Screens and overlays Horizon does not draw yet (the profiler and
-            // its chart, the texture dump): the keys are used up as in vanilla.
-            DebugAction::DumpDynamicTextures
-            | DebugAction::Profiling
-            | DebugAction::ProfilingChart => true,
+            // its chart): the keys are used up as in vanilla.
+            DebugAction::Profiling | DebugAction::ProfilingChart => true,
             DebugAction::ShowHitboxes
             | DebugAction::ShowChunkBorders
             | DebugAction::SwitchGameMode
@@ -940,6 +936,7 @@ impl Game<'_> {
     pub(super) fn debug_gizmos(&self, alpha: f32, camera: [f64; 3]) -> Gizmos {
         let mut g = Gizmos::default();
         self.bounding_box_gizmos(camera, &mut g);
+        self.debug_renderer_gizmos(&mut g);
         if self.debug_entry("chunk_borders")
             && let Some(p) = &self.player
         {
@@ -956,8 +953,7 @@ impl Game<'_> {
         }
         let lerp = |a: f64, b: f64| a + f64::from(alpha) * (b - a);
         let lerpf = |a: f32, b: f32| a + alpha * (b - a);
-        let guests = self.lan.iter().flat_map(|h| h.models.values());
-        for m in self.mobs.iter().chain(guests) {
+        for m in self.mobs.iter() {
             if m.removed || m.invisible || m.has_effect("minecraft:invisibility") {
                 continue;
             }
@@ -1011,6 +1007,20 @@ impl Game<'_> {
             let p = c.position;
             g.entity_box(min, max, [p.x, p.y, p.z], 0.2125, false, (0.0, c.yaw));
         }
+        // Interaction: EntityDimensions.scalable(width, height), so its eyes
+        // are at 0.85 of the height. Its rotation is not kept here.
+        for i in self.interactions.values() {
+            let b = i.bounds();
+            let p = i.position;
+            g.entity_box(
+                [b.min(Axis::X), b.min(Axis::Y), b.min(Axis::Z)],
+                [b.max(Axis::X), b.max(Axis::Y), b.max(Axis::Z)],
+                [p.x, p.y, p.z],
+                i.height.max(0.0) * 0.85,
+                false,
+                (0.0, 0.0),
+            );
+        }
         for a in self.armor_stands.iter().filter(|a| !a.invisible) {
             // ArmorStand.getDimensions: a marker has none, a small one is
             // half scale with its eyes at 0.9875.
@@ -1019,8 +1029,13 @@ impl Game<'_> {
                 (_, true) => ((0.25, 0.9875), 0.9875),
                 _ => ((0.5, 1.975), 1.7775),
             };
-            let p = a.position;
-            g.hitbox([p.x, p.y, p.z], size, eye, true, (0.0, a.yaw));
+            g.hitbox(
+                at(a.previous, a.position),
+                size,
+                eye,
+                true,
+                (0.0, a.render_yaw(alpha)),
+            );
         }
         for b in &self.boats {
             let h = super::boats::HEIGHT as f32;
@@ -1080,9 +1095,12 @@ impl Game<'_> {
             use horizon_client::projectiles::ProjectileKind as K;
             let (size, eye) = match p.kind {
                 K::Arrow { .. } | K::Trident => (0.5, 0.13),
-                K::Snowball | K::Egg | K::EnderPearl | K::LlamaSpit | K::Potion { .. } => {
-                    (0.25, 0.2125)
-                }
+                K::Snowball
+                | K::Egg
+                | K::EnderPearl
+                | K::LlamaSpit
+                | K::Potion { .. }
+                | K::Thrown(_) => (0.25, 0.2125),
                 K::SmallFireball | K::ShulkerBullet { .. } | K::WitherSkull { .. } => {
                     (0.3125, 0.265_625)
                 }
@@ -1140,6 +1158,11 @@ impl Game<'_> {
         }
         for b in &self.bolts {
             g.hitbox(b.at, (0.0, 0.0), 0.0, false, (0.0, 0.0));
+        }
+        // AreaEffectCloud.getDimensions: diameter follows synced radius,
+        // height is 0.5; EntityDimensions.scalable gives eyes at 85% height.
+        for c in &self.potions.clouds {
+            g.hitbox(c.at, (c.radius * 2.0, 0.5), 0.425, false, (0.0, 0.0));
         }
         // The dragon: 16 by 8, a living entity; its parts follow.
         if let Some(d) = &self.dragon {
@@ -1249,7 +1272,7 @@ impl DebugQuery {
 pub(super) struct DensityCache(Option<(&'static str, [i32; 3], Option<String>)>);
 impl DensityCache {
     /// The line to draw; `sample` is `None` without a generator.
-    fn line(
+    pub(super) fn line(
         &mut self,
         dim: &'static str,
         feet: [i32; 3],

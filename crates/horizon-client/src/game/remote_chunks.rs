@@ -112,6 +112,9 @@ impl ChunkFormat {
         // the server sent; nothing is relit.
         let (layers, above) = self.light(&p.light);
         horizon_client::light::light_from_layers(&mut chunk, &layers, above, self.has_skylight);
+        // From the single-player server thread: its own sections where they
+        // are the same.
+        horizon_client::lan::handoff::take(&mut chunk);
         Ok(chunk)
     }
 
@@ -282,7 +285,14 @@ impl Game<'_> {
             }
         };
         let (x, z) = (p.x, p.z);
-        self.streaming.insert_remote(&mut self.world, chunk);
+        // A column sent again while it is resident (a bulk edit): only what changed is lit and meshed again.
+        if self.world.chunks.contains_key(&(x, z)) {
+            horizon_client::spans::time("replace_remote", || {
+                self.streaming.replace_remote(&mut self.world, chunk)
+            });
+        } else {
+            self.streaming.insert_remote(&mut self.world, chunk);
+        }
         self.world
             .block_entities
             .retain(|k, _| (k.0 >> 4, k.2 >> 4) != (x, z));

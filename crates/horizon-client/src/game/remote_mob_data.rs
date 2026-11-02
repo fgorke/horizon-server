@@ -5,8 +5,8 @@
 use super::Game;
 use horizon_client::mobs::render::{PROFESSIONS, VILLAGER_TYPES};
 use horizon_client::mobs::{
-    Mob, Species, Who, armadillo, bat, bee, camel, creaking, equine, finalize, illusioner, panda,
-    phantom, sniffer, sync, tame, zombie_villager,
+    Mob, Species, Who, armadillo, bat, bee, camel, creaking, drops, equine, finalize, illusioner,
+    panda, phantom, sniffer, sync, tame, zombie_villager,
 };
 use horizon_client::particles::{ParticleOptions, ParticleType};
 use horizon_protocol::entity_data::{Particle, ParticleData, Value};
@@ -18,7 +18,7 @@ use horizon_world::registry::BlockStateId;
 /// `builtin` names the ids of built-in registries.
 fn apply(m: &mut Mob, values: &[(u8, i32, Value)], builtin: &Builtin, local_entity: i32) {
     let species = m.species();
-    let baby = super::lan::baby_index(&m.kind.id);
+    let baby = super::lan::baby_index(species);
     if &*m.kind.id == "minecraft:player" {
         player_poses(m, values);
     }
@@ -82,7 +82,15 @@ fn apply(m: &mut Mob, values: &[(u8, i32, Value)], builtin: &Builtin, local_enti
                 m.extra.left_handed = flags & 2 != 0;
                 m.ai.aggressive = flags & 4 != 0;
             }
-            (i, Value::Bool(b)) if Some(i) == baby => m.extra.age = if *b { -1 } else { 0 },
+            // AgeableMob.isBaby: `canBeABaby` too, so a parrot or a slime
+            // sent as one is still drawn grown.
+            (i, Value::Bool(b)) if Some(i) == baby => {
+                m.extra.age = if *b && drops::can_be_baby(species) {
+                    -1
+                } else {
+                    0
+                };
+            }
             // AgeableMob.AGE_LOCKED, the entry after DATA_BABY_ID (not
             // Zombie's or Piglin's).
             (17, Value::Bool(locked)) if baby == Some(16) && finalize::ageable(species) => {
@@ -147,6 +155,8 @@ fn apply(m: &mut Mob, values: &[(u8, i32, Value)], builtin: &Builtin, local_enti
             // Cat.IS_LYING and RELAX_STATE_ONE.
             (Species::Cat, 21, Value::Bool(lying)) => m.extra.flag = *lying,
             (Species::Cat, 22, Value::Bool(relaxing)) => m.extra.relax_one = *relaxing,
+            // Ocelot.DATA_TRUSTING (after AgeableMob's two).
+            (Species::Ocelot, 18, Value::Bool(trusting)) => m.extra.trusting = *trusting,
             // Wolf.DATA_INTERESTED_ID: begging, which tilts the head.
             (Species::Wolf, 20, Value::Bool(begging)) => m.extra.flag = *begging,
             // Wolf.DATA_COLLAR_COLOR and Cat's.
@@ -332,6 +342,13 @@ fn apply(m: &mut Mob, values: &[(u8, i32, Value)], builtin: &Builtin, local_enti
             (Species::Mannequin, 17, Value::Profile(profile)) => {
                 m.profile = Some(profile.clone());
             }
+            // Mannequin.DATA_IMMOVABLE and DATA_DESCRIPTION (an empty one is hidden).
+            (Species::Mannequin, 18, Value::Bool(immovable)) => m.extra.immovable = *immovable,
+            (Species::Mannequin, 19, Value::OptText(description)) => {
+                m.extra.description = horizon_client::mobs::MannequinDescription::from_component(
+                    description.as_ref(),
+                );
+            }
             _ => {}
         }
     }
@@ -470,7 +487,7 @@ impl Game<'_> {
             (14, _, Value::OptPos(bed)) => Some(bed.map_or(0, |b| self.bed_facing(b))),
             _ => None,
         });
-        if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id as u32) {
+        if let Some(m) = self.mob_index.get_mut(&mut self.mobs, id as u32) {
             apply(m, values, &r.builtin, r.entity_id);
             apply_registry_data(m, values, &r.registries, self.world.game_time);
             if let Some(code) = bed
@@ -618,6 +635,46 @@ mod tests {
         assert!(calf.is_baby());
         apply(&mut calf, &[(16, s::BOOLEAN, Value::Bool(false))]);
         assert!(!calf.is_baby());
+    }
+
+    /// #6133: a server's baby happy ghast (a hatched dried ghast) and baby
+    /// nautilus come with AgeableMob.DATA_BABY_ID (16) like any other animal;
+    /// a parrot never is one (`Parrot.canBeABaby`).
+    #[test]
+    fn a_happy_ghast_and_a_nautilus_take_their_babyhood() {
+        use horizon_client::mobs::MobTypes;
+        use std::{fs, sync::Arc};
+
+        let root = std::env::temp_dir().join(format!("horizon-baby-flag-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("entity-types.json"),
+            r#"{"minecraft:happy_ghast": {}, "minecraft:nautilus": {}, "minecraft:parrot": {}}"#,
+        )
+        .unwrap();
+        fs::write(
+            root.join("entity-models.json"),
+            r#"{"minecraft:happy_ghast#main": {}, "minecraft:nautilus#main": {},
+                "minecraft:parrot#main": {}}"#,
+        )
+        .unwrap();
+        let mut types = MobTypes::load(&root).unwrap();
+        fs::remove_dir_all(root).unwrap();
+        for kind in ["minecraft:happy_ghast", "minecraft:nautilus"] {
+            let t = Arc::new(types.types.remove(kind).unwrap());
+            let mut m = Mob::new(1, t, horizon_core::geometry::Vec3::ZERO, 0.0);
+            client_defaults(&mut m);
+            assert!(!m.is_baby(), "{kind}");
+            apply(&mut m, &[(16, s::BOOLEAN, Value::Bool(true))]);
+            assert!(m.is_baby(), "{kind}");
+            apply(&mut m, &[(16, s::BOOLEAN, Value::Bool(false))]);
+            assert!(!m.is_baby(), "{kind}");
+        }
+        let t = Arc::new(types.types.remove("minecraft:parrot").unwrap());
+        let mut parrot = Mob::new(1, t, horizon_core::geometry::Vec3::ZERO, 0.0);
+        client_defaults(&mut parrot);
+        apply(&mut parrot, &[(16, s::BOOLEAN, Value::Bool(true))]);
+        assert!(!parrot.is_baby());
     }
 
     #[test]
@@ -890,6 +947,53 @@ mod tests {
             &[(17, s::RESOLVABLE_PROFILE, Value::Profile(profile.clone()))],
         );
         assert_eq!(m.profile, Some(profile));
+    }
+
+    /// `Ocelot.DATA_TRUSTING` (after AgeableMob's two).
+    #[test]
+    fn an_ocelot_takes_its_trusting_flag() {
+        let Some(mut m) = mob("minecraft:ocelot") else {
+            return;
+        };
+        assert!(!m.extra.trusting);
+        apply(&mut m, &[(18, s::BOOLEAN, Value::Bool(true))]);
+        assert!(m.extra.trusting);
+        apply(&mut m, &[(18, s::BOOLEAN, Value::Bool(false))]);
+        assert!(!m.extra.trusting);
+    }
+
+    /// `Mannequin.DATA_IMMOVABLE` and `DATA_DESCRIPTION`: the default component is the default
+    /// description, an empty one hides it, any other is the server's own.
+    #[test]
+    fn a_mannequin_takes_its_immovable_flag_and_description() {
+        use horizon_client::mobs::MannequinDescription as D;
+        let Some(mut m) = mob("minecraft:mannequin") else {
+            return;
+        };
+        assert_eq!(
+            (m.extra.immovable, m.extra.description.clone()),
+            (false, D::Default)
+        );
+        let own = horizon_protocol::text::literal("Guard");
+        apply(
+            &mut m,
+            &[
+                (18, s::BOOLEAN, Value::Bool(true)),
+                (19, s::OPTIONAL_COMPONENT, Value::OptText(Some(own.clone()))),
+            ],
+        );
+        assert_eq!(
+            (m.extra.immovable, m.extra.description.clone()),
+            (true, D::Custom(own))
+        );
+        apply(&mut m, &[(19, s::OPTIONAL_COMPONENT, Value::OptText(None))]);
+        assert_eq!(m.extra.description, D::Hidden);
+        let default = D::Default.component();
+        apply(
+            &mut m,
+            &[(19, s::OPTIONAL_COMPONENT, Value::OptText(default))],
+        );
+        assert_eq!(m.extra.description, D::Default);
     }
 
     /// `LivingEntity.getDimensions`: the pose's box times `minecraft:scale` —

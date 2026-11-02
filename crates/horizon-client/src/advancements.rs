@@ -2,6 +2,7 @@
 //! progress (`PlayerAdvancements`) and the predicates criteria test
 //! (`EntityPredicate`, `ItemPredicate`, `LocationPredicate`, the loot
 //! conditions advancements use).
+use horizon_world::lazy_json::LazyJson;
 use serde_json::Value;
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
@@ -30,7 +31,9 @@ pub struct Display {
 pub struct Criterion {
     pub name: String,
     pub trigger: String,
-    pub conditions: Value,
+    /// Read on first test: ~1,300 recipe advancements' criteria, most never
+    /// tested in a game, took ~4 MB as `Value`s.
+    pub conditions: LazyJson,
 }
 #[derive(Clone, Debug, Default)]
 pub struct Rewards {
@@ -101,22 +104,20 @@ impl Tree {
         let Ok(namespaces) = std::fs::read_dir(data) else {
             return tree;
         };
-        let mut files = Vec::new();
-        for ns in namespaces.flatten() {
-            let root = ns.path().join("advancement");
-            collect(&root, &root, &ns.file_name().to_string_lossy(), &mut files);
-        }
-        // One JSON per id, the packs' over the game's own.
+        // One JSON per id, the packs' over the game's own. Through `json_folder`: from
+        // the prepared data file, and read once while a load holds the folder.
         let mut json: BTreeMap<String, Value> = BTreeMap::new();
-        files.sort();
-        for (id, path) in files {
-            let Ok(text) = std::fs::read_to_string(&path) else {
+        for ns in namespaces.flatten() {
+            let Ok(folder) = horizon_world::json_folder::read(&ns.path().join("advancement"))
+            else {
                 continue;
             };
-            let Ok(v) = serde_json::from_str::<Value>(&text) else {
-                continue;
-            };
-            json.insert(id, v);
+            let ns = ns.file_name().to_string_lossy().into_owned();
+            for file in &folder.files {
+                if let Ok(v) = serde_json::from_slice::<Value>(file.bytes().unwrap_or_default()) {
+                    json.insert(format!("{ns}:{}", file.name), v);
+                }
+            }
         }
         for (id, files) in overlay.kind("advancement") {
             match serde_json::from_slice::<Value>(horizon_world::loot::PackOverlay::top(files)) {
@@ -154,7 +155,8 @@ impl Tree {
             .into_iter()
             .flatten()
         {
-            match self.list[ai].criteria[ci].conditions["recipes"].as_str() {
+            // `read`: the index alone keeps none of the criteria read.
+            match self.list[ai].criteria[ci].conditions.read()["recipes"].as_str() {
                 Some(r) => self
                     .by_recipe
                     .entry(r.to_owned())
@@ -208,7 +210,8 @@ impl InventoryIndex {
             return index;
         };
         for &(ai, ci) in list {
-            let items = &tree.list[ai].criteria[ci].conditions["items"];
+            let conditions = tree.list[ai].criteria[ci].conditions.read();
+            let items = &conditions["items"];
             // `id_matches`: only a string or a list limits the items.
             let limited = items.as_array().and_then(|a| {
                 a.iter()
@@ -244,21 +247,6 @@ impl InventoryIndex {
         out
     }
 }
-fn collect(root: &Path, dir: &Path, ns: &str, out: &mut Vec<(String, std::path::PathBuf)>) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for e in entries.flatten() {
-        let p = e.path();
-        if p.is_dir() {
-            collect(root, &p, ns, out);
-        } else if p.extension().is_some_and(|x| x == "json") {
-            let rel = p.strip_prefix(root).unwrap_or(&p).with_extension("");
-            let rel = rel.to_string_lossy().replace('\\', "/");
-            out.push((format!("{ns}:{rel}"), p));
-        }
-    }
-}
 fn parse(id: &str, v: &Value) -> Option<Advancement> {
     let criteria: Vec<Criterion> = v["criteria"]
         .as_object()?
@@ -266,7 +254,7 @@ fn parse(id: &str, v: &Value) -> Option<Advancement> {
         .map(|(name, c)| Criterion {
             name: name.clone(),
             trigger: c["trigger"].as_str().unwrap_or("").to_owned(),
-            conditions: c["conditions"].clone(),
+            conditions: LazyJson::new(&c["conditions"]),
         })
         .collect();
     let requirements = match v["requirements"].as_array() {
@@ -611,6 +599,19 @@ pub fn item(v: &Value, it: &ItemView, w: &dyn World) -> bool {
         }
     }
     true
+}
+/// `LockCode.canUnlock`: a spectator opens any container; otherwise the
+/// player's main hand must match the lock's `ItemPredicate`. An empty hand
+/// holds nothing to match (`getMainHandItem` is `ItemStack.EMPTY`), while
+/// `LockCode.NO_LOCK`'s empty predicate takes any stack.
+pub fn can_unlock(
+    lock: &Value,
+    spectator: bool,
+    main_hand: Option<&ItemView>,
+    w: &dyn World,
+) -> bool {
+    let empty = ItemView::default();
+    spectator || item(lock, main_hand.unwrap_or(&empty), w)
 }
 /// `BlockPredicate`.
 pub fn block(v: &Value, pos: [i32; 3], w: &dyn World) -> bool {
@@ -1424,6 +1425,32 @@ mod tests {
                     && matches!(id, "minecraft:fireball" | "minecraft:arrow"))
         }
     }
+    /// `LockCode.canUnlock` for a chest with
+    /// `lock:{items:"minecraft:gold_ingot"}`: a gold ingot opens it, an empty
+    /// hand or another item does not, and a spectator always does.
+    #[test]
+    fn a_lock_takes_its_item_and_any_spectator() {
+        let lock = serde_json::json!({"items": "minecraft:gold_ingot"});
+        let gold = ItemView {
+            id: "minecraft:gold_ingot".into(),
+            count: 1,
+            ..Default::default()
+        };
+        let stick = ItemView {
+            id: "minecraft:stick".into(),
+            count: 1,
+            ..Default::default()
+        };
+        assert!(can_unlock(&lock, false, Some(&gold), &Flat));
+        assert!(!can_unlock(&lock, false, Some(&stick), &Flat));
+        assert!(!can_unlock(&lock, false, None, &Flat));
+        assert!(can_unlock(&lock, true, None, &Flat));
+        assert!(can_unlock(&lock, true, Some(&stick), &Flat));
+        // `LockCode.NO_LOCK` is the empty predicate: it takes any stack, and
+        // `unlocksWith(EMPTY)` too.
+        let none = serde_json::json!({});
+        assert!(can_unlock(&none, false, None, &Flat));
+    }
     /// `PassengerPredicate.matches`: ride_a_boat_with_a_goat's vehicle holds a goat.
     #[test]
     fn passenger_predicate_needs_a_matching_passenger() {
@@ -1567,7 +1594,7 @@ mod tests {
                 criteria: vec![Criterion {
                     name: "c".into(),
                     trigger: "minecraft:inventory_changed".into(),
-                    conditions,
+                    conditions: LazyJson::new(&conditions),
                 }],
                 requirements: vec![vec!["c".into()]],
                 rewards: Rewards::default(),
@@ -1616,7 +1643,7 @@ mod tests {
                 criteria: vec![Criterion {
                     name: "c".into(),
                     trigger: "minecraft:recipe_unlocked".into(),
-                    conditions,
+                    conditions: LazyJson::new(&conditions),
                 }],
                 requirements: vec![vec!["c".into()]],
                 rewards: Rewards::default(),

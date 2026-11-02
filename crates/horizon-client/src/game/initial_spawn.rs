@@ -83,7 +83,7 @@ impl Game<'_> {
                 horizon_client::flatgen::FlatTerrain::from_settings(
                     &s,
                     self.pack.assets.registry,
-                    self.res.biomes(),
+                    world_biomes!(self),
                     self.level_shapes.overworld,
                 )
             })
@@ -207,7 +207,7 @@ impl Game<'_> {
         self.process_level_events()
     }
     /// The block at `pos` has no collision shape.
-    fn collision_empty(&self, pos: [i32; 3]) -> bool {
+    pub(super) fn collision_empty(&self, pos: [i32; 3]) -> bool {
         let mut scene = SceneCollisions {
             world: &self.world,
             binding: self.collision,

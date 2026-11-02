@@ -8,8 +8,9 @@ plan are in [docs/server.md](https://github.com/horizon-rust/horizon/blob/main/d
 ## Before you start
 
 - **Online mode checks accounts** (release v2026.10.17.07 and newer). With `online_mode = true`, the
-  default, players who sign in with the official Minecraft launcher join with their own accounts, as on a
-  vanilla server.
+  default, every player joins with their own account, as on a vanilla server: vanilla players signed in with
+  the official Minecraft launcher, Horizon players with the Microsoft account they signed in with in Horizon's
+  launcher ([docs/microsoft-account.md](https://github.com/horizon-rust/horizon/blob/main/docs/microsoft-account.md)).
 - **Names you add are accounts** (release v2026.10.17.14 and newer). `init --player`, `horizon-server
   whitelist add` and `op`, and the console's `whitelist add`, `op` and `ban` look a name up the way vanilla
   does: players already seen (kept in `usercache.json`), then Mojang's profile service. In online mode a name
@@ -17,15 +18,13 @@ plan are in [docs/server.md](https://github.com/horizon-rust/horizon/blob/main/d
   `horizon-server whitelist add` always writes the offline UUID, the one the player joins with, also while
   the server runs (it writes the entry and the game reloads the list): the console's own `whitelist add`
   takes the account's UUID when someone owns that name, as vanilla does, and that player is then refused.
-- **Horizon's own client can't sign in to a Microsoft account yet.** That needs an Azure app registration and
-  Mojang's approval, which the project doesn't have
-  ([docs/microsoft-account.md](https://github.com/horizon-rust/horizon/blob/main/docs/microsoft-account.md)).
-  Until then Horizon players can join offline servers only (`online_mode = false`). An offline server never
-  checks accounts: anyone who reaches it can join under any name. Keep it on your LAN or a tailnet
-  (Tailscale, ZeroTier), or share it only with friends you trust.
-- **Secure chat** works as on vanilla's server: in online mode, vanilla clients sign their chat, and with
-  `enforce-secure-profile=true` (the default) unsigned chat is refused. On an offline server, or for a player
-  without a chat session (Horizon's own client today), chat stays unsigned and shows as not secure.
+- **An offline server** (`online_mode = false`) never checks accounts: anyone who reaches it can join under
+  any name. Keep it on your LAN or a tailnet (Tailscale, ZeroTier), or share it only with friends you trust.
+  A Horizon player under an offline name can join only such a server.
+- **Secure chat** works as on vanilla's server: in online mode, vanilla clients and Horizon's (Nightly
+  2026-11-01 and newer) sign their chat, and with `enforce-secure-profile=true` (the default) unsigned chat is
+  refused. On an offline server, or for a player without a chat session, chat stays unsigned and shows as not
+  secure.
 - **Nether and End:** each player travels on their own through portals, and operators with `execute in
   <dimension> run tp`. The players in the level they leave stop seeing them, and the ones in the level they
   arrive in start to, as on vanilla (checked against vanilla with two players, by command and through an End
@@ -155,6 +154,7 @@ enforce_whitelist = false
 view_distance = 10
 simulation_distance = 10
 max_view_distance = 0        # past view_distance, saved chunks only, up to this (0: off)
+admin_feedback_to_ops = true # operators see each other's commands ([name: ...]); false: only the log
 
 [world]
 name = "world"
@@ -173,6 +173,7 @@ hardcore = false
 path = ""                    # the game program; empty: the one beside horizon-server
 resources = ""               # the prepared game files; empty: resources/ here, else the usual places
 restart_on_crash = true
+low_memory = false           # true: less memory, slightly slower ticks (see below)
 
 [backups]
 every = "6h"                 # 30m, 6h, 1d...; "0" turns automatic backups off
@@ -192,6 +193,13 @@ The defaults are vanilla 26.3's. Unknown keys and values vanilla would refuse ar
 start instead of being ignored. When the game changes a setting itself (`/whitelist on`), the change is copied
 back into `server.toml` when it stops, and your comments are kept. Changes to the file apply at the next
 restart: there is no live reload yet.
+
+### Operators' commands: `admin_feedback_to_ops`
+
+On by default, as vanilla: when an operator runs a command that reports to admins (`/gamemode`, `/give`, `/tp`...),
+the other operators read `[name: ...]` in gray, and the console logs it. Players who aren't operators never see it
+either way. `false` keeps it to the console's log (`logs/latest.log`): nobody in game sees an operator's commands,
+while each operator still reads their own command's answer.
 
 ### Seeing further: `max_view_distance`
 
@@ -213,6 +221,21 @@ minutes (96 MB at most), so a player walking back isn't sent the save again.
 Already have a vanilla server? Run `horizon-server init` in its folder, or `horizon-server import
 server.properties` to write `server.toml` from it. The world, `ops.json`, `whitelist.json` and the ban lists
 keep vanilla's names and formats, so going back to vanilla works too.
+
+## Native server export
+
+A native-mods build exports a standalone engine
+(`horizon-launcher native-build FOLDER --server-output DIR --version TAG --trust-native-code`;
+see [Native mods](native-mods.md#standalone-server-export)). Point the server at it:
+
+    horizon-server --dir SERVER config set engine.path=/absolute/export/horizon-engine
+    horizon-server --dir SERVER restart
+
+Use the absolute engine path printed by the build. Build on the same OS and architecture as the server
+(no cross compilation), using a prepared installed launcher release. Updates do not rebuild a pinned `engine.path`: build a new
+export folder, set `engine.path` to it, restart, and keep the old folder for manual rollback. The supervisor does
+not auto-update or rebuild a pinned engine path, and there is no compatibility handshake yet (follow-up #6304).
+Native mods run unsandboxed: only build code you have read and trust.
 
 ### Behind a Velocity proxy
 
@@ -269,12 +292,25 @@ playhorizon.dev", and the console says which client it was. The check reads the 
 by (`minecraft:brand`), which any client can fake: it keeps out players who didn't install Horizon, not
 cheaters. The server's own checks (reach, movement) are what protect it.
 
+Horizon clients can get their far terrain (Video Settings → LOD Distance) from the server: set
+`horizon-lod-distance` under `[properties]` to how far, in chunks (1024 at most), and the server samples the
+tiles each player's client asks for out to there. It is off (0) by default: far tiles show the world's terrain
+far past the view distance, which helps players find the seed. A player's own LOD Distance applies when it is
+shorter. Each player may have 8 tiles waiting and ask for 64 a second on average, and one background thread
+samples them for everyone in turn, behind the ticks, so far terrain never slows the server down; a tile past the
+distance or over a player's limits is refused, and a client that keeps breaking the limits is disconnected.
+Tiles are sampled again for each player who asks (there is no cache yet). Vanilla clients never hear of it.
+
 `horizon-server report` records the running server for 60 seconds (`report 300` for five minutes, up to 600),
 then prints a short summary and saves it in `reports/`: `perf-<time>.txt` and `perf-<time>.json`. They say where
 the ticks' time went, phase by phase (mobs, block ticks, block entities, the network and the chunks it
 sends, saving...), the slowest ticks, how many entities of each type, chunks, players, memory, CPU, and the
 settings that matter (view and simulation distance, max players). They hold no names, UUIDs or addresses, so you
 can attach them to an issue as they are. On the console it is `horizon-report [SECONDS]`.
+
+Between reports, the log keeps the spikes: a tick slower than 250 ms writes a `Horizon: slow tick` line with
+its phases (`HORIZON_SPIKES=MS` in the engine's environment sets another threshold), and a server more than
+two seconds behind says `Can't keep up!` as vanilla's does, at most every 15 seconds.
 
 `config set` changes `server.toml` without opening it: `horizon-server config set world.difficulty=hard
 server.max_players=10`. Each key is a section and a name from the file (`properties.spawn-protection=0` for any
@@ -342,8 +378,115 @@ token = "a long random string only the bot knows"
 ```
 
 The same rules as the panel's hold: a tailnet or loopback address, unless `allow_public = true` (the token is then
-all that guards the server, and it warns at every start). The API can't change `[engine]`, `[panel]` or `[api]`,
-nor turn on RCON or another remote console.
+all that guards the server, and it warns at every start). The API can't change `[engine]`, `[panel]`, `[api]` or
+`[discord]`, nor turn on RCON or another remote console.
+
+### Chat in a Discord channel
+
+`[discord]` posts the server's chat, joins, leaves and deaths to a Discord channel. In the channel's settings,
+Integrations → Webhooks → New Webhook → Copy Webhook URL, then:
+
+```toml
+[discord]
+webhook = "https://discord.com/api/webhooks/..."   # a secret: whoever has it can post in the channel
+events = ["chat", "join", "leave", "death"]        # and "kick", "announce" (lines native mods post)
+enabled = true                                     # false pauses it and keeps the webhook
+```
+
+The lines of each 2 seconds are drawn as one picture of the in-game chat (transparent, shadowed letters, colours
+included), and a channel gets at most one post every 2 seconds (more when Discord asks for it: a burst beyond 20
+lines is counted, not drawn). Only `chat` is forwarded, never a message the server's chat filter held back. Posts
+never ping: they allow no mention, and an `@everyone` typed in game reaches Discord defused. Every post comes
+from the webhook's own name and avatar (set them in Discord), never a player's; players' addresses are never sent,
+and a player is always named by their account's name (a nickname only next to it). The server only makes outgoing HTTPS calls to Discord;
+the API and the panel show the webhook as `(set)`. The letters are Pixelify Sans (SIL Open Font License,
+`crates/horizon-theme/fonts`), not Minecraft's font.
+
+### Tools written for vanilla's management protocol
+
+Vanilla 26.3 has its own management protocol, JSON-RPC over a WebSocket, and Horizon's server speaks it too, so a
+tool written for a vanilla server manages a Horizon one. It's off by default; turn it on in `server.toml`:
+
+```toml
+[properties]
+management-server-enabled = true
+management-server-port = 8132          # 0: a free port, logged at the start
+# management-server-secret: 40 letters and digits; left out, the server makes one and writes it here
+# management-server-tls-keystore = "management.p12"   # your certificate (PKCS12); left out, see below
+# management-server-tls-keystore-password = "..."     # or MINECRAFT_MANAGEMENT_TLS_KEYSTORE_PASSWORD
+```
+
+It listens on `localhost` (`management-server-host`). A client sends the secret as `Authorization: Bearer <secret>`,
+or, from a browser, in the WebSocket subprotocol (`minecraft-v1,<secret>`) from an origin listed in
+`management-server-allowed-origins`. `rpc.discover` lists the methods; Horizon answers more of them with each release
+([api/server.md](api/server.md#not-there-yet)).
+
+TLS is on, as in vanilla (`wss://`). The certificate and its key come from a PKCS12 keystore, as vanilla's do:
+
+- `keytool -genkeypair -storetype PKCS12 ...` makes one, or `openssl pkcs12 -export` turns a PEM certificate and
+  key into one.
+- Its password comes from the `MINECRAFT_MANAGEMENT_TLS_KEYSTORE_PASSWORD` variable, else from
+  `management-server-tls-keystore-password`.
+
+Where vanilla refuses to start without a keystore, Horizon makes one:
+
+- a self-signed certificate for `localhost`, `127.0.0.1` and `management-server-host`, saved in
+  `.horizon/management-keystore.p12`, which only the server's user can read;
+- its path and password are written to `[properties]`;
+- each start logs the certificate's SHA-256 fingerprint, which a client pins or adds to its trusted certificates.
+
+Keep the protocol on `localhost` or your tailnet even so. `management-server-tls-enabled = false` turns TLS off.
+As in vanilla, a wrong secret or keystore stops the server from starting.
+
+### Tools that speak RCON
+
+Hosting panels, Discord bridges and scripts often run commands through RCON, vanilla's remote console, and Horizon's
+server serves it. It's off by default and needs a password; turn it on in `server.toml` (the dotted keys are
+quoted in TOML):
+
+```toml
+[properties]
+enable-rcon = true
+"rcon.port" = 25575
+"rcon.password" = "a long random string"
+```
+
+It listens on the address `[server] bind` names (`server-ip`; every address when it's empty), as vanilla's does.
+
+A client logs in with the password and each command runs as one typed in the server's console, with the same
+output (`horizon-server cmd` does the same from the shell). RCON isn't encrypted: the password and every command
+travel in clear text, and it gives full control of the server. Keep its port closed to the internet: a firewall, a
+tailnet or an SSH tunnel. As in vanilla, an empty password or a port outside 1 to 65535 leaves RCON off with a
+warning in the log, and a port already in use is a warning too, not a server that doesn't start. The settings are
+read when the server starts. To turn it off again, set `enable-rcon = false`: taking the lines out of
+`server.toml` leaves what `server.properties` already holds, as for any other key.
+
+Where it differs from vanilla: a connection that hasn't logged in within 30 seconds is closed, at most 16 are open
+at once, and a command a client's TCP splits in two still works.
+
+A command runs from a source named `Rcon`: operators in game see what it did as `[Rcon: ...]` (gray, italic) unless
+`broadcast-rcon-to-ops` is `false`, and a `say` shows as `[Rcon] ...`.
+
+### Tools that read the query
+
+Server lists, status pages and monitoring tools (`mcstatus`, Prometheus exporters, hosting panels) often read the
+MOTD, the version and who is online through vanilla's GS4 query, a UDP port, and Horizon's server serves it. It's off
+by default; turn it on in `server.toml`:
+
+```toml
+[properties]
+enable-query = true
+"query.port" = 25565
+```
+
+It listens on UDP on the address `[server] bind` names (every address when it's empty), as vanilla's does: the same
+number as the game's TCP port is fine, they are different ports. The query tells anyone who can reach the port the
+player names and the version, and has no password: open the port only if you want that. As in vanilla, a port
+outside 1 to 65535 leaves it off with a warning in the log, and a port already in use is a warning too. The
+settings are read when the server starts. To turn it off again, set `enable-query = false`.
+
+Where it differs from vanilla: while the game isn't running (starting, restarting) nothing answers, and who is
+online is read from the game at most once a second.
 
 ## 7. Backups
 
@@ -426,6 +569,24 @@ short:
   stopped it.
 
 For more than 50 active players, give it more cores.
+
+### Less memory: `low_memory`
+
+Off by default. On Linux, the game's allocator (mimalloc) backs its memory with transparent huge pages
+(2 MB each) where the system allows them. Many of those pages are only partly used, so the server holds
+more memory than it needs, but the tick runs a little faster. Under `[engine]`, `low_memory = true` starts
+the game with huge pages off. Measured on a 4-core EPYC VPS with 20 bots playing (2026-11-01):
+
+| | Default | `low_memory = true` |
+|---|---|---|
+| Memory, idle after start | ~300 MB | ~245 MB (−60 MB) |
+| Memory, 20 players | ~1180 MB | ~980 MB (−190 MB) |
+| Average tick, 20 players | 27.1 ms | 27.5 ms (+1.2 %) |
+| Start | 2.1 s | 2.2 s |
+
+Turn it on when memory is what you're short of, for example on a small VPS. It applies at the next start.
+A game started without `horizon-server` (`horizon-client --dedicated`, a container of your own) gets the same
+effect from the environment variable `MIMALLOC_ALLOW_THP=0`. On macOS and Windows it changes nothing.
 
 ## When something goes wrong
 

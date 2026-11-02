@@ -2,7 +2,7 @@
 
 A hook PR adds a uniquely named JSON file here instead of editing the API number,
 the API histories or `native-hooks.json`. Helper-only additions use an empty
-`hooks` array. Example:
+`hooks` array and list new Host helpers in `helpers` as catalog entries. Example:
 
 ```json
 {
@@ -14,6 +14,9 @@ the API histories or `native-hooks.json`. Helper-only additions use an empty
   "comments": ["crates/horizon-client/src/game/example.rs"]
 }
 ```
+
+A hook may also carry the catalog's optional `neoforge`, `side` and
+`cancellable` keys; the tool copies them into `native-hooks.json`.
 
 Name this file `example.json`. The tool replaces `@API:example@` in the
 listed comment files and in `native_hooks.rs`; omit `comments` if unnecessary.

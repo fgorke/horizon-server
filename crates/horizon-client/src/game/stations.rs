@@ -3,6 +3,28 @@
 //! colours and sounds follow the vanilla screens (`EnchantmentScreen`,
 //! `AnvilScreen`, `GrindstoneScreen`, `SmithingScreen`, `StonecutterScreen`,
 //! `BrewingStandScreen`); item rules live in `horizon_client::stations`.
+/// Invalid measurements must not reach tooltip positioning or reserve empty space.
+fn tooltip_component_size(size: Option<[f32; 2]>) -> Option<[f32; 2]> {
+    size.filter(|size| size.iter().all(|v| v.is_finite() && *v > 0.0))
+}
+
+fn tooltip_position(
+    (x, y): (f32, f32),
+    (width, height): (f32, f32),
+    (w, h): (f32, f32),
+) -> (f32, f32) {
+    let mut x = x + 12.0;
+    let mut y = y - 12.0;
+    if x + w > width - 4.0 {
+        x = (x - 28.0 - w).max(4.0);
+    }
+    if y + h + 3.0 > height {
+        y = height - h - 3.0;
+    }
+    y = y.max(4.0);
+    (x, y)
+}
+
 use super::{Game, Screen};
 use horizon_client::{
     block_entity_item, brewing,
@@ -540,7 +562,7 @@ impl Game<'_> {
             _ => "",
         };
         if !stat.is_empty() {
-            self.stats.custom(stat, 1);
+            self.award_custom_stat(stat, 1);
         }
         true
     }
@@ -583,6 +605,15 @@ impl Game<'_> {
             v.push(RESULT);
         }
         Some(v)
+    }
+    /// How many slots `station_slots` lists, counted without building it
+    /// (`Game::slot_count` asks every frame): same branches, same order.
+    pub(super) fn station_slot_count(&self) -> Option<usize> {
+        if self.brewing_open() {
+            return Some(36 + 5);
+        }
+        let s = self.station.as_ref()?;
+        Some(36 + s.inputs.len() + usize::from(s.kind.result_pos().is_some()))
     }
     pub(super) fn station_slot_position(&self, i: usize) -> Option<(f32, f32)> {
         if self.brewing_open() && (300..305).contains(&i) {
@@ -901,13 +932,16 @@ impl Game<'_> {
             match &*name {
                 "minecraft:anvil" => {
                     let _ = self.set_state_named(pos, "minecraft:chipped_anvil", &["facing"]);
+                    self.native_anvil_damaged(self.dim.id(), pos, &name, "minecraft:chipped_anvil");
                 }
                 "minecraft:chipped_anvil" => {
                     let _ = self.set_state_named(pos, "minecraft:damaged_anvil", &["facing"]);
+                    self.native_anvil_damaged(self.dim.id(), pos, &name, "minecraft:damaged_anvil");
                 }
                 _ => {
                     let _ = self.world.set(pos[0], pos[1], pos[2], self.world.air);
                     self.world.modified.insert((pos[0] >> 4, pos[2] >> 4));
+                    self.native_anvil_damaged(self.dim.id(), pos, &name, "minecraft:air");
                     self.level_event_at(1029, pos, 0);
                     return true;
                 }
@@ -1017,7 +1051,7 @@ impl Game<'_> {
             }
         }
         let pitch = self.world.random.next_float() * 0.1 + 0.9;
-        self.stats.custom("enchant_item", 1);
+        self.award_custom_stat("enchant_item", 1);
         self.trigger_enchanted_item(&enchanted_item, lapis_needed as i32);
         self.play_at("minecraft:block.enchantment_table.use", pos, 1.0, pitch);
         self.station_changed();
@@ -1361,15 +1395,7 @@ impl Game<'_> {
                 }
                 let (col, row) = (code % 16, code / 16);
                 let (cx, cy) = (px + col * cell, py + row * cell);
-                let mut used = 0;
-                for dx in (0..cell).rev() {
-                    if (0..cell).any(|dy| {
-                        atlas.pixels[(((cy + dy) * atlas.width + cx + dx) * 4 + 3) as usize] != 0
-                    }) {
-                        used = dx + 1;
-                        break;
-                    }
-                }
+                let used = u32::from(atlas.galactic_widths[code as usize]);
                 let advance = (used as f32 * 8.0 / cell as f32 + 0.5).floor() + 1.0;
                 if cursor + advance - x > max {
                     break;
@@ -1508,6 +1534,7 @@ impl Game<'_> {
                     .and_then(|s| self.world.block_names.get(&(s.pos[0], s.pos[1], s.pos[2])));
                 Text::literal(named.cloned().unwrap_or(default)).resolve_legacy()
             });
+            super::screen_info::name_container(|| title.plain());
             let tw = atlas.font.width_text(&title);
             batch.text_styled(
                 atlas,
@@ -1540,6 +1567,7 @@ impl Game<'_> {
             let title = self
                 .remote_menu_title()
                 .unwrap_or_else(|| Text::literal(self.translate(kind.title_key(), "")));
+            super::screen_info::name_container(|| title.plain());
             {
                 let atlas = &self.gui.atlas;
                 Self::part(
@@ -2075,6 +2103,8 @@ impl Game<'_> {
                 .names
                 .display_get(&key)
                 .unwrap_or_else(|| self.pack.names.display_item(&stack.item))
+        } else if let Some(head) = horizon_client::item_tooltip::player_head_name(stack) {
+            head.title(&|key| self.pack.names.display_get(key))
         } else {
             self.pack.names.display_item(&stack.item)
         }
@@ -2433,7 +2463,7 @@ impl Game<'_> {
                     "item.durability",
                     &[
                         horizon_client::text::Text::literal(
-                            (info.max_damage - stack.damage).to_string(),
+                            info.max_damage.saturating_sub(stack.damage).to_string(),
                         ),
                         horizon_client::text::Text::literal(info.max_damage.to_string()),
                     ],
@@ -2532,7 +2562,7 @@ impl Game<'_> {
         let lines = Self::resolved(lines);
         let atlas = &self.gui.atlas;
         let (x, y, w, h) =
-            Self::tooltip_geometry(atlas, &lines, (x, y), (batch.width, batch.height), 0.0);
+            Self::tooltip_geometry(atlas, &lines, (x, y), (batch.width, batch.height), [0.0; 2]);
         Self::tooltip_box(batch, atlas, x, y, w, h);
         Self::tooltip_text(batch, atlas, &lines, x, y);
     }
@@ -2549,34 +2579,26 @@ impl Game<'_> {
             .collect()
     }
     /// The tooltip's text's top-left corner and the box's size: beside the
-    /// cursor, kept on screen, `extra` pixels taller than the text.
+    /// cursor, kept on screen. `extra` is [minimum width, height after the text].
     pub(super) fn tooltip_geometry(
         atlas: &horizon_client::hud::HudAtlas,
         lines: &[(horizon_client::text::Text, u32)],
         (x, y): (f32, f32),
         (width, height): (f32, f32),
-        extra: f32,
+        extra: [f32; 2],
     ) -> (f32, f32, f32, f32) {
         let w = lines
             .iter()
             .map(|(t, _)| atlas.font.width_text(t))
             .fold(0.0, f32::max)
-            .max(if extra > 0.0 { 96.0 } else { 0.0 });
+            .max(extra[0]);
         let text_h = if lines.len() == 1 {
             8.0
         } else {
             8.0 + 2.0 + (lines.len() - 1) as f32 * 10.0
         };
-        let h = text_h + extra;
-        let mut x = x + 12.0;
-        let mut y = y - 12.0;
-        if x + w > width - 4.0 {
-            x = (x - 28.0 - w).max(4.0);
-        }
-        if y + h + 3.0 > height {
-            y = height - h - 3.0;
-        }
-        y = y.max(4.0);
+        let h = text_h + extra[1];
+        let (x, y) = tooltip_position((x, y), (width, height), (w, h));
         (x, y, w, h)
     }
     /// The box and its frame sprites.
@@ -2670,20 +2692,38 @@ impl Game<'_> {
         // The component's height does not depend on where it is drawn, so a
         // probe at the origin gives the box its extra height.
         let probe = horizon_client::bundle::tooltip_layout(self.items(), stack, 0.0, 0.0, 96.0);
-        let extra = probe.as_ref().map_or(0.0, |l| l.height + 2.0);
+        let bundle_extra = probe.as_ref().map_or(0.0, |l| l.height + 2.0);
+        let mut component = None;
+        self.native_tooltip_component(stack, &mut component);
+        let component = tooltip_component_size(component);
+        let extra = bundle_extra + component.map_or(0.0, |size| size[1] + 2.0);
+        let min_width = (if probe.is_some() { 96.0_f32 } else { 0.0 })
+            .max(component.map_or(0.0, |size| size[0]));
         let atlas = &self.gui.atlas;
-        let (x, y, w, h) =
-            Self::tooltip_geometry(atlas, &lines, (x, y), (batch.width, batch.height), extra);
+        let (x, y, w, h) = Self::tooltip_geometry(
+            atlas,
+            &lines,
+            (x, y),
+            (batch.width, batch.height),
+            [min_width, extra],
+        );
         Self::tooltip_box(batch, atlas, x, y, w, h);
         let text_h = h - extra;
         Self::tooltip_text(batch, atlas, &lines, x, y);
-        let Some(layout) =
+        if let Some(layout) =
             horizon_client::bundle::tooltip_layout(self.items(), stack, x, y + text_h + 2.0, w)
-        else {
-            return;
-        };
-        self.draw_bundle_tooltip(batch, &layout);
-        self.draw_bundle_selected_name(batch, &layout, x, y + text_h + 2.0, w);
+        {
+            self.draw_bundle_tooltip(batch, &layout);
+            self.draw_bundle_selected_name(batch, &layout, x, y + text_h + 2.0, w);
+        }
+        if let Some(size) = component {
+            self.native_tooltip_component_draw(
+                stack,
+                batch,
+                [x, y + text_h + bundle_extra + 2.0],
+                size,
+            );
+        }
     }
     /// `ClientBundleTooltip.extractSelectedItemTooltip`: the selected item's
     /// name in a box of its own, centred over the grid (less 12) and 15 above
@@ -2865,15 +2905,32 @@ impl Game<'_> {
         let Some(BlockEntity::Brewing(b)) = self.world.block_entities.get_mut(&pos) else {
             return Ok(());
         };
+        let was_idle = b.brew_time <= 0;
+        let was_unfueled = b.fuel <= 0;
+        let fuel_item = was_unfueled
+            .then(|| b.items[4].as_ref().map(|s| s.item.clone()))
+            .flatten();
         let out = b.tick(
             &world_stations!(self).brewing,
             world_items!(self),
             self.res.providers(),
         );
+        let consumed_fuel = was_unfueled && b.fuel > 0;
+        let started = was_idle && b.brew_time > 0;
+        let ingredient = started.then(|| b.ingredient.clone()).flatten();
+        if consumed_fuel && let Some(item) = fuel_item {
+            let (x, y, z) = pos;
+            self.native_brewing_fuel([x, y, z], &item);
+        }
+        if let Some(ingredient) = ingredient {
+            let (x, y, z) = pos;
+            self.native_brewing_start([x, y, z], &ingredient);
+        }
         if out != brewing::BrewTick::default() {
             let (x, y, z) = pos;
             self.world.modified.insert((x >> 4, z >> 4));
             if out.brewed {
+                self.native_brewing_complete([x, y, z]);
                 self.play_at("minecraft:block.brewing_stand.brew", [x, y, z], 1.0, 1.0);
             }
             for d in out.drops {
@@ -2907,6 +2964,7 @@ const ANVIL_NAME_CHARS: usize = 50;
 
 fn anvil_box() -> horizon_client::ui::EditBox {
     let mut edit = horizon_client::ui::EditBox::new(0.0, 0.0, 103.0, 12.0);
+    edit.message = super::screen_info::tr("container.repair", &[]);
     edit.bordered = false;
     edit.max_length = ANVIL_NAME_CHARS;
     edit.text_color = u32::MAX;
@@ -2916,6 +2974,41 @@ fn anvil_box() -> horizon_client::ui::EditBox {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn measured_image_tooltips_position_the_whole_box() {
+        use super::tooltip_position;
+        assert_eq!(
+            tooltip_position((50.0, 90.0), (200.0, 160.0), (40.0, 8.0)),
+            (62.0, 78.0)
+        );
+        // A wide image makes the whole tooltip move to the other side.
+        assert_eq!(
+            tooltip_position((90.0, 90.0), (200.0, 160.0), (128.0, 42.0)),
+            (4.0, 78.0)
+        );
+        // Its height participates in the existing bottom-edge adjustment too.
+        assert_eq!(
+            tooltip_position((90.0, 90.0), (200.0, 80.0), (128.0, 42.0)),
+            (4.0, 35.0)
+        );
+    }
+    #[test]
+    fn image_tooltip_measurements_are_finite_and_nonempty() {
+        use super::tooltip_component_size;
+        assert_eq!(tooltip_component_size(None), None);
+        assert_eq!(
+            tooltip_component_size(Some([128.0, 32.0])),
+            Some([128.0, 32.0])
+        );
+        for size in [
+            [0.0, 32.0],
+            [32.0, -1.0],
+            [f32::NAN, 32.0],
+            [32.0, f32::INFINITY],
+        ] {
+            assert_eq!(tooltip_component_size(Some(size)), None);
+        }
+    }
     use super::*;
 
     #[test]

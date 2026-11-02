@@ -1,7 +1,7 @@
 # Horizon extras
 
-Optional conveniences built into the client: fullbright, dynamic lights, your own name tag, auto-reconnect,
-Mouse Tweaks-style inventory controls and inventory sorting. **Every one is off by default**: a fresh
+Optional conveniences built into the client: fullbright, dynamic lights, your own name tag, hiding block-break particles, auto-reconnect,
+Mouse Tweaks-style inventory controls, inventory sorting and a smooth chat. **Every one is off by default**: a fresh
 install looks and behaves exactly like vanilla 26.3, and turning an extra off
 again restores vanilla's behaviour completely.
 
@@ -88,6 +88,13 @@ The game still draws the minimap, for the native mod (`native_minimap` in `nativ
   whenever the team's name tag visibility would hide it, exactly as the other
   players' tags (`game/names.rs`, `own_name_tag`). Client-only: nothing is sent.
 
+### Hide block-break particles (`hideBlockParticles`, default off)
+- Hides the debris particles that burst from a block when it breaks
+  (`ClientLevel.addDestroyBlockEffect`) and the crumbs off the face you mine
+  (`addBreakingParticles`). Other particles (critical hits, smoke, rain...) are
+  unchanged, and the block still breaks and drops as usual. Client-only:
+  nothing is sent (`game.rs`, `destroy_particles` and `crack_particle`).
+
 ### Auto-reconnect (`autoReconnect`, default off)
 - On the "Connection lost" screen after a multiplayer connection drops, a
   countdown "Reconnecting in N s" with a Cancel button, then a new connection
@@ -103,6 +110,18 @@ The game still draws the minimap, for the native mod (`native_minimap` in `nativ
 - Online-mode servers: the retry joins with the account the game signed in
   with, held in memory for the whole run (`auth::current()`); nothing is
   written to disk.
+
+### Keep channels for UI sounds (`uiSoundReserve`, default off)
+- Positional sounds (a block breaking, a mob, an explosion) start only while at
+  least 16 of the 247 static sound channels are free; sounds played to the
+  listener (`relative`, or no attenuation: UI clicks, toasts) may take those 16.
+  A flood of world sounds (a big explosion, `/fill … destroy`, a mod breaking
+  hundreds of blocks at once) then can't stop the pause menu's clicks.
+- Vanilla 26.3 gives all 247 to whatever starts first
+  (`Library.acquireChannel` returns null once the pool is full); with the
+  extra off Horizon does exactly that. Below 231 sounds at once nothing
+  changes either way. Streaming sounds (music, records) are untouched
+  (`sound_engine.rs`, `listener_reserve`). Client-only.
 
 ### Mouse Tweaks controls (`mouseTweaks`, default off; `mouseTweaksWheel`, default on)
 In the player inventory, chest-like containers (chests, barrels, ender chests,
@@ -145,6 +164,61 @@ and the container screen tests are unchanged).
 - Done with ordinary left clicks planned by `inv_sort::plan`, so a vanilla
   server accepts it; a unit test replays the planned clicks through the menu
   engine on random chests.
+
+### Smooth chat (`chatAnimation`, default off; `chatIndicator`, default on)
+- A new chat line slides in from the left while it fades in over a quarter of
+  a second (5 ticks, `INTRO_TICKS`/`INTRO_WIDTH` in `Chat::layout`), instead of
+  appearing whole on the tick it arrives. Its background and its indicator bar
+  move with it, and the fractional tick from `Game::clock` drives the motion, so
+  it moves every frame and not 20 times a second.
+- Only the unfocused chat (the HUD's) animates: with the chat screen open the
+  history is drawn as vanilla draws it, so clicking a line lands on its text.
+- `chatIndicator` off removes the coloured bar at the left of a line. It hides
+  the bar only, never the message.
+
+### Scroll wheel changes settings (`wheelCyclesSettings`, default on)
+- On, the wheel works as in vanilla: over a button in the settings it changes the button's value
+  (`CycleButton.mouseScrolled`), and a button focused with the keyboard or a pad steps on the
+  wheel wherever the cursor is.
+- Off, the wheel only scrolls the list under the cursor, on every settings page, Video's included
+  (`OptionsUi::wheel`, `GraphicsUi::wheel`). Scrolling through a long page then can't change an
+  option that passes under the cursor (#5455). Client-only.
+
+### Splitscreen (`splitscreen`, default off)
+
+**Options → Horizon Settings... → Splitscreen...** turns local joining on or off at once.
+In P1's single-player world, a controller P1 isn't using can press a button, then A to join
+(or Y to play as P1, while P1 has no controller). Each
+player picks an instance-local profile with its own options and saved progress. LB/RB on
+the profile page move the view between shared positions, a new window or another monitor.
+A joined player's **Splitscreen Settings** in the pause menu switches profiles in place;
+Cancel keeps the current one. The switch is disabled while another player is joined; once
+P1 is alone, turning it off restores the normal controller reader. Leaving it on while
+alone keeps watching for joins without a compositor.
+
+`HORIZON_SPLIT=N` remains a testing shortcut to enable it and add N-1 players.
+The Setup map previews the monitors, windows and player views. Click a player (its name turns
+yellow) and choose a window or monitor, or drag its tile onto a window, a place among another
+window's players, or a monitor; then **Apply** to move the actual views. **Revert** and
+**Done** discard unapplied moves. An emptied window closes only on Apply. A player joining or
+leaving resets the draft so it cannot apply a move to the wrong seat. P1's pause-menu shortcut
+opens Setup; another player's shortcut opens their profiles.
+
+While a window has two or three players, a square at the bottom picks how they share it
+(two: Auto, side by side, top and bottom; three: one wide on top, one tall on the left, side
+by side); Apply saves it (`splitscreenTwo`, `splitscreenThree`). **Names** (top left,
+`splitscreenNames`, on by default) keeps each player's name in the corner of their view; off,
+it shows only for a moment when something changes. **Identify** makes every view say which
+window it is in.
+
+With a controller, A on a player's tile picks it up: left and right (or LB and RB) cycle where
+it goes, the map showing it there, A drops it, B puts it back. **Give Up Pad** (top, while P1
+has a controller in a world) frees P1's controller and offers it to join, for a friend to
+press A; if nobody joins, the offer runs out, or it's declined, it drives P1 again. A player
+whose controller disconnected shows "(no controller)" on its tile. Other players' pause menus
+say **Leave** for disconnecting. `HORIZON_SPLIT_STATS=1` logs every 5 s where a frame's time
+goes (each player's turn and render, the presents, the GPU wait) and each player's frame rate.
+Joining P1 on an external server follows separately.
 
 ## Shared rules
 

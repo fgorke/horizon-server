@@ -13,15 +13,15 @@ reopened; labels never start it):
 
 | Job | Runs on | What | Time |
 | --- | --- | --- | --- |
-| `verify` | GitHub `ubuntu-latest` | Gathers three jobs that run at once: `python` (public-tree check, Python tests), `clippy` (rustfmt, clippy with warnings denied) and `tests` (Rust tests). Dependencies come from caches saved by main's runs | ~4 min |
+| `verify` | GitHub `ubuntu-latest`; with `SELF_HOSTED_CI=all`, playhorizon's checks runners for main's pushes and this repository's own pull requests, never a fork's ([CI runners](ci-runners.md)) | Public-tree check, Python tests, rustfmt, clippy with warnings denied, Rust tests, one after another in one job (one runner from the organisation's shared pool per run). Dependencies and the workspace build come from a cache saved by main's runs (GitHub) or the runner's own build folder (playhorizon) | ~8 min |
 | `parity / parity` | A runner with the label `horizon-game`: the Mac mini's and playhorizon's (below) | Only for a change to a harness, an oracle, a probe or the runner (or the `run-parity` label): the vanilla harnesses the change can affect (`tools/parity.py --changed <base>`). Other pull requests skip it: [parity-main](#parity-on-main) checks them on main | seconds when nothing is affected; minutes per affected harness |
 
 Pushes to main run `verify` only; the nightly audit covers main's harnesses.
 
-`verify` is the check main requires, so it runs `always()` in every run of `checks` and fails unless `python`,
-`clippy` and `tests` all passed: GitHub counts a *skipped* required check as passed, and labels used to start runs
-whose `verify` was skipped, which let auto-merge merge before the real `verify` finished. A pull request that changes
-only documentation skips the Rust steps and finishes in about a minute. A pull request's public-tree check reads only
+`verify` is the check main requires, so it has no condition and runs in every run of `checks`: GitHub counts a
+*skipped* required check as passed, and labels used to start runs whose `verify` was skipped, which let
+auto-merge merge before the real `verify` finished. A pull request that changes no Rust (docs, tools) runs only its
+quick steps and finishes in about a minute. A pull request's public-tree check reads only
 its own commits (`--range base..head`); main's pushes read every ref's history.
 
 ### The parity job
@@ -393,6 +393,9 @@ and by hand; pushes to `launcher` and `launcher-*` branches only build.
   launcher's tests, checks its libraries, and installs the latest game release with the new launcher.
 - Published with `--latest=false`: the repository's latest release stays a game release. Notes list the pull
   requests under New and Fixed; Kira posts launcher releases without pinging.
+- Windows also publishes `horizon-launcher-setup.exe`, the launcher's binary under another name: with no
+  arguments it opens the per-user setup (`launcher/src/installer.rs`) instead of Home, and
+  `horizon-launcher.exe uninstall` removes it again. Both files are in the release's signed `SHA256SUMS`.
 
 Making a launcher release GitHub's latest instead would break servers: every `horizon-server` already installed,
 `install.sh` and `install.ps1` ask for `releases/latest` and expect the game's archives there, and a server that

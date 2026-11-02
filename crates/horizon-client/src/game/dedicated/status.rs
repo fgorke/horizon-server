@@ -1,7 +1,8 @@
 //! What `horizon-server` asks the dedicated server on its control endpoint (`--control-socket`, docs/server.md
 //! section 2): `server-status` answers with the tick rate, the tick times `/tick query` reports, the players
 //! and the loaded chunks; `console <line>` runs a console command and answers with the lines it logged;
-//! `server-events <since>` answers the typed events after that number (events.rs).
+//! `server-events <since>` answers the typed events after that number (events.rs); `management <connection>
+//! <json>` edits the lists as vanilla's management protocol does (management.rs).
 use super::{ServerState, capture_log};
 use crate::game::Game;
 use serde_json::{Value, json};
@@ -45,9 +46,22 @@ impl Game<'_> {
                 Some(("server-events", since)) => {
                     super::events::since(since.trim().parse().unwrap_or(0))
                 }
+                Some(("management", rest)) => self.management(state, rest),
                 Some(("console", line)) => {
                     // Command feedback is logged as system chat; the reply carries the text alone.
                     let output: Vec<String> = capture_log(|| self.console_command(state, line))
+                        .into_iter()
+                        .map(|l| {
+                            l.strip_prefix("System chat: ")
+                                .map_or(l.clone(), str::to_owned)
+                        })
+                        .collect();
+                    json!({ "output": output })
+                }
+                // An RCON command: run as the console, with the `Rcon` source, whose feedback the
+                // operators are told of when `broadcast-rcon-to-ops` is on.
+                Some(("rcon", line)) => {
+                    let output: Vec<String> = capture_log(|| self.rcon_line(state, line))
                         .into_iter()
                         .map(|l| {
                             l.strip_prefix("System chat: ")

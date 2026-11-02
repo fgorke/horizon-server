@@ -767,6 +767,11 @@ pub struct SpawnState {
     last_checked: Option<([i32; 3], String, f64)>,
 }
 impl SpawnState {
+    /// `getSpawnableChunkCount` and `getMobCategoryCounts` (by
+    /// [`Category::ALL`]), for the debug overlay's spawn counts.
+    pub fn counts(&self) -> (i32, [i32; 8]) {
+        (self.spawnable_chunks, self.counts)
+    }
     /// `NaturalSpawner.createState`: every non-persistent entity of a
     /// spawning category in a loaded chunk adds its biome's spawn charge, its
     /// category count and (for mobs) the local caps of the players near it.

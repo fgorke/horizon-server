@@ -15,7 +15,7 @@ pub enum Cost {
     Low,
     Medium,
     High,
-    /// Turning it on makes frames faster (culling).
+    /// Turning it on makes frames faster (culling, caching, batching).
     Saves,
 }
 impl Cost {
@@ -143,6 +143,34 @@ impl Style {
             label,
             value,
             hover && active,
+            active,
+            dragging && active,
+        );
+    }
+    pub fn slider_ext(
+        &self,
+        batch: &mut HudBatch,
+        atlas: &HudAtlas,
+        (x, y, w): (f32, f32, f32),
+        label: &Text,
+        value: f32,
+        hover: bool,
+        focused: bool,
+        can_change_value: bool,
+        active: bool,
+        dragging: bool,
+    ) {
+        ui::slider_ext(
+            batch,
+            atlas,
+            x,
+            y,
+            w,
+            label,
+            value,
+            hover && active,
+            focused,
+            can_change_value,
             active,
             dragging && active,
         );

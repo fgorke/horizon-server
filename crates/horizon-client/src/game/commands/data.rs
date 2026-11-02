@@ -28,6 +28,36 @@ fn set_key(tag: &mut Tag, key: &str, value: Tag) {
         c.insert(JavaString::from(key), value);
     }
 }
+/// `EntityType.loadEntityRecursive` snaps every entity of the stack,
+/// passengers included, to the position (`/summon`, `native_summon`).
+pub(in crate::game) fn place_summoned(tag: &mut Tag, pos: [f64; 3]) {
+    let p = pos.map(|v| Tag::Double(v.to_bits()));
+    set_key(tag, "Pos", Tag::List(p.to_vec()));
+    // Entity.load: an absent Fire reads as 0 (until the entity moves).
+    if tag.get("Fire").is_none() {
+        set_key(tag, "Fire", Tag::Short(0));
+    }
+    if tag.get("Rotation").is_none() {
+        set_key(
+            tag,
+            "Rotation",
+            Tag::List(vec![
+                Tag::Float(0.0f32.to_bits()),
+                Tag::Float(0.0f32.to_bits()),
+            ]),
+        );
+    }
+    if let Tag::Compound(c) = tag
+        && let Some(Tag::List(riders)) = c.get_mut(&"Passengers".into())
+    {
+        for r in riders {
+            if matches!(r, Tag::Compound(_)) {
+                place_summoned(r, pos);
+            }
+        }
+    }
+}
+
 impl Game<'_> {
     // ---- entity data ---------------------------------------------------
 
@@ -38,7 +68,12 @@ impl Game<'_> {
             .flatten()
     }
     fn entity_nbt_in_level(&mut self, t: Target) -> Option<Tag> {
-        let player_uuid = self.level.player_uuid;
+        // The acting player's own UUID: a guest's turn (the window's player on
+        // the server thread) keeps the world owner's in `level`.
+        let player_uuid = self
+            .lan_acting_uuid
+            .map(horizon_client::lan::playerdata::uuid_ints)
+            .or(self.level.player_uuid);
         Some(match t {
             Target::Guest(_) => {
                 return self
@@ -119,7 +154,9 @@ impl Game<'_> {
                 self.other_to_nbt(&o, uuid)
             }
             Target::Orb(id) => {
-                entity_nbt::orb_to_nbt(self.orbs.iter().find(|o| o.id == id)?, random_uuid())
+                let tag =
+                    entity_nbt::orb_to_nbt(self.orbs.iter().find(|o| o.id == id)?, random_uuid());
+                crate::game::persist::with_raw(tag, self.persist.raw.get(&id))
             }
             Target::Projectile(id) => {
                 let p = self.creatures.projectiles.iter().find(|p| p.id == id)?;
@@ -133,18 +170,69 @@ impl Game<'_> {
                     .as_ref()
                     .and_then(|a| a.last_state)
                     .map(|s| self.state_to_nbt(s));
-                entity_nbt::arrow_to_nbt(p, random_uuid(), owner, in_block, None)
-                    .or_else(|| entity_nbt::fireball_to_nbt(p, random_uuid(), owner, None))?
+                let raw = self.persist.raw.get(&id);
+                entity_nbt::arrow_to_nbt(p, random_uuid(), owner, in_block, raw)
+                    .or_else(|| entity_nbt::fireball_to_nbt(p, random_uuid(), owner, raw))
+                    .or_else(|| entity_nbt::throwable_to_nbt(p, random_uuid(), owner, raw))?
             }
             Target::Crystal(id) => {
                 let c = self.crystals.iter().find(|c| c.id == id)?;
                 let (uuid, raw) = self.persist_anon("minecraft:end_crystal", c.position);
-                c.to_nbt(uuid.unwrap_or_else(random_uuid), raw)
+                let tag = c.to_nbt(uuid.unwrap_or_else(random_uuid), raw);
+                crate::game::persist::with_raw(tag, self.persist.raw.get(&id))
             }
             Target::Dragon(id) => {
                 let d = self.dragon.as_ref().filter(|d| d.id == id)?;
                 let (uuid, raw) = self.persist_anon("minecraft:ender_dragon", d.position);
-                d.to_nbt(uuid.unwrap_or_else(random_uuid), raw)
+                let tag = d.to_nbt(uuid.unwrap_or_else(random_uuid), raw);
+                crate::game::persist::with_raw(tag, self.persist.raw.get(&id))
+            }
+            Target::Tnt(id) => {
+                let uuid = self.uuid_for(id);
+                let t = self.tnts.iter().find(|t| t.id == id)?;
+                entity_nbt::tnt_to_nbt(
+                    t.position,
+                    t.velocity,
+                    t.on_ground,
+                    t.fuse,
+                    t.power,
+                    uuid,
+                    self.persist.raw.get(&id),
+                )
+            }
+            Target::Falling(id) => {
+                let f = self.falling.iter().find(|f| f.id == id)?.clone();
+                let (uuid, raw) = match &f.saved {
+                    Some(saved) => (saved.0, Some(&saved.1)),
+                    None => (self.uuid_for(id), None),
+                };
+                let tag = entity_nbt::falling_block_to_nbt(
+                    self.state_to_nbt(f.state),
+                    f.position,
+                    f.velocity,
+                    f.age,
+                    f.drop_item,
+                    f.damage,
+                    f.fall_distance,
+                    uuid,
+                );
+                crate::game::persist::with_raw(tag, raw)
+            }
+            Target::Rocket(id) => {
+                let uuid = self.uuid_for(id);
+                let r = self.rockets.iter().find(|r| r.id == id)?;
+                r.to_nbt(uuid, player_uuid, self.persist.raw.get(&id))
+            }
+            Target::Spawner(id) => {
+                let s = self.ominous_spawners.iter().find(|s| s.id == id)?;
+                let [x, y, z] = s.position;
+                entity_nbt::ominous_item_spawner_to_nbt(
+                    &s.item,
+                    horizon_core::geometry::Vec3::new(x, y, z),
+                    s.spawn_item_after,
+                    s.uuid,
+                    s.raw.as_deref(),
+                )
             }
         })
     }
@@ -219,6 +307,14 @@ impl Game<'_> {
     fn raw_mut(&mut self, t: Target) -> Option<&mut Tag> {
         match t {
             Target::Player => Some(self.level.player_extra.get_or_insert_with(empty)),
+            Target::Guest(conn) => self
+                .lan
+                .as_mut()?
+                .hub
+                .guests
+                .iter_mut()
+                .find(|g| g.conn == conn)
+                .map(|g| g.saved.get_or_insert_with(empty)),
             Target::Mob(id)
             | Target::Item(id)
             | Target::Stand(id)
@@ -226,6 +322,13 @@ impl Game<'_> {
             | Target::Painting(id)
             | Target::Boat(id)
             | Target::Cart(id)
+            // `tags_of` reads a primed TNT's compound; without this arm
+            // `/tag` wrote nothing and still reported success.
+            | Target::Tnt(id)
+            | Target::Orb(id)
+            | Target::Projectile(id)
+            | Target::Crystal(id)
+            | Target::Dragon(id)
             | Target::Other(id) => Some(self.persist.raw.entry(id).or_insert_with(empty)),
             _ => None,
         }
@@ -304,11 +407,9 @@ impl Game<'_> {
                     .block_entities
                     .get(&key)
                     .ok_or_else(|| err("commands.data.block.invalid", &[]))?;
-                // BlockEntity.saveWithFullMetadata: no chunk-only keepPacked.
-                let mut tag = save::encode_block_entity(key, e, &name);
-                if let Tag::Compound(c) = &mut tag {
-                    c.remove(&"keepPacked".into());
-                }
+                // BlockEntity.saveWithFullMetadata: no chunk-only keepPacked,
+                // and the lock the model does not hold.
+                let mut tag = save::block_entity_data(key, e, &name, self.world.block_lock(key));
                 self.restore_loot_table(key, &mut tag);
                 Ok(tag)
             }
@@ -323,6 +424,7 @@ impl Game<'_> {
                 if let Some((_, mut new)) = save::decode_block_entity(&tag) {
                     self.take_loot_table(key, &tag, &mut new);
                     self.world.block_entities.insert(key, new);
+                    self.world.set_block_lock(key, &tag);
                     self.update_spawner_display(key);
                     // BlockDataAccessor.setData: setChanged and sendBlockUpdated(3),
                     // even when the block state itself stays the same.
@@ -747,6 +849,14 @@ impl Game<'_> {
             Some(Target::Cart(id))
         } else if self.others.iter().any(|o| o.id == id) {
             Some(Target::Other(id))
+        } else if self.tnts.iter().any(|t| t.id == id) {
+            Some(Target::Tnt(id))
+        } else if self.falling.iter().any(|f| f.id == id) {
+            Some(Target::Falling(id))
+        } else if self.rockets.iter().any(|r| r.id == id) {
+            Some(Target::Rocket(id))
+        } else if self.ominous_spawners.iter().any(|s| s.id == id) {
+            Some(Target::Spawner(id))
         } else {
             None
         }
@@ -763,36 +873,7 @@ impl Game<'_> {
             return Err(err("argument.nbt.expected.compound", &[]));
         }
         set_key(&mut tag, "id", Tag::String(kind.into()));
-        // EntityType.loadEntityRecursive snaps every entity of the stack,
-        // passengers included, to the position.
-        fn place(tag: &mut Tag, pos: [f64; 3]) {
-            let p = pos.map(|v| Tag::Double(v.to_bits()));
-            set_key(tag, "Pos", Tag::List(p.to_vec()));
-            // Entity.load: an absent Fire reads as 0 (until the entity moves).
-            if tag.get("Fire").is_none() {
-                set_key(tag, "Fire", Tag::Short(0));
-            }
-            if tag.get("Rotation").is_none() {
-                set_key(
-                    tag,
-                    "Rotation",
-                    Tag::List(vec![
-                        Tag::Float(0.0f32.to_bits()),
-                        Tag::Float(0.0f32.to_bits()),
-                    ]),
-                );
-            }
-            if let Tag::Compound(c) = tag
-                && let Some(Tag::List(riders)) = c.get_mut(&"Passengers".into())
-            {
-                for r in riders {
-                    if matches!(r, Tag::Compound(_)) {
-                        place(r, pos);
-                    }
-                }
-            }
-        }
-        place(&mut tag, pos);
+        place_summoned(&mut tag, pos);
         let from = self.mobs.len();
         let canceled = self.persist.joins_canceled;
         let target = self.spawn_entity_from_nbt(tag);
