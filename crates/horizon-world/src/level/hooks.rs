@@ -485,8 +485,10 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         }
         self.game_event(pos, "minecraft:block_destroy");
         let removed = self.remove_block(pos, false);
-        if removed {
-            self.destroyed_moving_piston(pos, state);
+        // MovingPistonBlock.destroy: a moving piston the player broke takes
+        // the extended base behind it with it. setBlock callers keep it.
+        if removed && b.is_block(state, b.named.moving_piston) {
+            self.destroy_moving_piston_base(pos, state);
         }
         removed
     }
@@ -505,7 +507,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         let pitch = 0.9 + self.random().next_float() * 0.2;
         self.sound(
             pos,
-            &std::sync::Arc::from("minecraft:block.turtle_egg.break"),
+            &std::sync::Arc::from("minecraft:entity.turtle.egg_break"),
             0.7,
             pitch,
         );
@@ -726,6 +728,29 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         }
         self.set_block(pos, b.table.set_text(state, b.props.tilt, "unstable"), 2);
         self.schedule_tick(pos, b.block(state), 10);
+    }
+    /// `BigDripleafBlock.onProjectileHit`: FULL immediately, even while
+    /// powered; setTiltAndScheduleTick plays the down sound and resets in 100.
+    pub(crate) fn big_dripleaf_projectile_hit(&mut self, pos: BlockPos) -> bool {
+        let b = self.b;
+        let state = self.state(pos);
+        if !b.data(state).is(Class::BigDripleaf) {
+            return false;
+        }
+        let next = b.table.set_text(state, b.props.tilt, "full");
+        self.set_block(pos, next, 2);
+        if state != next {
+            self.game_event(pos, "minecraft:block_change");
+        }
+        let pitch = self.random().next_float() * 0.4 + 0.8;
+        self.emit(LevelEvent::Sound {
+            pos,
+            sound: "minecraft:block.big_dripleaf.tilt_down".into(),
+            volume: 1.0,
+            pitch,
+        });
+        self.schedule_tick(pos, b.block(state), 100);
+        true
     }
     /// `BigDripleafBlock.resetTilt`.
     pub(crate) fn big_dripleaf_reset_tilt(&mut self, pos: BlockPos, state: BlockStateId) {

@@ -158,9 +158,31 @@ pub(super) struct CombatTracker {
     fall_before: f64,
 }
 impl CombatTracker {
+    /// The last blow taken: its damage type and the causing entity's id (0
+    /// for none), for `LivingDeathEvent`.
+    pub(super) fn last_blow(&self) -> Option<(&str, u32)> {
+        let e = self.entries.last()?;
+        Some((&e.damage_type, e.attacker.as_ref().map_or(0, |a| a.0)))
+    }
     fn mark(&mut self) {
         let marks = (self.pending.len(), self.pending_direct.len());
         self.noted_since.get_or_insert(marks);
+    }
+    /// `CombatTracker.getKiller`'s credited attacker: the entity that last
+    /// hurt the body, within a hundred ticks of the hurt.
+    pub(super) fn kill_credit(&self, now: i64) -> Option<u32> {
+        let ((id, _), at) = self.last_hurt_by.as_ref()?;
+        (now - at <= 100).then_some(*id)
+    }
+    /// `LivingEntity.getLastDamageSource` for an advancement's
+    /// `killing_blow`: the newest combat entry's type and causing entity.
+    pub(super) fn killing_blow(&self) -> Option<(String, Option<u32>)> {
+        self.entries.last().map(|e| {
+            (
+                e.damage_type.clone(),
+                e.attacker.as_ref().map(|(id, _)| *id),
+            )
+        })
     }
     /// The player's hurt is over: when a native mod canceled it, the
     /// attackers noted for it go, as no combat entry takes them and the next
@@ -273,7 +295,7 @@ impl Game<'_> {
                     continue;
                 }
                 MotionEvent::Health(HealthEvent::RecordedDamage { source, amount }) => {
-                    let Some(d) = self.motion.health.damage.definition(*source) else {
+                    let Some(d) = self.health_resources.damage.definition(*source) else {
                         continue;
                     };
                     (d.name.clone(), *amount)
@@ -372,7 +394,7 @@ impl Game<'_> {
         }
     }
     fn damage_in_tag(&self, name: &str, tag: &str) -> bool {
-        let damage = &self.motion.health.damage;
+        let damage = &self.health_resources.damage;
         damage.id(name).is_some_and(|id| {
             damage.in_tag(id, tag) || damage.in_tag(id, &format!("minecraft:{tag}"))
         })
@@ -458,11 +480,10 @@ impl Game<'_> {
             return Text::translate("death.attack.generic", &[me]);
         };
         let def = self
-            .motion
-            .health
+            .health_resources
             .damage
             .id(&killing.damage_type)
-            .and_then(|id| self.motion.health.damage.definition(id))
+            .and_then(|id| self.health_resources.damage.definition(id))
             .map(|d| (d.message_id.clone(), d.death_message_type.clone()))
             .unwrap_or_else(|| ("generic".into(), "default".into()));
         self.combat.entries = entries;

@@ -2,10 +2,11 @@
 //! The executable passes the ordered `Mods` to `entry::main_with`.
 //! Trait mods are process-wide, like mixin module statics.
 //! Hooks use `&self + Send + Sync` for shared and reentrant calls; see `docs/native-mods.md`.
-//! Generate the trait and dispatch with `cargo run -p xtask -- mod-api`.
+//! Cargo generates the trait and dispatch from the catalog and source signatures into OUT_DIR.
 use std::sync::{Arc, OnceLock};
 
-pub use crate::biome::BiomeColors;
+pub use crate::biome::{BiomeColors, SpawnEntry};
+pub use crate::block_sprites::{BlockSprites, FaceSprite, SpriteRef};
 pub use crate::camera::{CameraEntity, FovPlayer};
 pub use crate::command::Suggestion;
 pub use crate::containers::{ModBlockEntity, ModContainer, ModEnergyBuffer, ModFluidTanks};
@@ -14,30 +15,47 @@ pub use crate::extras::Corner;
 pub use crate::extras_hud::Corners;
 pub use crate::first_person::Hand;
 pub use crate::fog::{FogData, FogType};
+pub use crate::game::NativeFluidTank;
 pub use crate::game::native_block_entity_draw::{BlockEntityDraw, CubeFace};
+pub use crate::game::native_client_services::{
+    NativeClientEntity, NativeClientHead, NativeClientProfile, NativeClientState,
+};
 pub use crate::game::{
-    ItemEnergyBuffer, NativeBlockEdit, NativeBlockRun, NativeClock, NativeColumnBlocks,
-    NativeDataMapType, NativeExperienceOrb, NativeFalling, NativeHeightmap, NativeHeldItem,
-    NativeHit, NativeMapDecoration, NativeMapInfo, NativeMobRender, NativeModEvent,
-    NativePlayerRender, NativeShake,
+    ItemEnergyBuffer, NativeBlockEdit, NativeBlockReadError, NativeBlockRun, NativeClock,
+    NativeColumnBlocks, NativeComponentError, NativeConfig, NativeConfigFile, NativeConfigKind,
+    NativeCriterion, NativeDataMapType, NativeExperienceOrb, NativeFalling, NativeHeightmap,
+    NativeHeldItem, NativeHit, NativeItemEntity, NativeMapDecoration, NativeMapInfo,
+    NativeMobRender, NativeModEvent, NativePlayer, NativePlayerRender, NativeReloadListener,
+    NativeShake, NativeStructureBlock, NativeStructureTemplate, NativeWorldDraw,
 };
 pub use crate::gfx::native_render::{
-    RenderHooks, RenderNeeds, RenderNeedsEvent, WorldDrawn, WorldDrawnEvent, wgpu,
+    BlockSpriteArrays, RenderHooks, RenderNeeds, RenderNeedsEvent, WorldDrawn, WorldDrawnEvent,
+    wgpu,
 };
 pub use crate::hud::HudBatch;
-pub use crate::hud_layout::{GuiDraw, HealthInputs};
+pub use crate::hud_layout::{GuiDraw, HealthHud, HealthInputs};
 pub use crate::items::ItemStack;
 pub use crate::merchant::MerchantOffer;
+pub use crate::mesher::TintSource;
+pub use crate::mobs::goals::{Cx, Goal, GoalSelector};
+pub use crate::mobs::{Mob, MobWorld};
 pub use crate::music::{Music, MusicLayer};
 pub use crate::particles::{ParticleOptions, ParticleType};
+pub use crate::recipe_book::RecipeBookCategory;
 pub use crate::text::Text;
-pub use horizon_assets::item_model::DisplayContext;
+pub use crate::world_primitives::{PrimitiveShape, WorldPrimitive, WorldPrimitives};
+pub use horizon_assets::item_model::{DisplayContext, StackView};
 pub use horizon_core::{
     geometry::Direction,
     position::BlockPos,
     random::{LegacyRandom, RandomSource},
 };
+/// The server's play packets `client_packet` hands over, decoded.
+pub use horizon_protocol::packets::play::Clientbound as ClientboundPlayPacket;
+/// The play packets a client sends, as `native_send_packet` takes them.
+pub use horizon_protocol::packets::play::Serverbound as ServerboundPlayPacket;
 pub use horizon_world::consumable::UseAnimation;
+pub use horizon_world::player_inventory::EquipmentSlot;
 pub use horizon_world::{
     attachments::{
         AttachmentCodec, AttachmentError, AttachmentHost, AttachmentType, Attachments, Holder,
@@ -47,6 +65,7 @@ pub use horizon_world::{
     loot::{LootStack, NativeLootContext},
     nbt::{Compound, Tag},
     registry::BlockStateId,
+    worldgen::structure::{Mirror, Rotation},
 };
 pub use serde_json;
 use serde_json::{Map, Value};
@@ -75,6 +94,48 @@ pub struct NativeCamera {
 /// A dispenser hook's answer: the slot's remainder (None empties it) and the
 /// level event to play, `CLICK` (1000), `FAIL` (1001) or 0 for none.
 pub type NativeDispensed = (Option<ItemStack>, i32);
+
+/// What a mod's fake player uses its item on (`Host::use_as_player`), as a
+/// player's click would.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum NativeUseTarget {
+    /// `ServerPlayerGameMode.useItemOn`: the block at `pos`, clicked on its
+    /// `face` at `point` (world coordinates on that face).
+    Block {
+        pos: [i32; 3],
+        face: Direction,
+        point: [f64; 3],
+    },
+    /// `ServerPlayerGameMode.useItem`: the item alone, in the air.
+    Item,
+    /// `Player.interactOn`: the entity with this id, clicked at `location`
+    /// (from the entity's position), as an interact packet names one.
+    Entity { id: i32, location: [f64; 3] },
+}
+
+/// What a mod's fake player did (`Host::use_as_player`).
+#[derive(Clone, Debug, Default, PartialEq)]
+#[non_exhaustive]
+pub struct NativeFakeUse {
+    /// Whether the use did something (`InteractionResult.consumesAction`).
+    pub consumed: bool,
+    /// What its hand holds afterwards: what is left of the stack, or what the
+    /// item became (a filled bucket).
+    pub held: Option<ItemStack>,
+    /// What else ended up in its inventory (a bowl of stew from a stack of
+    /// bowls, a bottle), for the mod to keep or drop.
+    pub other: Vec<ItemStack>,
+}
+
+/// Context for a player tuning a note block.
+#[derive(Clone, Copy, Debug)]
+pub struct NativeNoteBlockChange<'a> {
+    pub dimension: LevelDimension,
+    pub pos: BlockPos,
+    pub instrument: &'a str,
+    /// The note before tuning, in the range 0 through 24.
+    pub old_note: i32,
+}
 
 /// What dropped the items heard by the `loot_drops` hook.
 #[derive(Clone, Copy, Debug)]
@@ -110,7 +171,12 @@ pub struct NativeLootDrops<'a> {
     /// what dropped them. API 100. A mob that a player killed while
     /// leashed drops its lead on its next tick as a call of its own (`entity`
     /// the mob, `player` its killer, `table` empty, `used` false). API
-    /// 102.
+    /// 102. A dying player's inventory is a call of its own too, after
+    /// vanishing curse items are gone and before they are thrown (`entity`
+    /// the player's id and `minecraft:player`, `player` them, `table` empty,
+    /// `origin` where the items leave, `used` false); `drops` empty means
+    /// the mod took the whole inventory. Not heard with keepInventory. API
+    /// 405.
     pub used: bool,
 }
 
@@ -189,6 +255,28 @@ pub struct NativeMinimap {
     pub blocks_per_pixel: f32,
     pub rotate: bool,
     pub round: bool,
+}
+
+/// One block of a scene a mod draws in a screen (`Host::draw_scene`): its
+/// place in the scene, its state, and the block entity drawn with it, if any
+/// (a mod's, through `native_block_entity_submit` as in the world).
+#[derive(Clone, Copy, Debug)]
+pub struct NativeSceneBlock<'a> {
+    pub pos: [i32; 3],
+    pub state: BlockStateId,
+    pub entity: Option<&'a ModBlockEntity>,
+}
+
+/// How a scene in a screen is seen (`Host::draw_scene`): the point at the
+/// middle of the screen's box, in blocks; the turn about the scene's vertical
+/// axis and the tilt of its top towards the viewer, in degrees; and how many
+/// GUI pixels a block is across.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct NativeSceneView {
+    pub center: [f32; 3],
+    pub yaw: f32,
+    pub pitch: f32,
+    pub scale: f32,
 }
 
 /// A mod block's screen over its menu (`native_screen`): its size, where
@@ -299,6 +387,13 @@ pub struct NativeServerPlayer {
     /// the server. API 49.
     pub yaw: f32,
     pub pitch: f32,
+    /// The network entity id the player has this session, the one hooks that only know entity ids
+    /// (`living_incoming_damage`, `living_knockback`) give for the player; 0 when not known.
+    /// API 398.
+    pub entity_id: i32,
+    /// The IP address the player connects from (behind a Velocity proxy: the address the proxy forwards);
+    /// empty when not known. API 407.
+    pub address: String,
 }
 
 /// A command a native mod adds, as one usage: words, then arguments
@@ -384,6 +479,36 @@ impl EntityRef {
     /// The open of the world the handle belongs to.
     pub fn epoch(self) -> NativeWorldEpoch {
         self.epoch
+    }
+}
+
+/// A living entity of the open world: a mob, a player, an armor stand or the
+/// dragon (vanilla's `LivingEntity`). `host.living(entity)` makes one from an
+/// [`EntityRef`] of such an entity, and [`LivingRef::entity`] goes back, so the
+/// entity's methods work on it too. Stale handles read as `None`, as an
+/// `EntityRef`'s do.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct LivingRef(EntityRef);
+
+impl LivingRef {
+    /// Create a handle for the game.
+    #[doc(hidden)]
+    pub fn new(entity: EntityRef) -> Self {
+        Self(entity)
+    }
+    /// The same entity as an [`EntityRef`].
+    pub fn entity(self) -> EntityRef {
+        self.0
+    }
+    /// The entity's id (the network id events carry).
+    pub fn id(self) -> u32 {
+        self.0.id()
+    }
+}
+
+impl From<LivingRef> for EntityRef {
+    fn from(living: LivingRef) -> Self {
+        living.0
     }
 }
 
@@ -486,15 +611,29 @@ pub fn name_mods(ids: &'static [&'static str]) {
 
 /// `mods` in order, each marked as running `hook` until the next one is (or the loop ends), so a
 /// panic in it names the mod. The generated dispatch loops over it.
+/// A part of [`mods`] (one mod, dispatched on its own) keeps its entries' places in it.
 fn entered<'a>(mods: &'a [Box<dyn Hooks>], hook: &'static str) -> Entered<'a> {
     Entered {
+        first: place_in(self::mods(), mods),
         mods: mods.iter().enumerate(),
         hook,
         guard: None,
     }
 }
 
+/// Where `part` starts in `all`, 0 when it is not a part of it.
+fn place_in<T>(all: &[T], part: &[T]) -> usize {
+    let range = all.as_ptr_range();
+    if range.contains(&part.as_ptr()) {
+        (part.as_ptr().addr() - range.start.addr()) / size_of::<T>().max(1)
+    } else {
+        0
+    }
+}
+
 struct Entered<'a> {
+    /// Where `mods` starts in [`mods`].
+    first: usize,
     mods: std::iter::Enumerate<std::slice::Iter<'a, Box<dyn Hooks>>>,
     hook: &'static str,
     guard: Option<crate::crash::NativeModGuard>,
@@ -507,6 +646,7 @@ impl<'a> Iterator for Entered<'a> {
         // The last mod's mark goes first, so the next one's puts back what was there before.
         drop(self.guard.take());
         let (index, hooks) = self.mods.next()?;
+        let index = self.first + index;
         self.guard = Some(crate::crash::enter_native_mod(
             crate::crash::NativeModCall {
                 id: MOD_IDS.get().and_then(|ids| ids.get(index)).copied(),
@@ -527,7 +667,9 @@ pub enum Flow {
     Cancel,
 }
 
-mod generated_host;
+mod generated_host {
+    include!(concat!(env!("OUT_DIR"), "/mod_api_generated_host.rs"));
+}
 pub use generated_host::Host;
 
 /// Result of accessing or decoding an attachment.
@@ -606,7 +748,9 @@ macro_rules! level_attachment_host {
 }
 level_attachment_host!(LevelRandomHost, LevelWriteHost);
 
-mod generated;
+mod generated {
+    include!(concat!(env!("OUT_DIR"), "/mod_api_generated.rs"));
+}
 pub use generated::Hooks;
 #[doc(hidden)]
 pub use generated::*;
@@ -618,6 +762,14 @@ mod tests {
 
     struct Quiet;
     impl Hooks for Quiet {}
+
+    #[test]
+    fn one_mod_dispatched_alone_keeps_its_place() {
+        let all = [10, 11, 12, 13];
+        assert_eq!(place_in(&all, &all[2..=2]), 2);
+        assert_eq!(place_in(&all, &all), 0);
+        assert_eq!(place_in(&all, &[12]), 0);
+    }
 
     struct Broken;
     impl Hooks for Broken {
@@ -647,6 +799,8 @@ mod tests {
                 health: 20.0,
                 yaw: 0.0,
                 pitch: 0.0,
+                entity_id: 0,
+                address: String::new(),
             })
         }
         fn action_bar(&mut self, _uuid: u128, line: Text) -> bool {
@@ -736,6 +890,85 @@ mod tests {
             let told: Vec<String> = host.lines.iter().map(Text::plain).collect();
             assert_eq!(told, [block], "{block}");
         }
+    }
+
+    struct Backstab;
+
+    impl Hooks for Backstab {
+        fn living_incoming_damage_v2(
+            &self,
+            host: &mut dyn Host,
+            event: &mut LivingIncomingDamageV2Event<'_>,
+        ) -> Flow {
+            assert_eq!(event.causing, 7);
+            assert_eq!(event.kind, "minecraft:zombie");
+            assert_eq!(event.damage_type, "minecraft:player_attack");
+            if event.entity == 0 {
+                return Flow::Cancel;
+            }
+            let from = event.source_position.unwrap();
+            let behind = (0..3)
+                .map(|axis| (from[axis] - event.victim_position[axis]) * event.victim_view[axis])
+                .sum::<f64>()
+                < 0.0;
+            if behind {
+                let weapon = event.weapon.unwrap();
+                let level = weapon.enchantment_level("probe:backstab");
+                assert_eq!(weapon.enchantments().len(), 1);
+                event.amount *= level as f32;
+                let player = host.acting_player().unwrap();
+                host.action_bar(player.uuid, Text::literal("backstab"));
+            }
+            Flow::Continue
+        }
+    }
+
+    #[test]
+    fn damage_v2_exposes_weapon_geometry_and_host_without_changing_v1() {
+        let mods = [Box::new(Backstab) as Box<dyn Hooks>];
+        let mut weapon = stick();
+        weapon.enchant("probe:backstab", 3);
+        for (entity, source_z, expected, canceled_expected) in [
+            (1, -1.0, 12.0, false),
+            (1, 1.0, 4.0, false),
+            (0, -1.0, 4.0, true),
+        ] {
+            let mut host = Reader {
+                block: "minecraft:air",
+                lines: Vec::new(),
+            };
+            let mut amount = 4.0;
+            let mut canceled = false;
+            dispatch_living_incoming_damage_v2(
+                &mut host,
+                &mods,
+                entity,
+                "minecraft:zombie",
+                "minecraft:player_attack",
+                7,
+                Some([0.0, 0.0, source_z]),
+                [0.0; 3],
+                [0.0, 0.0, 1.0],
+                Some(&weapon),
+                &mut amount,
+                &mut canceled,
+            );
+            assert_eq!((amount, canceled), (expected, canceled_expected));
+            assert_eq!(host.lines.len(), usize::from(expected == 12.0));
+        }
+        let mut amount = 4.0;
+        let mut canceled = false;
+        dispatch_living_incoming_damage(
+            &mods,
+            1,
+            "minecraft:zombie",
+            "minecraft:player_attack",
+            7,
+            7,
+            &mut amount,
+            &mut canceled,
+        );
+        assert_eq!((amount, canceled), (4.0, false));
     }
 
     #[test]

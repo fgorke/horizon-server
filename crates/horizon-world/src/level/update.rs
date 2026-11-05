@@ -340,9 +340,15 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         self.level.observe_block_changed(pos, old, state);
         let new_block = self.block_of(state);
         let block_changed = self.block_of(old) != new_block;
+        if block_changed && self.b.instance_of(old, super::classes::Class::Comparator) {
+            // LevelChunk removes the old ComparatorBlockEntity with its output.
+            self.ticks.comparator_outputs.remove(&pos);
+        }
         if block_changed && self.block_of(old) == self.b.named.moving_piston {
             // PistonMovingBlockEntity.preRemoveSideEffects -> finalTick; the
-            // block is already replaced, so only the entity goes away.
+            // block is already replaced, so only the entity goes away. The
+            // extended base is MovingPistonBlock.destroy's, which only the
+            // player-break path calls (player_destroy).
             self.remove_moving_piston(pos);
         } else if block_changed
             && (self.b.has_flag(old, super::data::state_flags::BLOCK_ENTITY)
@@ -385,18 +391,11 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         (tags.copper_chests.contains(new) && tags.copper_chests.contains(old))
             || (tags.copper_golem_statues.contains(new) && tags.copper_golem_statues.contains(old))
     }
-    /// `MovingPistonBlock.destroy`, for a block that was destroyed (broken, not
-    /// replaced by its piston move finishing, which never calls `destroy`).
-    pub(super) fn destroyed_moving_piston(&mut self, pos: BlockPos, state: BlockStateId) {
-        if self.block_of(state) == self.b.named.moving_piston {
-            self.destroy_moving_piston_base(pos, state);
-        }
-    }
     /// `MovingPistonBlock.destroy`: a `moving_piston` that goes away takes the
     /// piston base behind it with it when that base is extended (a head that was
     /// still moving over a base that finished extending). An unextended base, or
     /// no piston base at all, stays.
-    fn destroy_moving_piston_base(&mut self, pos: BlockPos, state: BlockStateId) {
+    pub(crate) fn destroy_moving_piston_base(&mut self, pos: BlockPos, state: BlockStateId) {
         let b = self.b;
         let Some(facing) = b.table.dir(state, b.props.facing) else {
             return;
@@ -435,7 +434,6 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         let destroyed = self.set_block_limit(pos, legacy, 3, limit);
         if destroyed {
             self.game_event_state(pos, "minecraft:block_destroy", state);
-            self.destroyed_moving_piston(pos, state);
         }
         destroyed
     }

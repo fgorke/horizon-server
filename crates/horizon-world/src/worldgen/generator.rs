@@ -19,17 +19,17 @@ use super::{
     biome_source::{BiomeSourceCatalog, ResolvedBiomeSource},
     biome_temperature::{BiomeTemperature, BiomeTemperatureSettings},
     carver::{CarverCatalog, WorldCarver, generate_carving_mask},
-    carving::{CarvingBlocks, apply_carving_mask},
+    carving::{CarvingBlocks, apply_carving_mask_shared},
     climate::{ClimateSampler, decode_parameter, quantize},
     decode_noise,
     density::DensityRegistry,
     generator_structures::Starts,
     material_condition::{
-        MaterialConditionRegistry, MaterialConditions, MaterialDensitySources, MaterialRule,
-        MaterialRuleError, MaterialRuleLibrary, MaterialSurfaceQueries,
+        CompiledSurfaceRule, MaterialConditionRegistry, MaterialConditions, MaterialDensitySources,
+        MaterialRule, MaterialRuleError, MaterialRuleLibrary, MaterialSurfaceQueries,
     },
     material_extensions::{ExtensionBlocks, ExtensionNoises, MaterialExtensions},
-    material_stage::{SurfaceInputs, TopMaterialInputs, build_surface},
+    material_stage::{SurfaceInputs, TopMaterialInputs, build_surface_shared},
     material_surface::{ClayBandBlocks, MaterialSurface},
     overrides::{self, WorldgenOverrides},
     router::{NoiseRouter, RouterField, RouterSamplers},
@@ -51,6 +51,7 @@ use horizon_core::{
 };
 use serde_json::Value;
 use std::{
+    any::Any,
     collections::{BTreeMap, BTreeSet, HashMap},
     fs, io,
     path::Path,
@@ -927,6 +928,8 @@ struct Pipeline<R: RandomSource> {
     carver_cache: Mutex<HashMap<(i32, i32), BiomeId>>,
     pub(super) decoration: Option<Arc<super::generator_decoration::Decoration>>,
     pub(super) structures: Option<super::generator_structures::StructureState>,
+    /// Definitions for explicit placement when automatic structure starts are off.
+    manual_structures: std::sync::OnceLock<Option<super::generator_structures::StructureState>>,
     /// The noise settings' `spawn_target` points.
     spawn_target: Vec<SpawnTargetPoint>,
     /// The chunks an older version generated, which new chunks blend with.
@@ -956,6 +959,10 @@ pub struct FlatSettings {
     pub biome: String,
     /// `structure_overrides`: the structure sets that may generate (all of them when `None`).
     pub structure_overrides: Option<Vec<String>>,
+    /// `features`: the biome's own placed features decorate the world.
+    pub features: bool,
+    /// `lakes`: the lava lakes (`createLakesList`) take the biome's lakes step.
+    pub lakes: bool,
 }
 const CACHE_LIMIT: usize = 16384;
 /// What a generator's shared caches hold ([`OverworldGenerator::cache_census`]).
@@ -1029,7 +1036,7 @@ fn state(registry: &BlockRegistry, raw: &Value) -> Result<BlockStateId, Generato
     }
 }
 
-impl<R: RandomSource> Pipeline<R>
+impl<R: RandomSource + 'static> Pipeline<R>
 where
     R::Positional: Clone + Send + Sync,
 {
@@ -1221,6 +1228,7 @@ where
             carver_cache: Mutex::new(HashMap::new()),
             decoration: None,
             structures: None,
+            manual_structures: std::sync::OnceLock::new(),
             spawn_target,
             old_world: std::sync::OnceLock::new(),
             debug_density,
@@ -1243,8 +1251,55 @@ where
             if let Some(state) = pipeline.structures.as_mut() {
                 state.fixed_biome = generator["biome_source"]["type"] == "minecraft:fixed";
             }
+            // ChunkGenerator.createState reads getOrigin: a noise generator
+            // answers the chunk of its NoiseSpawnFinder position, others
+            // chunk 0 0. Only a dimension-origin structure set reads it.
+            if pipeline
+                .structures
+                .as_ref()
+                .is_some_and(|state| state.needs_dimension_origin())
+                && let Ok([x, z]) = pipeline.spawn_column()
+            {
+                let origin = ChunkPos::new(x >> 4, z >> 4);
+                if let Some(state) = pipeline.structures.as_mut() {
+                    state.set_dimension_origin(origin);
+                }
+            }
         }
         Ok(pipeline)
+    }
+    /// `NoiseBasedChunkGenerator.getOrigin`'s spawn column: the
+    /// NoiseSpawnFinder position, or 0 0 when the noise settings have no
+    /// spawn target (`ChunkGenerator.getOrigin`). Cached.
+    fn spawn_column(&self) -> Result<[i32; 2], GeneratorError> {
+        if let Some(position) = self.spawn_position.get() {
+            return Ok(*position);
+        }
+        // ChunkGenerator.getOrigin is 0 0 without a spawn target.
+        let position = if self.spawn_target.is_empty() {
+            [0, 0]
+        } else {
+            find_spawn_position(&self.spawn_target, &mut SamplerContext::cached())
+                .map_err(|e| GeneratorError::Stage("spawn search", e.to_string()))?
+        };
+        Ok(*self.spawn_position.get_or_init(|| position))
+    }
+    /// Manual placement reads the registry without enabling the automatic
+    /// structure state, its placement sets, starts or locate searches.
+    fn placement_structures(&self) -> Option<&super::generator_structures::StructureState> {
+        self.structures.as_ref().or_else(|| {
+            self.manual_structures
+                .get_or_init(|| {
+                    super::generator_structures::StructureState::new(
+                        &self.data,
+                        &BTreeSet::new(),
+                        Arc::new(std::sync::OnceLock::new()),
+                    )
+                    .ok()
+                    .flatten()
+                })
+                .as_ref()
+        })
     }
     fn generation(&self) -> WorldGenerationContext {
         // `new WorldGenerationContext(generator, level)`: the larger minimum Y and the smaller
@@ -1653,10 +1708,17 @@ where
         .map_err(stage("noise"))?;
         let generation = self.generation();
         worker.timings.noise += lap(&mut clock);
+        // The surface rule, compiled by this worker's first chunk.
+        let mut shared = worker
+            .surface_rule
+            .take()
+            .and_then(|cache| cache.downcast::<CompiledSurfaceRule<R>>().ok())
+            .map(|cache| *cache);
         if !self.identity_end_surface(pos) {
-            build_surface(
+            build_surface_shared(
                 &mut chunk,
-                self.rule.clone(),
+                &self.rule,
+                &mut shared,
                 SurfaceInputs::<R, _> {
                     generation,
                     noise_volume: volume,
@@ -1695,10 +1757,11 @@ where
                 self.router.get(RouterField::Erosion).as_ref(),
             );
             let mut biome_context = SamplerContext::default();
-            apply_carving_mask(
+            apply_carving_mask_shared(
                 &mut chunk,
                 &mask,
-                self.rule.clone(),
+                &self.rule,
+                &mut shared,
                 TopMaterialInputs::<R, _> {
                     generation,
                     root: self.root.clone(),
@@ -1718,6 +1781,7 @@ where
             )
             .map_err(stage("carvers"))?;
         }
+        worker.surface_rule = shared.map(|rule| Box::new(rule) as Box<dyn Any + Send>);
         worker.timings.carvers += lap(&mut clock);
         chunk
             .prime_heightmaps(&[
@@ -1956,7 +2020,7 @@ where
         })
     }
 }
-impl<R: RandomSource> super::structure::start::StartContext for StructureQueries<'_, R>
+impl<R: RandomSource + 'static> super::structure::start::StartContext for StructureQueries<'_, R>
 where
     R::Positional: Clone + Send + Sync,
 {
@@ -1964,7 +2028,7 @@ where
         self.pipeline
             .old_world
             .get()
-            .is_some_and(|world| world.is_old_chunk_around(chunk, 0))
+            .is_some_and(|world| world.is_old_chunk(chunk.x, chunk.z))
     }
     fn saved_starts(&self, chunk: ChunkPos) -> Vec<super::blending::SavedStart> {
         self.pipeline
@@ -2326,6 +2390,9 @@ pub(super) struct WorkerState {
     /// Decorate with structure pieces only (for structure parity checks).
     pub(super) structures_only: bool,
     pub(super) structure_mobs: Option<Arc<dyn StructureMobs>>,
+    /// The world's surface rule compiled once for this worker's chunks: a
+    /// `CompiledSurfaceRule` of the pipeline's random.
+    surface_rule: Option<Box<dyn Any + Send>>,
 }
 /// `Mob.finalizeSpawn(level, difficulty, STRUCTURE, null)` of the entities a
 /// structure places with finalizeEntities, run by the game, which owns mobs.
@@ -2405,6 +2472,16 @@ trait SeededPipeline: Send + Sync {
     ) -> Result<(), String>;
     fn forget_structure_starts(&self);
     fn ring_positions(&self, worker: &mut WorkerState, set: &str) -> Option<Vec<ChunkPos>>;
+    /// The structures whose random-spread set may start in `chunk`, each with whether a
+    /// search's start check lets it start there.
+    #[cfg(test)]
+    fn may_start_answers(
+        &self,
+        _worker: &mut WorkerState,
+        _chunk: ChunkPos,
+    ) -> Vec<(String, bool)> {
+        Vec::new()
+    }
     fn spawn_position(&self) -> Result<[i32; 2], GeneratorError>;
     fn region_random(&self, center: ChunkPos) -> Box<dyn super::structure::legacy::PieceRandom>;
     fn locate(
@@ -2536,8 +2613,7 @@ where
         structure: &str,
         chunk: ChunkPos,
     ) -> Option<Arc<super::structure::start::StructureStart>> {
-        self.structures
-            .as_ref()?
+        self.placement_structures()?
             .structure_start(
                 &mut StructureQueries {
                     pipeline: self,
@@ -2575,6 +2651,20 @@ where
             structures.forget_starts();
         }
     }
+    #[cfg(test)]
+    fn may_start_answers(&self, worker: &mut WorkerState, chunk: ChunkPos) -> Vec<(String, bool)> {
+        match &self.structures {
+            Some(structures) => structures.may_start_answers(
+                &mut StructureQueries {
+                    pipeline: self,
+                    worker,
+                    valid: BTreeSet::new(),
+                },
+                chunk,
+            ),
+            None => Vec::new(),
+        }
+    }
     fn ring_positions(&self, worker: &mut WorkerState, set: &str) -> Option<Vec<ChunkPos>> {
         self.structures.as_ref()?.ring_positions(
             &mut StructureQueries {
@@ -2589,17 +2679,7 @@ where
         Box::new(self.region_random_at(center))
     }
     fn spawn_position(&self) -> Result<[i32; 2], GeneratorError> {
-        if let Some(position) = self.spawn_position.get() {
-            return Ok(*position);
-        }
-        // ChunkGenerator.getOrigin is 0 0 without a spawn target.
-        let position = if self.spawn_target.is_empty() {
-            [0, 0]
-        } else {
-            find_spawn_position(&self.spawn_target, &mut SamplerContext::cached())
-                .map_err(|e| GeneratorError::Stage("spawn search", e.to_string()))?
-        };
-        Ok(*self.spawn_position.get_or_init(|| position))
+        self.spawn_column()
     }
     fn locate(
         &self,
@@ -2833,6 +2913,16 @@ where
         let oz = z.div_euclid(4) * 4;
         let nx = ((x - ox + (side as i32 - 1) * width + step_xz - 1) / step_xz) + 1;
         let nz = ((z - oz + (side as i32 - 1) * width + step_xz - 1) / step_xz) + 1;
+        // Reduced far detail: how many blocks down surface rules paint a far
+        // column. Vanilla's rules reach eight blocks (dirt under grass, sand
+        // under a beach, powder snow over a peak), but a tile this wide draws
+        // at most a block or two of each column's vertical face, so painting
+        // the six below it is work no view resolves. Depth 1 is always painted,
+        // so the surface the tile shows -- its height, its top state, its
+        // biome -- is exactly what Full detail gives; only the interior of a
+        // span, seen on a cliff, loses its vanilla material. Narrow tiles keep
+        // all eight: their faces are tall enough in view to show them.
+        let material_depth = if approximate && width >= 16 { 2 } else { 8 };
         // Approximate: cells many blocks wide keep their interpolated shape on
         // a coarser vertical lattice, for a fraction of the density work.
         let step_y = match width {
@@ -3047,7 +3137,7 @@ where
                 continue;
             };
             material.update_xz(wx, wz, 0, 0);
-            for depth in 1..=below.min(8) {
+            for depth in 1..=below.min(material_depth) {
                 let y = height - depth;
                 material.update_y(
                     depth,
@@ -3117,7 +3207,7 @@ where
         // waterlogging applied. The pieces draw from the GenerationContext's
         // random, seeded from the level seed and the position's chunk, not
         // from the level random.
-        let structures = self.structures.as_ref()?;
+        let structures = self.placement_structures()?;
         let mut random = horizon_core::random::WorldgenRandom::new(LegacyRandom::new(0));
         random.set_large_feature_seed(self.seed, query.position[0] >> 4, query.position[2] >> 4);
         let aliases = BTreeMap::new();
@@ -3338,6 +3428,9 @@ impl OverworldGenerator {
                 null.push(hole);
             }
         }
+        // `updateLayers`: `voidGen` when every layer is air (no layers at all, too).
+        let air = registry.default_state("minecraft:air");
+        let void_gen = states.iter().all(|&id| Some(id) == air);
         states.truncate(level_height.max(0) as usize);
         null.truncate(states.len());
         // `FlatLevelSource.getSeaLevel`; its minimum Y and depth are in `generation`.
@@ -3354,15 +3447,22 @@ impl OverworldGenerator {
             states,
             null,
         });
-        // No placed features here (the layers are the whole terrain), but the structure
-        // steps run: the plan keeps the steps and leaves their feature lists empty.
-        pipeline.decoration =
-            super::generator_decoration::Decoration::new_with(&data, &pipeline.source, false)?.map(
-                |mut decoration| {
-                    decoration.top_layers = top_layers;
-                    Arc::new(decoration)
-                },
-            );
+        // `FlatLevelSource` decorates with `adjustGenerationSettings` of the biome.
+        let adjust = super::generator_decoration::FlatDecoration::new(
+            flat.features,
+            flat.lakes,
+            void_gen,
+            biome == "minecraft:the_void",
+        );
+        pipeline.decoration = super::generator_decoration::Decoration::new_with(
+            &data,
+            &pipeline.source,
+            Some(adjust),
+        )?
+        .map(|mut decoration| {
+            decoration.top_layers = top_layers;
+            Arc::new(decoration)
+        });
         if let (Some(state), Some(only)) = (pipeline.structures.as_mut(), &flat.structure_overrides)
         {
             state.restrict_to(only);
@@ -3395,16 +3495,29 @@ impl OverworldGenerator {
         dimension: &str,
         with_structures: bool,
     ) -> Result<Self, GeneratorError> {
-        let preset_json: Value = serde_json::from_str(
-            data.world_presets
-                .get(preset)
-                .ok_or_else(|| resource(format!("missing world preset {preset}")))?,
-        )?;
-        // A data pack's level stem replaces the preset's, as the world's
-        // dimension registry does.
-        let stem = match data.dimensions.get(dimension) {
-            Some(json) => serde_json::from_str(json)?,
-            None => preset_json["dimensions"][dimension].clone(),
+        Self::for_world_with_settings(data, seed, preset, dimension, with_structures, None)
+    }
+    /// A saved level stem supplies the generator and dimension type when no data
+    /// pack replaces that dimension. Worlds without one use the preset's stem.
+    pub fn for_world_with_settings(
+        data: Arc<GeneratorData>,
+        seed: i64,
+        preset: &str,
+        dimension: &str,
+        with_structures: bool,
+        saved_stem: Option<&Value>,
+    ) -> Result<Self, GeneratorError> {
+        let stem = if let Some(json) = data.dimensions.get(dimension) {
+            serde_json::from_str(json)?
+        } else if let Some(stem) = saved_stem {
+            stem.clone()
+        } else {
+            let preset_json: Value = serde_json::from_str(
+                data.world_presets
+                    .get(preset)
+                    .ok_or_else(|| resource(format!("missing world preset {preset}")))?,
+            )?;
+            preset_json["dimensions"][dimension].clone()
         };
         let generator = stem["generator"].clone();
         // The level's build range: its dimension type's, a data pack's
@@ -3537,6 +3650,7 @@ impl OverworldGenerator {
                 structures_only: false,
                 structure_mobs: None,
                 heights: HashMap::new(),
+                surface_rule: None,
             },
         }
     }
@@ -3676,6 +3790,10 @@ impl GeneratorWorker {
     /// fresh starts, as in a new level that has not loaded the old chunks.
     pub fn forget_structure_starts(&mut self) {
         self.pipeline.forget_structure_starts();
+    }
+    #[cfg(test)]
+    fn may_start_answers(&mut self, chunk: ChunkPos) -> Vec<(String, bool)> {
+        self.pipeline.may_start_answers(&mut self.state, chunk)
     }
     pub fn stage_timings(&self) -> StageTimings {
         self.state.timings
@@ -3978,6 +4096,69 @@ mod tests {
         assert!(successes > 0 && failures > 0);
     }
 
+    /// Reduced far detail paints only the top two blocks of a wide column
+    /// (`material_depth`). Vanilla's surface rules reach eight blocks down, so
+    /// Full detail layers dirt under grass; a tile 256 blocks across draws at
+    /// most a block or two of each column's face, so Reduced leaves the rest as
+    /// the default block. The second half of this test samples the same tile at
+    /// Full detail to prove the first half is discriminating, not vacuous.
+    #[test]
+    fn reduced_far_detail_paints_only_the_top_of_a_wide_column() {
+        let root = std::env::var_os("HORIZON_TEST_RESOURCES")
+            .or_else(|| std::env::var_os("HORIZON_RESOURCES"))
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| {
+                Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.local/horizon-client/26.3")
+            });
+        if !root.join("worldgen/world_presets.json").exists() {
+            eprintln!("skipping: no worldgen bundle at {}", root.display());
+            return;
+        }
+        let registry: &'static BlockRegistry = Box::leak(Box::new(
+            crate::level::data::load_registry(&root).expect("registry"),
+        ));
+        let data = GeneratorData::load(&root.join("worldgen"), registry).expect("worldgen data");
+        let generator = OverworldGenerator::without_structures(data, 1234).expect("generator");
+        let mut worker = generator.worker();
+        // The block a column holds at `y`, where its spans cover it.
+        let at = |spans: &[(i32, i32, BlockStateId)], y: i32| {
+            spans
+                .iter()
+                .find(|&&(low, high, _)| low <= y && y < high)
+                .map(|&(_, _, state)| state)
+        };
+        // Two depths inside the eight vanilla rules reach, both below the two
+        // Reduced keeps. Only columns whose spans cover both are compared, so a
+        // cave or an overhang between them is never read as a painted layer.
+        let layered = |grid: &[LodColumn]| {
+            let mut compared = 0;
+            let mut differing = 0;
+            for (surface, spans) in grid {
+                let Some(surface) = surface else { continue };
+                let (Some(shallow), Some(deep)) =
+                    (at(spans, surface.height - 4), at(spans, surface.height - 8))
+                else {
+                    continue;
+                };
+                compared += 1;
+                differing += usize::from(shallow != deep);
+            }
+            (compared, differing)
+        };
+        // 16 columns 16 blocks apart: a level 4 tile, which the gate covers.
+        let (compared, differing) = layered(&worker.lod_grid(0, 0, 16, 16, true).expect("reduced"));
+        assert!(compared > 64, "only {compared} columns to compare");
+        assert_eq!(
+            differing, 0,
+            "{differing} of {compared} reduced columns still carry a painted layer below depth 2"
+        );
+        let (compared, differing) = layered(&worker.lod_grid(0, 0, 16, 16, false).expect("full"));
+        assert!(compared > 64, "only {compared} columns to compare");
+        assert!(
+            differing > 0,
+            "Full detail painted no layer below depth 2 either, so the check above proves nothing"
+        );
+    }
     #[test]
     fn far_surface_matches_undecorated_land_and_keeps_end_void() {
         let root = std::env::var_os("HORIZON_TEST_RESOURCES")
@@ -4151,6 +4332,75 @@ mod tests {
         Some(GeneratorData::load(&root.join("worldgen"), registry).expect("worldgen data"))
     }
 
+    /// A superflat world decorates with what `adjustGenerationSettings` keeps of its biome
+    /// (26.3 bytecode): the lava lakes of `createLakesList` in the lakes step (0 and 1) when
+    /// `lakes` is on; the biome's own features with `features` on, but those of the two
+    /// structure steps (plains' monster rooms are underground structures); nothing of the
+    /// biome when every layer is air, unless the biome is the_void.
+    #[test]
+    fn a_superflat_world_keeps_what_adjust_generation_settings_keeps() {
+        let Some(data) = prepared_data() else {
+            return;
+        };
+        use super::super::generator_decoration::{Decoration, FlatDecoration};
+        let plains = ResolvedBiomeSource::Fixed(super::super::biome_source::FixedBiomeSource {
+            biome: "minecraft:plains".into(),
+        });
+        let kept = |layer: &str, features, lakes, name: &str| {
+            let void_gen = layer == "minecraft:air";
+            let adjust = FlatDecoration::new(features, lakes, void_gen, false);
+            let decoration = Decoration::new_with(&data, &plains, Some(adjust))
+                .unwrap()
+                .expect("decoration");
+            decoration.seed(name).map(|(_, index, step)| (index, step))
+        };
+        let grass = "minecraft:grass_block";
+        // The Overworld preset: lakes and features.
+        assert_eq!(
+            kept(grass, true, true, "minecraft:lake_lava_underground"),
+            Some((0, 1))
+        );
+        assert_eq!(
+            kept(grass, true, true, "minecraft:lake_lava_surface"),
+            Some((1, 1))
+        );
+        assert_eq!(
+            kept(grass, true, true, "minecraft:trees_plains").map(|s| s.1),
+            Some(9)
+        );
+        assert_eq!(
+            kept(grass, true, true, "minecraft:freeze_top_layer").map(|s| s.1),
+            Some(10)
+        );
+        assert_eq!(kept(grass, true, true, "minecraft:monster_room"), None);
+        // Lakes alone: no tree, no flower, no ore.
+        assert_eq!(
+            kept(grass, false, true, "minecraft:lake_lava_surface"),
+            Some((1, 1))
+        );
+        assert_eq!(kept(grass, false, true, "minecraft:trees_plains"), None);
+        assert_eq!(kept(grass, false, true, "minecraft:ore_iron_upper"), None);
+        // Features alone: plains' own lakes step stays.
+        assert_eq!(
+            kept(grass, true, false, "minecraft:lake_lava_surface").map(|s| s.1),
+            Some(1)
+        );
+        assert_eq!(
+            kept(grass, true, false, "minecraft:ore_iron_upper").map(|s| s.1),
+            Some(6)
+        );
+        // Neither: the steps run for structures, with no feature in them.
+        assert_eq!(
+            kept(grass, false, false, "minecraft:lake_lava_surface"),
+            None
+        );
+        // Every layer air (`voidGen`) and a biome other than the_void: no biome features.
+        assert_eq!(
+            kept("minecraft:air", true, false, "minecraft:trees_plains"),
+            None
+        );
+    }
+
     /// Seed 1234's strongholds where vanilla 26.3 puts them
     /// (VanillaStructureStartOracle with HORIZON_RINGS). Each search sampled
     /// its quarts through fresh resolvers, which broke climate ties their own
@@ -4228,6 +4478,44 @@ mod tests {
         worker.forget_structure_starts();
         let after: Vec<_> = chunks.iter().map(|&c| summary(&mut worker, c)).collect();
         assert_eq!(before, after);
+    }
+
+    /// A map's structure search skips a chunk's starts when no wanted structure's start
+    /// piece and biome fit there (#8669). Over the candidate chunks of every random-spread
+    /// set around the camp TiesB2007's map went looking from, a skipped structure is never
+    /// one the chunk's full starts hold, and some are skipped.
+    #[test]
+    fn may_start_never_skips_a_start_the_chunk_holds() {
+        let Some(data) = prepared_data() else {
+            return;
+        };
+        let generator = OverworldGenerator::new(data, -3292718948513116954).expect("generator");
+        let mut worker = generator.worker();
+        let (mut held, mut skipped) = (0, 0);
+        for x in 212..332 {
+            for z in -481..-361 {
+                let chunk = ChunkPos::new(x, z);
+                let checks = worker.may_start_answers(chunk);
+                if checks.is_empty() {
+                    continue;
+                }
+                let starts: Vec<String> = (worker.structure_starts(chunk).iter())
+                    .map(|s| s.name.clone())
+                    .collect();
+                for (name, may_start) in checks {
+                    if starts.contains(&name) {
+                        assert!(
+                            may_start,
+                            "{name} starts in {chunk:?}, but its check skips it"
+                        );
+                        held += 1;
+                    } else if !may_start {
+                        skipped += 1;
+                    }
+                }
+            }
+        }
+        assert!(held > 0 && skipped > 0, "held {held}, skipped {skipped}");
     }
 
     /// Generators of one seed and dimension share their ring positions;

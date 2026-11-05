@@ -155,7 +155,7 @@ fn baby_turtle_on_land(s: &super::Seen) -> bool {
 /// `universal_anger` rule on and no anger target left, any player. Creative and
 /// spectator players are dropped first (`isValidPlayerTarget`), by the goal's
 /// `can_target_player`.
-fn angry_at_player(m: &Mob, w: &MobWorld) -> bool {
+pub(super) fn angry_at_player(m: &Mob, w: &MobWorld) -> bool {
     m.extra.angry_at == Some(Who::Player)
         || (w.universal_anger && m.extra.anger > 0 && m.extra.angry_at.is_none())
 }
@@ -708,6 +708,12 @@ fn start_shaking(m: &mut Mob) {
     m.anim.v[SHAKE] = 0.0;
     m.anim.vo[SHAKE] = 0.0;
 }
+/// `Wolf.die`: the wet and shake state is cleared before the rest of the
+/// death, so a wolf killed mid-shake does not shake on the ground.
+pub fn die(m: &mut Mob) {
+    m.extra.flag2 = false;
+    cancel_shake(m);
+}
 /// `Wolf.cancelShake`: it stays wet.
 fn cancel_shake(m: &mut Mob) {
     m.extra.counter2 = 0;
@@ -740,6 +746,14 @@ fn shake_tick(m: &mut Mob, wet: bool, server: bool, events: &mut Vec<MobEvent>) 
             let pitch = (m.random.next_float() - m.random.next_float()) * 0.2 + 1.0;
             if server {
                 events.push(MobEvent::Sound("entity.wolf.shake", m.center(), 0.4, pitch));
+                // Wolf.tick: `gameEvent(GameEvent.ENTITY_ACTION)` with the sound (a client's
+                // level hears no game events).
+                events.push(MobEvent::GameEvent {
+                    event: "minecraft:entity_action",
+                    at: [m.position.x, m.position.y, m.position.z],
+                    source: m.id,
+                    state: horizon_world::registry::BlockStateId(0),
+                });
             }
         }
         m.anim.vo[SHAKE] = m.anim.v[SHAKE];
@@ -1688,6 +1702,32 @@ mod tests {
     use horizon_core::geometry::Vec3;
     use std::sync::Arc;
 
+    /// Wolf.tick: a shake starting posts ENTITY_ACTION with its sound, on the server only.
+    #[test]
+    fn a_shake_posts_entity_action_on_the_server() {
+        let shaking_wolf = || {
+            let mut kind = kind();
+            let k = Arc::make_mut(&mut kind);
+            k.id = "minecraft:wolf".into();
+            k.species = Species::Wolf;
+            let mut m = Mob::new(1, kind, Vec3::ZERO, 0.0);
+            m.extra.counter2 = 1;
+            m
+        };
+        let action = |events: &[MobEvent]| {
+            events.iter().any(|e| {
+                matches!(e, MobEvent::GameEvent { event, source: 1, .. }
+                    if *event == "minecraft:entity_action")
+            })
+        };
+        let mut events = Vec::new();
+        shake_tick(&mut shaking_wolf(), false, true, &mut events);
+        assert!(action(&events), "the server's wolf posts entity_action");
+        let mut events = Vec::new();
+        shake_tick(&mut shaking_wolf(), false, false, &mut events);
+        assert!(!action(&events), "a client's copy posts nothing");
+    }
+
     const WHITE: u32 = 0xFFFF_FFFF;
 
     fn cat() -> Mob {
@@ -1730,6 +1770,25 @@ mod tests {
         let mut m = Mob::new(1, kind, Vec3::ZERO, 0.0);
         m.on_ground = true;
         m
+    }
+    /// `Wolf.die`: the wet flag, the shake counter and both shake animations
+    /// are cleared before any loot is rolled. The death runs
+    /// `drops::death_state` first, so the reset has to be asked there, not
+    /// only exist.
+    #[test]
+    fn a_wolf_that_dies_mid_shake_is_dry_and_still() {
+        let mut m = wolf();
+        // Soaked, and shaking it off: the tick sets the wet flag and entity
+        // event 8 starts the shake, which counts up 0.05 a tick.
+        m.extra.flag2 = true;
+        entity_event(&mut m, 8);
+        m.anim.v[SHAKE] = 0.9;
+        m.anim.vo[SHAKE] = 0.85;
+        crate::mobs::drops::death_state(&mut m);
+        assert!(!m.extra.flag2, "a dead wolf is not wet");
+        assert_eq!(m.extra.counter2, 0, "a dead wolf is not shaking");
+        assert_eq!(m.anim.v[SHAKE], 0.0, "shakeAnim");
+        assert_eq!(m.anim.vo[SHAKE], 0.0, "shakeAnimO");
     }
     fn entity_events(events: &[MobEvent]) -> Vec<i8> {
         events

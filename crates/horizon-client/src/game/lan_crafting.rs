@@ -14,6 +14,14 @@ use horizon_client::{
 };
 use horizon_protocol::packets::play::{self, Clientbound as C};
 
+/// `AbstractContainerMenu.dropOrPlaceInInventory`: actual network disconnects
+/// drop inputs; a live close still returns them to the inventory.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum MenuRemoval {
+    Live,
+    Disconnected,
+}
+
 /// The guest's menus the game runs: kept between clicks, so a drag (quick
 /// craft) spans them as in vanilla.
 #[derive(Default)]
@@ -85,6 +93,14 @@ fn place_back(menu: &mut Menu, env: &Env, stacks: Vec<ItemStack>) {
 }
 
 impl Game<'_> {
+    /// `LocalPlayer.doLimitedCrafting`: whether limited crafting is active.
+    pub fn limited_crafting(&self) -> bool {
+        self.remote.as_ref().map_or_else(
+            || self.ui.rules.bool("limited_crafting"),
+            |r| r.do_limited_crafting,
+        )
+    }
+
     pub(super) fn menu_env(&self) -> Env<'_> {
         Env {
             items: self.items(),
@@ -96,6 +112,8 @@ impl Game<'_> {
             names: &self.pack.names,
             trade: None,
             maps: None,
+            limited_crafting: self.limited_crafting(),
+            known_recipes: Some(&self.level.recipe_book),
         }
     }
 
@@ -119,6 +137,8 @@ impl Game<'_> {
         });
         let env = Env {
             maps: maps.as_ref().map(|m| m as &dyn horizon_client::menu::Maps),
+            limited_crafting: host.hub.limited_crafting,
+            known_recipes: Some(&host.hub.guests[gi].recipe_book),
             ..self.menu_env()
         };
         load_player(menu, &host.hub.guests[gi]);
@@ -673,6 +693,18 @@ impl Game<'_> {
         conn: u32,
         window: Option<i32>,
     ) -> bool {
+        self.lan_crafting_removed(host, conn, window, MenuRemoval::Live)
+    }
+
+    /// `AbstractContainerMenu.clearContainer`: only input slots are removed;
+    /// `dropOrPlaceInInventory` chooses drops for a disconnected player.
+    pub(super) fn lan_crafting_removed(
+        &mut self,
+        host: &mut LanHost,
+        conn: u32,
+        window: Option<i32>,
+        removal: MenuRemoval,
+    ) -> bool {
         let Some(gi) = host.hub.guests.iter().position(|g| g.conn == conn) else {
             return false;
         };
@@ -692,7 +724,10 @@ impl Game<'_> {
             }
         };
         if !grid.is_empty() {
-            self.lan_place_back(host, gi, grid);
+            match removal {
+                MenuRemoval::Live => self.lan_place_back(host, gi, grid),
+                MenuRemoval::Disconnected => self.drop_guest_items(host, gi, grid),
+            }
         }
         true
     }

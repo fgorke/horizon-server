@@ -5,6 +5,7 @@
 //! (`ServerPlayer.canHarmPlayer`, `isPvpAllowed`). A player's arrow on
 //! another player lands the same way.
 use super::{Game, lan::LanHost, lan_mobs::guest_bounds, mace::Spared};
+use horizon_client::enchant::EffectContext;
 
 use horizon_client::{
     Result,
@@ -64,6 +65,9 @@ pub(super) struct Strike {
     /// The attacker's main-hand item with a custom name, for the death
     /// message's `.item` form.
     item: Option<horizon_client::text::Text>,
+    /// The weapon's `minecraft:ignite` (Fire Aspect) on the victim, in
+    /// seconds (`EnchantmentHelper.doPostAttackEffects`).
+    ignite: f32,
 }
 
 /// A player's blow on another player as the native hooks name it: the hit's
@@ -91,6 +95,9 @@ pub(super) struct Sweep {
     pub(super) hit_box: Aabb,
     /// The entity id of the player the sweep started from, which it spares.
     pub(super) skip: Option<i32>,
+    /// The weapon's `minecraft:ignite` (Fire Aspect) on each swept player, in
+    /// seconds (`doPostAttackEffects` after a sweep hit lands).
+    ignite: f32,
 }
 
 impl Strike {
@@ -151,6 +158,7 @@ impl Game<'_> {
             self.attack_item_info()
                 .map_or(0.0, |i| i.disable_blocking_seconds)
         };
+        let ignite = self.weapon_ignite_seconds();
         Some(Strike {
             attacker: self.lan_acting,
             amount,
@@ -164,7 +172,28 @@ impl Game<'_> {
             knockback_attack,
             team: self.player_team().cloned(),
             item: self.main_hand_custom_name(),
+            ignite,
         })
+    }
+
+    /// The held weapon's `minecraft:ignite` (Fire Aspect) seconds on a player
+    /// victim (`EnchantmentHelper.doPostAttackEffects`).
+    fn weapon_ignite_seconds(&mut self) -> f32 {
+        let Some(held) = self.held().cloned() else {
+            return 0.0;
+        };
+        let ctx = EffectContext {
+            this: Some("minecraft:player"),
+            attacker: Some("minecraft:player"),
+            direct_attacker: Some("minecraft:player"),
+            is_direct: true,
+            items: Some(world_items!(self)),
+            ..Default::default()
+        };
+        let mut random = self.world.random.clone();
+        world_stations!(self)
+            .enchantments
+            .ignite_seconds(held.enchantments(), &ctx, &mut random)
     }
 
     /// The guests by connection, with their entity ids.
@@ -284,7 +313,10 @@ impl Game<'_> {
                 .guest(conn)
                 .map(|a| (a.entity_id, self.player_text(&a.name, a.uuid)))
         });
+        let attacker_id = self.player.as_ref().map_or(0, |p| p.entity_id);
         let land = |g: &mut Self| {
+            let _attacker =
+                g.knockback_scope(attacker_note.as_ref().map_or(attacker_id, |(id, _)| *id));
             g.combat.player_attacker = Some((s.from, s.disable_blocking));
             if let Some((id, name)) = attacker_note.clone() {
                 g.note_player_attacker("minecraft:player_attack", id as u32, name, s.item.clone());
@@ -294,6 +326,14 @@ impl Game<'_> {
             let (strength, xd, zd) = s.knockback;
             if hurt && strength > 0.0 {
                 g.knock_back_player(f64::from(strength), xd, zd, PVP_SOURCE);
+            }
+            // Entity.igniteForSeconds on the victim: the fire timer only
+            // rises, and a fire-immune victim (no player is by type) is spared.
+            if hurt
+                && s.ignite > 0.0
+                && let Some(p) = g.player.as_mut()
+            {
+                let _ = p.ignite_for_ticks((s.ignite * 20.0) as i32);
             }
             // The victim's thorns, dealt to the attacker below.
             let thorns = if hurt { g.thorns_damage() } else { Vec::new() };
@@ -421,6 +461,7 @@ impl Game<'_> {
             team: self.player_team().cloned(),
             hit_box: Aabb::new(Vec3::ZERO, Vec3::ZERO),
             skip: None,
+            ignite: self.weapon_ignite_seconds(),
         }
     }
 
@@ -468,12 +509,21 @@ impl Game<'_> {
         }
         let (xd, zd) = sweep.knockback;
         let attacker = self.player_attacker(host, sweep.attacker);
+        let attacker_id = self.player.as_ref().map_or(0, |p| p.entity_id);
         let land = |g: &mut Self| {
+            let _attacker =
+                g.knockback_scope(attacker.as_ref().map_or(attacker_id, |(id, _)| *id as i32));
             if let Some((id, name)) = &attacker {
                 g.note_named_attacker("minecraft:player_attack", *id, name.clone());
             }
             if g.mob_hits_player(sweep.damage, sweep.from, "minecraft:player_attack") {
                 g.knock_back_player(0.4, xd, zd, PVP_SOURCE);
+                // EnchantmentHelper.doPostAttackEffects, after the knockback.
+                if sweep.ignite > 0.0
+                    && let Some(p) = g.player.as_mut()
+                {
+                    let _ = p.ignite_for_ticks((sweep.ignite * 20.0) as i32);
+                }
             }
         };
         for (victim, id, team) in victims {

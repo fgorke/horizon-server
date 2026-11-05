@@ -55,15 +55,16 @@ pub(super) struct Trip {
 /// dimension).
 trait Rideable {
     fn id(&self) -> u32;
-    /// The vehicle stands where its rider arrives, with no motion.
-    fn arrive(&mut self, at: Vec3, yaw: f32);
+    /// The vehicle stands where its rider arrives, with the motion it crossed
+    /// with (none for the kinds that keep none).
+    fn arrive(&mut self, at: Vec3, yaw: f32, motion: Vec3);
 }
 
 impl Rideable for Mob {
     fn id(&self) -> u32 {
         self.id
     }
-    fn arrive(&mut self, at: Vec3, yaw: f32) {
+    fn arrive(&mut self, at: Vec3, yaw: f32, _motion: Vec3) {
         self.position = at;
         self.previous = at;
         self.velocity = Vec3::ZERO;
@@ -77,7 +78,7 @@ impl Rideable for boats::Boat {
     fn id(&self) -> u32 {
         self.id
     }
-    fn arrive(&mut self, at: Vec3, yaw: f32) {
+    fn arrive(&mut self, at: Vec3, yaw: f32, _motion: Vec3) {
         self.position = at;
         self.previous = at;
         self.velocity = Vec3::ZERO;
@@ -91,10 +92,17 @@ impl Rideable for minecarts::Minecart {
     fn id(&self) -> u32 {
         self.id
     }
-    fn arrive(&mut self, at: Vec3, yaw: f32) {
+    fn arrive(&mut self, at: Vec3, yaw: f32, motion: Vec3) {
         self.position = at;
         self.previous = at;
-        self.velocity = Vec3::ZERO;
+        // `PositionMoveRotation.of(this)` takes the cart's `getKnownMovement`
+        // (`OldMinecartBehavior` clamps it to 0.4 either way along x and z):
+        // it rolls on at that speed instead of arriving at rest.
+        self.velocity = Vec3::new(
+            motion.x.clamp(-0.4, 0.4),
+            motion.y,
+            motion.z.clamp(-0.4, 0.4),
+        );
         self.yaw = yaw;
         self.previous_yaw = yaw;
     }
@@ -112,10 +120,16 @@ fn drop_hook(host: &mut LanHost, conn: u32) {
     }
 }
 
-fn take_vehicle<T: Rideable>(list: &mut Vec<T>, id: u32, at: Vec3, yaw: f32) -> Option<T> {
+fn take_vehicle<T: Rideable>(
+    list: &mut Vec<T>,
+    id: u32,
+    at: Vec3,
+    yaw: f32,
+    motion: Vec3,
+) -> Option<T> {
     let i = list.iter().position(|v| v.id() == id)?;
     let mut v = list.remove(i);
-    v.arrive(at, yaw);
+    v.arrive(at, yaw, motion);
     Some(v)
 }
 
@@ -126,6 +140,8 @@ pub(super) struct LevelTeleport {
     pub dim: Dim,
     pub at: [f64; 3],
     pub rotation: Option<[f32; 2]>,
+    /// `TeleportTransition.asPassenger`: the vehicle already moved with its tree.
+    pub vehicle: Option<u32>,
 }
 
 /// A teleport a command made inside a level: told to the mods once it has
@@ -319,7 +335,8 @@ impl Game<'_> {
         // EndGatewayBlock.entityInside: a gateway that is not cooling down
         // takes the player at once (no transition time) and cools down
         // (triggerCooldown), even for a player still on its own cooldown.
-        if let Some(g) = gateway
+        if !riding
+            && let Some(g) = gateway
             && self.gateway_available(g)
         {
             if self.portals.player.cooldown == 0 {
@@ -614,6 +631,7 @@ impl Game<'_> {
             dim: Dim::Overworld,
             at,
             rotation: None,
+            vehicle: None,
         });
         self.run_level_teleports(host);
         self.world_spawn_trip(conn);
@@ -793,14 +811,19 @@ impl Game<'_> {
     /// (`Entity.teleportCrossDimension` recreates the vehicle in the other
     /// dimension, and its passengers ride it again).
     fn arrive_vehicle(&mut self, source: Dim, id: u32, at: Vec3, yaw: f32) {
+        let motion = self
+            .portals
+            .carried_motion
+            .remove(&id)
+            .unwrap_or(Vec3::ZERO);
         let Some(parked) = self.levels.parked_mut(source) else {
             return;
         };
-        if let Some(b) = take_vehicle(&mut parked.boats, id, at, yaw) {
+        if let Some(b) = take_vehicle(&mut parked.boats, id, at, yaw, motion) {
             self.boats.push(b);
-        } else if let Some(c) = take_vehicle(&mut parked.carts, id, at, yaw) {
+        } else if let Some(c) = take_vehicle(&mut parked.carts, id, at, yaw, motion) {
             self.carts.push(c);
-        } else if let Some(m) = take_vehicle(&mut parked.mobs, id, at, yaw) {
+        } else if let Some(m) = take_vehicle(&mut parked.mobs, id, at, yaw, motion) {
             self.mobs.push(m);
         } else {
             return;
@@ -859,11 +882,22 @@ impl Game<'_> {
             let origin = g.position;
             // A new body there: no fall distance or motion carried over, but
             // the player's attributes (ServerPlayer.teleport keeps the entity).
-            g.new_body(true);
+            let passenger_body = if t.vehicle.is_some() {
+                g.motion.take()
+            } else {
+                g.new_body(true);
+                None
+            };
             let cooldown = host.play.get(&t.conn).map_or(0, |p| p.portal.cooldown);
             let ctx = self.server_ctx();
             host.hub
                 .change_level(i, t.at, yaw, Some(pitch), false, cooldown, &ctx);
+            let g = &mut host.hub.guests[i];
+            g.vehicle = t.vehicle;
+            if let Some(mut body) = passenger_body {
+                body.position = Vec3::new(t.at[0], t.at[1], t.at[2]);
+                g.motion = Some(body);
+            }
             self.as_guest(host, t.conn, |g| {
                 g.trigger_dimension(source, t.dim, origin);
                 // The mods hear the teleport into another level, with the
@@ -943,6 +977,24 @@ mod tests {
     use super::*;
     use std::sync::Arc;
 
+    /// A minecart a player rides through a portal rolls on at the motion it
+    /// crossed with, clamped to 0.4 along x and z (`PositionMoveRotation.of`
+    /// takes `OldMinecartBehavior.getKnownMovement`), not at rest. Vanilla
+    /// 26.3 sent the client a cart arriving with motion (0.4, 0, 0).
+    #[test]
+    fn a_minecart_a_player_rides_keeps_its_clamped_motion_through_a_portal() {
+        let mut carts = vec![minecarts::Minecart::new(
+            3,
+            minecarts::CartKind::Rideable,
+            Vec3::new(9.9, 100.0, 4.5),
+        )];
+        let at = Vec3::new(1.5, 100.0, 0.5);
+        let cart = take_vehicle(&mut carts, 3, at, 0.0, Vec3::new(1.6, -0.1, -0.7))
+            .expect("the cart travels");
+        assert_eq!(cart.position, at);
+        assert_eq!(cart.velocity, Vec3::new(0.4, -0.1, -0.4));
+    }
+
     /// The vehicle a player rides travels with it through a portal: it
     /// leaves the level the player came from, keeps its entity id (so the
     /// ride is never broken) and stands where its rider arrives
@@ -959,7 +1011,7 @@ mod tests {
         let mut carts: Vec<minecarts::Minecart> = Vec::new();
         let mut mobs: Vec<Mob> = Vec::new();
         let at = Vec3::new(1.5, 65.0, -2.5);
-        let boat = take_vehicle(&mut boats, 7, at, 90.0)
+        let boat = take_vehicle(&mut boats, 7, at, 90.0, Vec3::ZERO)
             .expect("the vehicle the player rides travels with it");
         assert!(
             boats.is_empty(),
@@ -970,9 +1022,9 @@ mod tests {
         assert_eq!(boat.yaw, 90.0, "it looks where its rider looks");
         assert_eq!(boat.velocity, Vec3::ZERO, "it comes with no motion");
         // A vehicle that is not in the level does not travel.
-        assert!(take_vehicle(&mut carts, 9, at, 0.0).is_none());
+        assert!(take_vehicle(&mut carts, 9, at, 0.0, Vec3::ZERO).is_none());
         assert!(carts.is_empty());
-        assert!(take_vehicle(&mut mobs, 9, at, 0.0).is_none());
+        assert!(take_vehicle(&mut mobs, 9, at, 0.0, Vec3::ZERO).is_none());
         assert!(mobs.is_empty());
     }
 }

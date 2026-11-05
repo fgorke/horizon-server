@@ -545,6 +545,9 @@ impl StationRecipes {
         // The data's recipe filters, over the final set.
         let filters = horizon_items::recipe_filters::RecipeFilters::load(root, overlay);
         sources.retain_mut(|(id, v)| conditions_hold(v) && filters.apply(id, v));
+        // Registration order, not the game's files before the packs': the
+        // stonecutter lists its recipes in it and smithing takes the first match.
+        sources.sort_by_cached_key(|(id, _)| crate::crafting::registration_key(id));
         let mut smithing = Vec::new();
         let mut stonecutting = Vec::new();
         for (id, v) in sources {
@@ -708,7 +711,7 @@ impl StationRecipes {
                 addition,
                 pattern,
                 ..
-            } if i == id => Some((&base.1, &addition.1, pattern)),
+            } if i == id => Some((&base.order, &addition.order, pattern)),
             _ => None,
         })?;
         if base.is_empty() || addition.is_empty() {
@@ -1041,14 +1044,49 @@ mod tests {
     fn smithing_ingredient_parses_holders() {
         let items = sample_items();
         let a = ingredient(&serde_json::json!("minecraft:diamond_sword"), &items);
-        assert_eq!(a.1, vec!["minecraft:diamond_sword"]);
+        assert_eq!(a.order, vec!["minecraft:diamond_sword"]);
         let b = ingredient(
             &serde_json::json!(["minecraft:diamond_sword", "minecraft:diamond_axe"]),
             &items,
         );
         assert_eq!(
-            b.1,
+            b.order,
             vec!["minecraft:diamond_sword", "minecraft:diamond_axe"]
+        );
+    }
+    /// A world pack's stonecutting recipe takes its place in registration
+    /// order (path, then namespace), not a place after the game's own.
+    #[test]
+    fn stonecutter_lists_recipes_in_registration_order() {
+        let root =
+            std::env::temp_dir().join(format!("horizon-stonecutter-order-{}", std::process::id()));
+        let dir = root.join("data/minecraft/recipe");
+        fs::create_dir_all(&dir).unwrap();
+        let cut = |result: &str| {
+            format!(
+                r#"{{"type":"minecraft:stonecutting","ingredient":"minecraft:stone","result":{{"id":"{result}"}}}}"#
+            )
+        };
+        fs::write(dir.join("z_cut.json"), cut("minecraft:stone_slab")).unwrap();
+        fs::write(dir.join("b_cut.json"), cut("minecraft:stone_bricks")).unwrap();
+        let packs = [(
+            "recipe/pack:a_cut".to_owned(),
+            vec![cut("minecraft:stone_stairs").into_bytes()],
+        )];
+        let recipes = StationRecipes::load(&root, &sample_items(), &PackOverlay { files: &packs });
+        let _ = fs::remove_dir_all(&root);
+        let listed: Vec<_> = recipes
+            .stonecutter(&ItemStack::new("minecraft:stone", 1))
+            .iter()
+            .map(|r| (r.id.as_str(), &*r.result.item))
+            .collect();
+        assert_eq!(
+            listed,
+            [
+                ("pack:a_cut", "minecraft:stone_stairs"),
+                ("minecraft:b_cut", "minecraft:stone_bricks"),
+                ("minecraft:z_cut", "minecraft:stone_slab"),
+            ]
         );
     }
 }

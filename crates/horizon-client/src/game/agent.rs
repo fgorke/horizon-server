@@ -348,6 +348,11 @@ impl Game<'_> {
         {
             v["sign"] = json!({ "front": sign.front.lines, "back": sign.back.lines });
         }
+        // A block a piston moves, as this client animates it: its own
+        // PistonMovingBlockEntity, which a block event's moveBlocks made.
+        if let Some((_, piston)) = self.world.moving_pistons.iter().find(|(p, _)| *p == pos) {
+            v["moving"] = json!({ "progress": piston.progress, "extending": piston.extending });
+        }
         v
     }
     pub(super) fn stack_value(&self, s: &ItemStack) -> Value {
@@ -665,6 +670,7 @@ impl Game<'_> {
                 json!({ "mode": "multiplayer", "disconnected": reason })
             }
             Mode::Multiplayer(_) => json!({ "mode": "multiplayer" }),
+            Mode::Realms(_) => json!({ "mode": "realms" }),
             Mode::MultiplayerWarning { check } => {
                 json!({ "mode": "multiplayer-warning", "check": check })
             }
@@ -1467,7 +1473,7 @@ impl Game<'_> {
             }
             "open-inventory" => {
                 self.playing()?;
-                self.key_pressed(KeyCode::KeyE)?;
+                self.key_pressed(KeyCode::KeyE, KeyCode::KeyE)?;
                 ok(json!({ "ok": true, "screen": self.screen_label() }))
             }
             "click-button" => {
@@ -1653,6 +1659,11 @@ impl Game<'_> {
                 if text.is_empty() {
                     return Err("command TEXT".into());
                 }
+                // A native mod's command first, as typed chat does; the
+                // server's console cannot run a client mod's command.
+                if self.client_mod_command(text) {
+                    return ok(json!({ "ok": true, "chat": self.ui.chat.recent_lines(5) }));
+                }
                 let command = format!("/{text}");
                 // Single player's console is its server thread's.
                 if let Some(server) = &self.integrated {
@@ -1696,7 +1707,7 @@ impl Game<'_> {
             }
             "pause" => {
                 self.playing()?;
-                self.key_pressed(KeyCode::Escape)?;
+                self.key_pressed(KeyCode::Escape, KeyCode::Escape)?;
                 ok(json!({ "ok": true, "screen": self.screen_label() }))
             }
             "wait" => {

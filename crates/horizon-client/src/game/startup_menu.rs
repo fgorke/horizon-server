@@ -284,7 +284,8 @@ impl StartupMenu {
                 return title.confirm_key_size(viewport).0;
             }
             PhysicalKey::Code(KeyCode::Space)
-                if title.list_focused() || title.focused_button.is_some() =>
+                if !title.has_caret_field()
+                    && (title.list_focused() || title.focused_button.is_some()) =>
             {
                 return title.confirm_key_size(viewport).0;
             }
@@ -535,6 +536,14 @@ impl Loading {
                     let _ = std::fs::create_dir_all(&dir);
                     packs::open_folder(&dir);
                 }
+                Event::DownloadPack(i) => {
+                    let dir = packs::packs_dir();
+                    if let Some(screen) = &mut self.menu.options.pack_screen
+                        && let Some(browser) = &mut screen.browser
+                    {
+                        browser.download(i, &dir, horizon_core::VANILLA_VERSION);
+                    }
+                }
                 Event::DataPacks(ids) => {
                     let resources = self.vanilla_root.clone();
                     if let Some(title) = &mut self.menu.title {
@@ -596,15 +605,28 @@ impl Loading {
                     self.settings.narrator(),
                     &mut self.menu.narrator_toast,
                 ),
+                // The startup menu has no screen stack for ConfirmLinkScreen;
+                // the link opens directly, as the menu's other links do.
+                Event::AccessibilityHelp => {
+                    super::packs::open_uri(super::options::ACCESSIBILITY_HELP_LINK)
+                }
                 // Mods' settings pages open only in a running game.
                 Event::NativeSettings(_) | Event::NativeButton(..) => {}
                 // The startup menu runs before the game opens a control socket,
-                // and before its sound engine (no clicks, no volume previews).
+                // and before its sound engine (no clicks, no volume previews,
+                // and no music tracks to list or play).
                 Event::ButtonClick
                 | Event::CopyAgentDetails
                 | Event::ToggleRecording
                 | Event::ExportRepro
+                | Event::ListMusicTracks
+                | Event::PlayMusicTrack(..)
                 | Event::Volume(..) => {}
+                Event::OpenStudioFolder => {
+                    let dir = std::path::PathBuf::from("recordings");
+                    let _ = std::fs::create_dir_all(&dir);
+                    packs::open_folder(&dir);
+                }
             }
         }
     }
@@ -665,6 +687,18 @@ impl Loading {
             right,
         );
         self.menu_option_events(events);
+    }
+
+    /// The Realms screen's join, once its address came back: queued like a click on a server.
+    pub(super) fn poll_menu_realms(&mut self, event_loop: &dyn EventLoopCtl) {
+        if let Some(action) = self
+            .menu
+            .title
+            .as_mut()
+            .and_then(Title::take_connect_request)
+        {
+            self.menu_action(event_loop, action);
+        }
     }
 
     fn menu_action(&mut self, event_loop: &dyn EventLoopCtl, action: Action) {
@@ -1184,6 +1218,7 @@ impl Loading {
                 batch,
                 self.menu.cursor,
                 self.settings.file.bool("hideSplashTexts"),
+                self.settings.file.bool("hideServerAddress"),
             );
         }
         if let Some(focus) = self.menu.key_focus

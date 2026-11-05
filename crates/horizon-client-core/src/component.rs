@@ -207,9 +207,11 @@ fn style_flag(v: Option<&Value>) -> Option<bool> {
     }
 }
 
-fn untrusted_http_url(url: &str) -> bool {
-    // ExtraCodecs.UNTRUSTED_URI / Util.parseAndValidateUntrustedUri: http and
-    // https only, scheme case-insensitive.
+/// ExtraCodecs.UNTRUSTED_URI / Util.parseAndValidateUntrustedUri: http and
+/// https only, scheme case-insensitive. Every `open_url` a server sends must
+/// pass it: anything else (`file:`, a UNC path, a custom protocol handler)
+/// could start a program through the system's URL handler.
+pub fn untrusted_http_url(url: &str) -> bool {
     url.split_once(':').is_some_and(|(scheme, _)| {
         scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https")
     })
@@ -264,10 +266,7 @@ fn parse_click_event(e: &serde_json::Map<String, Value>) -> Option<crate::text::
 fn object_style(o: &serde_json::Map<String, Value>) -> Style {
     let mut style = Style::default();
     if let Some(c) = o.get("color").and_then(Value::as_str) {
-        style.color = named_color(c).or_else(|| {
-            c.strip_prefix('#')
-                .and_then(|h| u32::from_str_radix(h, 16).ok())
-        });
+        style.color = named_color(c).or_else(|| hex_color(c));
     }
     style.shadow_color = o.get("shadow_color").and_then(shadow_color);
     style.bold = style_flag(o.get("bold"));
@@ -308,6 +307,13 @@ fn object_style(o: &serde_json::Map<String, Value>) -> Style {
         .and_then(Value::as_str)
         .map(str::to_owned);
     style
+}
+
+/// `TextColor.parseColor` for `#...`: `Integer.parseInt(rest, 16)` (so a sign
+/// and any digit count are accepted), kept only within `0..=0xFFFFFF`.
+pub(crate) fn hex_color(c: &str) -> Option<u32> {
+    let value = i64::from_str_radix(c.strip_prefix('#')?, 16).ok()?;
+    (0..=0xFF_FFFF).contains(&value).then_some(value as u32)
 }
 
 /// `Style.shadow_color`: a packed ARGB int or normalized RGBA array.
@@ -491,6 +497,33 @@ pub fn name_text(tag: &Tag) -> Text {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hex_color_follows_text_color_parse_color() {
+        for bad in [
+            "#1000000",
+            "#FFFFFFFF",
+            "#-FF",
+            "#",
+            "#zz",
+            "FFFFFF",
+            "#99999999999",
+        ] {
+            assert_eq!(hex_color(bad), None, "{bad}");
+        }
+        for (good, want) in [
+            ("#FFFFFF", 0xFFFFFF),
+            ("#000000", 0),
+            ("#F", 15),
+            ("#+FF", 255),
+            ("#-0", 0),
+        ] {
+            assert_eq!(hex_color(good), Some(want), "{good}");
+        }
+        let out = serde_json::json!({"text": "A", "color": "#1000000"});
+        let text = to_text(&out, &mut |_| Text::empty());
+        assert_eq!(text.spans[0].style.color, None);
+    }
 
     #[test]
     fn shadow_color_accepts_packed_and_rgba_styles() {

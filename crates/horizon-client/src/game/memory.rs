@@ -151,7 +151,7 @@ impl Game<'_> {
         });
         json!({
             "process": {
-                "resident_mb": horizon_threads::memory_limit::resident_bytes().map(mb),
+                "resident_mb": horizon_threads::process_memory::resident_bytes().map(mb),
                 "allocator_commit_mb": mb(commit),
                 "allocator_peak_commit_mb": mb(peak_commit),
             },

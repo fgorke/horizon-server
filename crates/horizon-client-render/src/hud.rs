@@ -96,6 +96,9 @@ pub struct HudAtlas {
     /// A resource pack's own `core/text` shader for the GUI's text, translated;
     /// none draws the text natively.
     pub text_shader: Option<std::sync::Arc<horizon_shaders::CoreProgram>>,
+    /// A resource pack's own `core/rendertype_lines` shader for the block outline, translated;
+    /// none draws the outline natively.
+    pub lines_shader: Option<std::sync::Arc<horizon_shaders::CoreProgram>>,
     /// The packs' OptiFine random entity textures, whose variants this atlas packs.
     pub random_textures: horizon_optifine::random_textures::RandomTextures,
     /// Their emissive overlays (`_e`), packed here too.
@@ -145,6 +148,126 @@ pub const TRIM_SLOTS: usize = 32;
 pub fn decode(path: &Path) -> Result<(u32, u32, Vec<u8>)> {
     decode_bytes(&horizon_core::prepared_files::read(path)?)
 }
+/// The image formats [`decode_image_bytes`] reads, told apart by their own
+/// leading bytes rather than by a file name: what a server sends has no name,
+/// and a name would not be trustworthy anyway.
+///
+/// The game's own resources are PNG throughout, and so are a resource pack's
+/// (vanilla's `NativeImage.read` takes PNG only), so [`decode_bytes`] stays
+/// PNG-only. WebP and JPEG are for images fetched from the network (Modrinth
+/// project icons in the resource pack browser), which are commonly either.
+enum ImageFormat {
+    Png,
+    /// `RIFF....WEBP`.
+    WebP,
+    /// Starts with the SOI marker `FF D8`.
+    Jpeg,
+}
+
+impl ImageFormat {
+    /// The format `data` begins with, or `None` for anything else.
+    fn sniff(data: &[u8]) -> Option<Self> {
+        const PNG_MAGIC: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+        if data.starts_with(&PNG_MAGIC) {
+            return Some(Self::Png);
+        }
+        if data.len() >= 12 && data.starts_with(b"RIFF") && &data[8..12] == b"WEBP" {
+            return Some(Self::WebP);
+        }
+        if data.starts_with(&[0xFF, 0xD8]) {
+            return Some(Self::Jpeg);
+        }
+        None
+    }
+}
+
+/// The most pixels a fetched image may claim: its header alone sizes the
+/// buffer, and a hostile one could ask for gigabytes. 4096 x 4096 RGBA is 64 MiB.
+const MAX_FETCHED_PIXELS: u64 = 4096 * 4096;
+
+fn check_fetched_size(width: u64, height: u64) -> Result<()> {
+    if width * height > MAX_FETCHED_PIXELS {
+        return Err(format!("a {width}x{height} image is too large to decode").into());
+    }
+    Ok(())
+}
+
+/// A WebP image as RGBA8. Still frames and animations both decode; an
+/// animation gives its first frame, as an animated PNG would.
+fn decode_webp(data: &[u8]) -> Result<(u32, u32, Vec<u8>)> {
+    let mut decoder =
+        image_webp::WebPDecoder::new(std::io::Cursor::new(data)).map_err(|e| e.to_string())?;
+    let (width, height) = decoder.dimensions();
+    check_fetched_size(u64::from(width), u64::from(height))?;
+    // Four bytes a pixel whether or not the image carries alpha: the caller
+    // always wants RGBA.
+    let mut rgba = vec![0u8; (width as usize) * (height as usize) * 4];
+    if decoder.has_alpha() {
+        decoder.read_image(&mut rgba).map_err(|e| e.to_string())?;
+    } else {
+        let mut rgb = vec![0u8; (width as usize) * (height as usize) * 3];
+        decoder.read_image(&mut rgb).map_err(|e| e.to_string())?;
+        for (out, pixel) in rgba
+            .as_chunks_mut::<4>()
+            .0
+            .iter_mut()
+            .zip(rgb.as_chunks::<3>().0)
+        {
+            out.copy_from_slice(&[pixel[0], pixel[1], pixel[2], 255]);
+        }
+    }
+    Ok((width, height, rgba))
+}
+
+/// A JPEG image as RGBA8. JPEG has no alpha, so every pixel is opaque.
+fn decode_jpeg(data: &[u8]) -> Result<(u32, u32, Vec<u8>)> {
+    let mut decoder = zune_jpeg::JpegDecoder::new(data);
+    // The size comes from the headers, before any pixel buffer is made.
+    decoder.decode_headers().map_err(|e| e.to_string())?;
+    let info = decoder.info().ok_or("the JPEG states no size")?;
+    let (width, height) = (u32::from(info.width), u32::from(info.height));
+    check_fetched_size(u64::from(width), u64::from(height))?;
+    let pixels = decoder.decode().map_err(|e| e.to_string())?;
+    let count = (width as usize) * (height as usize);
+    // The decoder gives RGB for a colour image and one byte a pixel for a
+    // greyscale one; both become RGBA here.
+    let channels = pixels.len().checked_div(count).unwrap_or(0);
+    let mut rgba = Vec::with_capacity(count * 4);
+    match channels {
+        3 => {
+            for p in pixels.as_chunks::<3>().0 {
+                rgba.extend_from_slice(&[p[0], p[1], p[2], 255]);
+            }
+        }
+        1 => {
+            for p in &pixels {
+                rgba.extend_from_slice(&[*p, *p, *p, 255]);
+            }
+        }
+        _ => return Err("the JPEG decoded to an unexpected channel count".into()),
+    }
+    Ok((width, height, rgba))
+}
+
+/// An image fetched from the network (PNG, WebP or JPEG) as RGBA pixels. WebP
+/// and JPEG go to their own decoders; anything else goes to the PNG reader, so
+/// its error is the one reported.
+pub fn decode_image_bytes(data: &[u8]) -> Result<(u32, u32, Vec<u8>)> {
+    match ImageFormat::sniff(data) {
+        Some(ImageFormat::WebP) => decode_webp(data),
+        Some(ImageFormat::Jpeg) => decode_jpeg(data),
+        // A PNG's IHDR states the size before the decoder sizes its pixel
+        // buffer, so it is checked there like the WebP and JPEG headers: the
+        // PNG reader alone would trust the header and allocate it.
+        Some(ImageFormat::Png) | None => {
+            if let Some((width, height)) = png_bytes_size(data) {
+                check_fetched_size(u64::from(width), u64::from(height))?;
+            }
+            decode_bytes(data)
+        }
+    }
+}
+
 /// A PNG in memory as RGBA pixels.
 pub fn decode_bytes(data: &[u8]) -> Result<(u32, u32, Vec<u8>)> {
     let mut decoder = png::Decoder::new(std::io::Cursor::new(data));
@@ -193,15 +316,19 @@ fn within_budget(files: &[&PathBuf], budget: u64) -> HashSet<PathBuf> {
         .map(|p| (*p).clone())
         .collect()
 }
+/// A PNG's width and height from its first 24 bytes (`IHDR`), before any
+/// pixel buffer is made.
+fn png_bytes_size(data: &[u8]) -> Option<(u32, u32)> {
+    let header = data.get(..24)?;
+    if header[..8] != *b"\x89PNG\r\n\x1a\n" || header[12..16] != *b"IHDR" {
+        return None;
+    }
+    let field = |at: usize| u32::from_be_bytes(header[at..at + 4].try_into().unwrap_or_default());
+    Some((field(16), field(20)))
+}
 /// A PNG's width and height, from its header alone.
 fn png_size(path: &Path) -> Option<(u32, u32)> {
-    let header: [u8; 24] = horizon_core::prepared_files::read_head(path, 24)
-        .ok()?
-        .try_into()
-        .ok()?;
-    let field = |at: usize| u32::from_be_bytes(header[at..at + 4].try_into().unwrap_or_default());
-    (header[..8] == *b"\x89PNG\r\n\x1a\n" && header[12..16] == *b"IHDR")
-        .then(|| (field(16), field(20)))
+    png_bytes_size(&horizon_core::prepared_files::read_head(path, 24).ok()?)
 }
 fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
     // A prepared root's folder: from its data file, without listing the disk.
@@ -483,15 +610,16 @@ fn atlas_sprites(root: &Path, packed: &[PackedImage]) -> (Vec<PackedImage>, Vec<
                     let path = texture.split_once(':').map_or(texture.as_str(), |(_, p)| p);
                     let file = atlas_sources::texture_path(root, texture, "textures");
                     decode(&file).ok().map(|image| {
-                        // Animated strips keep their first frame and animate,
-                        // like the packed files.
-                        if path.starts_with("block/") || path.starts_with("item/") {
-                            let mcmeta = horizon_core::prepared_files::read_to_string(
-                                &file.with_extension("png.mcmeta"),
-                            )
-                            .ok();
-                            let animation = animation_of(mcmeta.as_deref());
-                            animated = animation.is_some();
+                        // Animated strips keep their first frame and animate, like the
+                        // packed files, under any folder: vanilla animates every sprite of
+                        // these atlases (a server pack's `wynn/...` as well as `item/...`).
+                        let mcmeta = horizon_core::prepared_files::read_to_string(
+                            &file.with_extension("png.mcmeta"),
+                        )
+                        .ok();
+                        let animation = animation_of(mcmeta.as_deref());
+                        animated = animation.is_some();
+                        if animated || path.starts_with("block/") || path.starts_with("item/") {
                             first_frame(image, animation.as_ref())
                         } else {
                             image
@@ -681,10 +809,10 @@ impl HudAtlas {
         let g = self.font.glyph(ch);
         g.rect.map(|rect| (rect, g.advance))
     }
-    /// A font glyph's atlas cell (none for blank glyphs such as the space) and advance.
-    pub fn glyph_cell(&self, ch: char) -> (Option<Rect>, f32) {
-        let g = self.font.glyph(ch);
-        (g.rect, g.advance)
+    /// A font glyph in the default font: its atlas cell (none for blank
+    /// glyphs such as the space), its box and advance.
+    pub fn glyph_cell(&self, ch: char) -> crate::font::Glyph {
+        self.font.glyph(ch)
     }
     pub fn build(root: &Path) -> Result<Self> {
         Self::build_over(root, root)
@@ -701,6 +829,13 @@ impl HudAtlas {
     pub fn build_over_with_image(root: &Path, defaults: &Path, mod_image: bool) -> Result<Self> {
         let mut atlas = Self::pack(root, defaults, WALKED_TEXTURE_FOLDERS, true, mod_image)?;
         atlas.text_shader = pack_text::load(root, defaults);
+        atlas.lines_shader = pack_text::load_core(
+            root,
+            defaults,
+            "rendertype_lines",
+            &[],
+            &crate::gfx::core_lines::GLUE,
+        );
         Ok(atlas)
     }
     /// Empty slots written at run time: map textures (game/maps.rs), the
@@ -765,13 +900,39 @@ impl HudAtlas {
         ));
     }
     /// Only the font's metrics, for a game that draws nothing (the
-    /// integrated server): text measures as with the full atlas, without
-    /// holding its textures. The pixels are dropped once the glyph widths are
-    /// read, since nothing uploads them.
+    /// integrated or dedicated server): text measures as with the full atlas,
+    /// without packing textures or rasterizing glyphs.
     pub fn fonts(root: &Path) -> Result<Self> {
-        let mut atlas = Self::pack(root, root, &["font"], false, false)?;
-        atlas.pixels = Vec::new();
-        Ok(atlas)
+        let white = Rect {
+            u0: 0.0,
+            v0: 0.0,
+            u1: 1.0,
+            v1: 1.0,
+            w: 1,
+            h: 1,
+        };
+        Ok(Self {
+            revision: Self::next_revision(),
+            pixels: Vec::new(),
+            packed: None,
+            galactic_widths: [0; 128],
+            width: 1,
+            height: 1,
+            sprites: HashMap::new(),
+            object_skins: HashMap::new(),
+            translucent: HashSet::new(),
+            flags: HashMap::new(),
+            sprite_animations: Vec::new(),
+            font: crate::font::Font::metrics(root),
+            glint: (Vec::new(), 1, 1),
+            glint_armor: (Vec::new(), 1, 1),
+            text_shader: None,
+            lines_shader: None,
+            random_textures: Default::default(),
+            emissive: Arc::default(),
+            blinks: Default::default(),
+            white,
+        })
     }
     /// The boot screen's atlas, before any pack loads: the theme's run-time
     /// glyphs (`horizon/ui-text`), a white sprite and the glyph rows over
@@ -829,6 +990,7 @@ impl HudAtlas {
             glint_armor: (vec![0; 4], 1, 1),
             white,
             text_shader: None,
+            lines_shader: None,
             random_textures: Default::default(),
             emissive: Default::default(),
             blinks: Default::default(),
@@ -966,7 +1128,7 @@ impl HudAtlas {
         }
         files.retain(|p| {
             let s = p.to_string_lossy();
-            !s.contains("title/background") && !s.contains("realms") && !s.contains("presets")
+            !s.contains("title/background") && !s.contains("presets")
         });
         // OptiFine random entity variants, under the names their scan gives them (those
         // outside `textures/` are `<ns>:optifine/random/...`).
@@ -1151,6 +1313,12 @@ impl HudAtlas {
             edition.3 = pixels;
         }
         images.push(("horizon/white".into(), 4, 4, vec![255; 64]));
+        images.push((
+            crate::pad_cursor::SPRITE.into(),
+            crate::pad_cursor::SIZE,
+            crate::pad_cursor::SIZE,
+            crate::pad_cursor::pixels(),
+        ));
         if full {
             Self::slots(&mut images, crate::trims::slot_size(root), mod_image);
             // MissingTextureAtlasSprite.generateMissingImage: 16x16, magenta
@@ -1272,6 +1440,7 @@ impl HudAtlas {
             glint,
             glint_armor,
             text_shader: None,
+            lines_shader: None,
             random_textures,
             emissive,
             blinks,
@@ -1359,6 +1528,8 @@ pub struct HudBatch {
     pub end_portal: EndPortalFill,
     /// `options.glintStrength` for the glint pass (`GlintAlpha`).
     pub glint_alpha: f32,
+    /// PvP & HUD's glint colour (`pvp::Tweaks::glint_texel`), 0 for vanilla's.
+    pub glint_colour: u32,
     /// A resource pack text shader's `GameTime`: the day's fraction
     /// (`gameTime % 24000` and the partial tick, over 24000).
     pub game_time: f32,
@@ -1419,6 +1590,7 @@ impl HudBatch {
             blends: Vec::new(),
             end_portal: EndPortalFill::default(),
             glint_alpha: 0.75,
+            glint_colour: 0,
             game_time: 0.0,
             blur_at: 0,
             inline_profiles: Vec::new(),
@@ -1768,7 +1940,7 @@ impl HudBatch {
         color: u32,
         shadow: bool,
     ) -> f32 {
-        self.styled_text(atlas, text, x, y, color, shadow, false)
+        self.styled_text(atlas, text, x, y, color, shadow, false, None)
     }
     /// `text_styled` for text drawn in the world (`TextRenderable.render`
     /// with `flat` false): each quad's `depth` is its z in text units, the
@@ -1784,7 +1956,42 @@ impl HudBatch {
         color: u32,
         shadow: bool,
     ) -> f32 {
-        self.styled_text(atlas, text, x, y, color, shadow, true)
+        self.styled_text(atlas, text, x, y, color, shadow, true, None)
+    }
+    /// `Font.drawInBatch8xOutline`: eight glyph offsets in the outline color,
+    /// then the original text. Returns (advance, first front-text vertex), so
+    /// world rendering can use POLYGON_OFFSET for the front and NORMAL for
+    /// its outline. Offsets use each glyph's own shadow offset (unihex: 0.5).
+    pub fn text_styled_outline_world(
+        &mut self,
+        atlas: &HudAtlas,
+        text: &crate::text::Text,
+        x: f32,
+        y: f32,
+        color: u32,
+        outline: u32,
+    ) -> (f32, usize) {
+        for dx in -1..=1 {
+            for dy in -1..=1 {
+                if dx != 0 || dy != 0 {
+                    self.styled_text(
+                        atlas,
+                        text,
+                        x,
+                        y,
+                        color,
+                        false,
+                        true,
+                        Some((outline, [dx as f32, dy as f32])),
+                    );
+                }
+            }
+        }
+        let front = self.vertices.len();
+        (
+            self.styled_text(atlas, text, x, y, color, false, true, None),
+            front,
+        )
     }
     #[allow(clippy::too_many_arguments)]
     fn styled_text(
@@ -1796,6 +2003,7 @@ impl HudBatch {
         color: u32,
         shadow: bool,
         world: bool,
+        outline: Option<(u32, [f32; 2])>,
     ) -> f32 {
         // StringDecomposer.iterateFormatted inside Font.drawInternal:
         // `§` codes inside a span restyle what follows and are not drawn.
@@ -1863,10 +2071,11 @@ impl HudBatch {
         }
         self.patches.extend(font.take_patches());
         let white = font.white();
-        let has_shadow = shadow
-            || glyphs
-                .iter()
-                .any(|glyph| glyph.3.is_some_and(|color| color != 0));
+        let has_shadow = outline.is_none()
+            && (shadow
+                || glyphs
+                    .iter()
+                    .any(|glyph| glyph.3.is_some_and(|color| color != 0)));
         let passes: &[bool] = if has_shadow { &[true, false] } else { &[false] };
         // ARGB.scaleRGB(color, 0.25): the default shadow colour.
         let shade = |c: u32| {
@@ -1901,8 +2110,9 @@ impl HudBatch {
                 } else {
                     shade(*c)
                 };
-                let has_shadow = (custom_shadow.is_some_and(|argb| argb != 0)
-                    || custom_shadow.is_none() && shadow)
+                let has_shadow = outline.is_none()
+                    && (custom_shadow.is_some_and(|argb| argb != 0)
+                        || custom_shadow.is_none() && shadow)
                     && !(world && shadow_color == 0);
                 if is_shadow && !has_shadow {
                     continue;
@@ -1912,7 +2122,11 @@ impl HudBatch {
                 } else {
                     (0.0, *c)
                 };
-                let (px, py) = (*gx + dx, y + dx);
+                let (px, py, col) = if let Some((color, [dx, dy])) = outline {
+                    (*gx + dx * g.offset, y + dy * g.offset, color)
+                } else {
+                    (*gx + dx, y + dx, col)
+                };
                 if let Some(object) = object {
                     // `PlainTextRenderable.render`: sprite glyphs use the same
                     // shadow colour and offset as text, with the front at SHADOW_DEPTH.
@@ -2099,13 +2313,19 @@ struct HudUniform {
     end_portal: [[f32; 4]; 3],
 }
 impl HudUniform {
-    fn new(size: [f32; 4], fill: EndPortalFill) -> Self {
+    fn new(size: [f32; 4], fill: EndPortalFill, glint_colour: u32) -> Self {
+        let [r, g, b, _] = glint_colour.to_le_bytes().map(|c| f32::from(c) / 255.0);
+        let tint = if glint_colour == 0 {
+            [-1.0, 0.0, 0.0]
+        } else {
+            [r, g, b]
+        };
         Self {
             size,
             end_portal: [
                 fill.sprites[0],
                 fill.sprites[1],
-                [fill.game_time, 0.0, 0.0, 0.0],
+                [fill.game_time, tint[0], tint[1], tint[2]],
             ],
         }
     }
@@ -2162,7 +2382,7 @@ impl HudRenderer {
         });
         let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("HUD size"),
-            contents: bytemuck::bytes_of(&HudUniform::new([1.0; 4], EndPortalFill::default())),
+            contents: bytemuck::bytes_of(&HudUniform::new([1.0; 4], EndPortalFill::default(), 0)),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -2535,6 +2755,7 @@ impl HudRenderer {
                     batch.glint_alpha,
                 ],
                 batch.end_portal,
+                batch.glint_colour,
             )),
         );
         if let Some(pack_text) = &self.pack_text {
@@ -2723,6 +2944,78 @@ mod tests {
     }
 
     #[test]
+    fn image_formats_are_told_apart_by_their_leading_bytes() {
+        let png = [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0, 0];
+        assert!(matches!(ImageFormat::sniff(&png), Some(ImageFormat::Png)));
+        // RIFF with a WEBP tag at byte 8; RIFF alone is not enough (WAV is
+        // RIFF too).
+        let mut webp = b"RIFF    WEBPVP8 ".to_vec();
+        assert!(matches!(ImageFormat::sniff(&webp), Some(ImageFormat::WebP)));
+        webp[8..12].copy_from_slice(b"WAVE");
+        assert!(ImageFormat::sniff(&webp).is_none());
+        assert!(matches!(
+            ImageFormat::sniff(&[0xFF, 0xD8, 0xFF, 0xE0]),
+            Some(ImageFormat::Jpeg)
+        ));
+        // Too short to be any of them, and plainly something else.
+        assert!(ImageFormat::sniff(b"RIFF").is_none());
+        assert!(ImageFormat::sniff(b"").is_none());
+        assert!(ImageFormat::sniff(b"<html>").is_none());
+    }
+
+    #[test]
+    fn a_fetched_image_may_not_claim_more_than_4096_squared() {
+        assert!(check_fetched_size(4096, 4096).is_ok());
+        assert!(check_fetched_size(4097, 4096).is_err());
+        assert!(check_fetched_size(16_383, 16_383).is_err());
+    }
+
+    /// A fetched PNG is refused by the size its own header claims, before the
+    /// reader makes the pixel buffer: a few hundred bytes of payload would
+    /// otherwise ask for 64 MiB or much more.
+    #[test]
+    fn a_fetched_png_is_refused_by_the_size_its_header_claims() {
+        let mut encoded = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(&mut encoded, 2, 2);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            let mut writer = encoder.write_header().unwrap();
+            writer.write_image_data(&[7; 16]).unwrap();
+            writer.finish().unwrap();
+        }
+        assert!(matches!(
+            ImageFormat::sniff(&encoded),
+            Some(ImageFormat::Png)
+        ));
+        assert_eq!(
+            decode_image_bytes(&encoded).expect("a small PNG decodes").0,
+            2
+        );
+
+        // The same image, its IHDR claiming one pixel row past the limit: the
+        // CRC is ignored on purpose, so this stands in for a hostile header.
+        let ihdr = encoded.windows(4).position(|w| w == b"IHDR").expect("IHDR");
+        encoded[ihdr + 4..ihdr + 8].copy_from_slice(&4097u32.to_be_bytes());
+        encoded[ihdr + 8..ihdr + 12].copy_from_slice(&4096u32.to_be_bytes());
+        let refused = decode_image_bytes(&encoded).expect_err("the size is refused");
+        assert!(
+            refused.to_string().contains("too large to decode"),
+            "{refused}"
+        );
+    }
+
+    /// Only the network path reads WebP and JPEG: a resource pack's texture
+    /// stays PNG-only, as vanilla's `NativeImage.read` is.
+    #[test]
+    fn decode_bytes_stays_png_only() {
+        let jpeg = [0xFF, 0xD8, 0xFF, 0xE0, 0, 0x10];
+        assert!(decode_bytes(&jpeg).is_err());
+        let webp = b"RIFF\x00\x00\x00\x00WEBPVP8 ";
+        assert!(decode_bytes(webp).is_err());
+    }
+
+    #[test]
     fn decode_bytes_ignores_crc_checksum_error() {
         let mut encoded = Vec::new();
         {
@@ -2754,6 +3047,24 @@ mod tests {
         assert_eq!(w, 2);
         assert_eq!(h, 2);
         assert_eq!(rgba.len(), 16);
+    }
+
+    #[test]
+    fn decode_bytes_ignores_a_bad_ihdr_checksum() {
+        let mut encoded = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(&mut encoded, 2, 2);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            let mut writer = encoder.write_header().unwrap();
+            writer.write_image_data(&[7; 16]).unwrap();
+            writer.finish().unwrap();
+        }
+        // The IHDR chunk's CRC is the 4 bytes after its 13 data bytes.
+        let ihdr = encoded.windows(4).position(|w| w == b"IHDR").unwrap();
+        encoded[ihdr + 4 + 13] ^= 0xFF;
+        let (w, h, rgba) = decode_bytes(&encoded).expect("a bad IHDR CRC decodes, as stb_image's");
+        assert_eq!((w, h, rgba.len()), (2, 2, 16));
     }
 
     #[test]
@@ -2829,8 +3140,14 @@ mod tests {
     }
     /// A resource root holding one animated block texture: a strip of two
     /// 16x16 frames, red then blue, whose mcmeta starts on the blue one.
+    /// Each call gets its own folder: tests run side by side, and one adds
+    /// a strip of its own that another would otherwise find.
     fn animated_root() -> PathBuf {
-        let root = std::env::temp_dir().join(format!("horizon-atlas-anim-{}", std::process::id()));
+        static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let root =
+            std::env::temp_dir().join(format!("horizon-atlas-anim-{}-{n}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
         let block = root.join("assets/minecraft/textures/block");
         fs::create_dir_all(&block).unwrap();
         write_strip(
@@ -3138,6 +3455,45 @@ mod tests {
             .find(|(r, _)| r.u0 == rect.u0 && r.v0 == rect.v0)
             .expect("the namespaced sprite animates");
         assert_eq!(animation.frame_count(), 2);
+    }
+    #[test]
+    fn an_animated_texture_outside_item_folders_packs_its_first_frame_and_animates() {
+        let root =
+            std::env::temp_dir().join(format!("horizon-atlas-dir-anim-{}", std::process::id()));
+        let atlases = root.join("assets/minecraft/atlases");
+        let custom = root.join("assets/minecraft/textures/custom");
+        fs::create_dir_all(&atlases).unwrap();
+        fs::create_dir_all(&custom).unwrap();
+        fs::write(
+            atlases.join("items.json"),
+            r#"{"sources": [{"type": "directory", "source": "custom", "prefix": "custom/"}]}"#,
+        )
+        .unwrap();
+        // A server pack's item under its own folder: two 16x16 frames, blue then yellow, and
+        // a still 16x32 texture beside it.
+        write_strip(
+            &custom.join("gem.png"),
+            16,
+            32,
+            &[[0, 0, 255, 255], [255, 255, 0, 255]],
+            Some(r#"{"animation": {"frametime": 20}}"#),
+        );
+        write_strip(&custom.join("banner.png"), 16, 32, &[[9, 9, 9, 255]], None);
+        let atlas = HudAtlas::build(&root).unwrap();
+        let _ = fs::remove_dir_all(&root);
+        let rect = atlas.sprites["custom/gem"];
+        // One frame, not the whole strip squeezed into a slot.
+        assert_eq!(rect.texels((atlas.width, atlas.height)), (16, 16));
+        assert_eq!(texel_at(&atlas, rect, 0, 15), [0, 0, 255, 255]);
+        let (_, animation) = atlas
+            .sprite_animations
+            .iter()
+            .find(|(r, _)| r.u0 == rect.u0 && r.v0 == rect.v0)
+            .expect("the sprite animates");
+        assert_eq!(animation.frame_count(), 2);
+        // A still texture there stays whole, as vanilla stitches it.
+        let banner = atlas.sprites["custom/banner"];
+        assert_eq!(banner.texels((atlas.width, atlas.height)), (16, 32));
     }
     /// A resource root with one plain item texture and these CIT files (relative path, contents).
     fn cit_root(name: &str, files: &[(&str, &str)]) -> PathBuf {
@@ -3552,6 +3908,44 @@ texture=wide",
         assert_eq!(fonts.font.width("abba"), width);
     }
     #[test]
+    fn outlined_world_text_keeps_font_metrics_and_overrides_outline_color() {
+        let root = two_glyph_font("world-outline");
+        let atlas = HudAtlas::build(&root).unwrap();
+        let _ = fs::remove_dir_all(&root);
+        let mut batch = HudBatch::new([1, 1]);
+        let text = crate::text::Text::colored("ab", 0xff0000);
+        let outline = rgba(1, 2, 3, 128);
+        let (advance, front) =
+            batch.text_styled_outline_world(&atlas, &text, 10.0, 20.0, u32::MAX, outline);
+        assert_eq!((advance, front, batch.vertices.len()), (10.0, 96, 108));
+        assert!(batch.vertices[..front].iter().all(|v| v.color == outline));
+        assert!(
+            batch.vertices[front..]
+                .iter()
+                .all(|v| v.color == rgba(255, 0, 0, 255))
+        );
+        // Eight independently offset silhouettes, retaining both glyphs and
+        // the bitmap font's advance (a=4, b=6); front text has no shadow.
+        for (i, [dx, dy]) in [
+            [-1.0, -1.0],
+            [-1.0, 0.0],
+            [-1.0, 1.0],
+            [0.0, -1.0],
+            [0.0, 1.0],
+            [1.0, -1.0],
+            [1.0, 0.0],
+            [1.0, 1.0],
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let at = batch.vertices[i * 12].pos;
+            let main = batch.vertices[front].pos;
+            assert_eq!(at, [main[0] + dx, main[1] + dy]);
+            assert_eq!(batch.vertices[i * 12 + 6].pos[0] - at[0], 4.0);
+        }
+    }
+    #[test]
     fn obfuscated_glyphs_keep_the_width() {
         let root = two_glyph_font("obfuscated");
         let fonts = HudAtlas::fonts(&root).unwrap();
@@ -3914,6 +4308,7 @@ texture=wide",
                 blends: Vec::new(),
                 end_portal: EndPortalFill::default(),
                 glint_alpha: 0.75,
+                glint_colour: 0,
                 game_time: 0.0,
                 blur_at: 0,
                 inline_profiles: Vec::new(),
