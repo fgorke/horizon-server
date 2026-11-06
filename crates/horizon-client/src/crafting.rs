@@ -276,6 +276,29 @@ pub struct Template {
     /// Result patch before decoding defaults, including explicit removals/zeroes.
     pub components: Option<Tag>,
 }
+/// A component patch with its keys whole: `custom_name` is `minecraft:custom_name`, and
+/// `!custom_name` removes it.
+fn namespaced_keys(components: &Value) -> Value {
+    let Some(entries) = components.as_object() else {
+        return components.clone();
+    };
+    Value::Object(
+        entries
+            .iter()
+            .map(|(key, value)| {
+                let (bang, name) = key
+                    .strip_prefix('!')
+                    .map_or(("", key.as_str()), |name| ("!", name));
+                let whole = if name.contains(':') {
+                    key.clone()
+                } else {
+                    format!("{bang}minecraft:{name}")
+                };
+                (whole, value.clone())
+            })
+            .collect(),
+    )
+}
 /// `ItemStackTemplate.CODEC` count: absent means 1, present must be an
 /// integer in `1..=99` (`ExtraCodecs.intRange(1, 99)`), else the recipe is
 /// not loaded.
@@ -290,7 +313,7 @@ pub(crate) fn template_count(v: &Value) -> Option<u32> {
 }
 impl Template {
     pub(crate) fn parse(v: &Value) -> Option<Self> {
-        let components = v.get("components").map(json_tag);
+        let components = v.get("components").map(|c| json_tag(&namespaced_keys(c)));
         let (damage, extra) = crate::item_data::decode_components(components.as_ref());
         Some(Self {
             item: horizon_world::loot::recipe_result_id(v).map(Arc::from),

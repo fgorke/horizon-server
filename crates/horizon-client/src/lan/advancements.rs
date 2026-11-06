@@ -884,6 +884,41 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// The stonecutter's list draws what the recipe makes: its components too, under bare keys
+    /// as packs write them.
+    #[test]
+    fn update_recipes_sends_a_stonecutter_results_components() {
+        let cut = r#"{"type":"minecraft:stonecutting","ingredient":"minecraft:raw_copper",
+            "result":{"id":"minecraft:copper_ingot","count":8,"components":{
+                "custom_name":{"text":"Mini"},
+                "note_block_sound":"minecraft:block.grass.hit",
+                "profile":{"properties":[{"name":"textures","value":"SKINVALUE"}]}}}}"#;
+        let root = resources("stonecutter_components", &[("mini", cut)]);
+        let sync = SyncData::load(&root, &horizon_world::loot::PackOverlay::NONE).unwrap();
+        let mut r = Reader::new(&sync.recipes);
+        for _ in 0..r.varint().unwrap() {
+            r.string(64).unwrap();
+            for _ in 0..r.varint().unwrap() {
+                r.varint().unwrap();
+            }
+        }
+        assert_eq!(r.varint().unwrap(), 1);
+        let inputs = r.varint().unwrap();
+        for _ in 1..inputs {
+            r.varint().unwrap();
+        }
+        r.varint().unwrap(); // the slot display's type
+        assert_eq!(
+            r.varint().unwrap(),
+            sync.id("minecraft:item", "minecraft:copper_ingot").unwrap()
+        );
+        assert_eq!(r.varint().unwrap(), 8);
+        assert_eq!(r.varint().unwrap(), 2, "the name and the profile");
+        assert_eq!(r.varint().unwrap(), 0);
+        let has = |what: &[u8]| sync.recipes.windows(what.len()).any(|w| w == what);
+        assert!(has(b"Mini") && has(b"textures") && has(b"SKINVALUE"));
+    }
+
     /// The stonecutter's recipes go out in registration order (path, then
     /// namespace): a guest's button picks by position in the host's list,
     /// which keeps that order too.

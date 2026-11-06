@@ -1,0 +1,32 @@
+# Everyone's tab list gets the header and footer, again when someone joins or leaves.
+
+[[step]]
+join = "Alex"
+ticks = 1
+expect.tab-list = ["Alex: \n<gradient:#7DD3FC:#2563EB>&lServer</gradient>\n | \n&7Online: &f1\n"]
+
+[[step]]
+ticks = 1
+expect.tab-list = []
+
+[[step]]
+join = "Sam"
+ticks = 1
+expect.tab-list = [
+    "Alex: \n<gradient:#7DD3FC:#2563EB>&lServer</gradient>\n | \n&7Online: &f2\n",
+    "Sam: \n<gradient:#7DD3FC:#2563EB>&lServer</gradient>\n | \n&7Online: &f2\n",
+]
+
+# A step's leave comes after its ticks: the next tick shows it.
+[[step]]
+leave = "Sam"
+expect.tab-list = []
+
+[[step]]
+ticks = 1
+expect.tab-list = ["Alex: \n<gradient:#7DD3FC:#2563EB>&lServer</gradient>\n | \n&7Online: &f1\n"]
+
+# And again every five seconds, for whoever missed it.
+[[step]]
+ticks = 96
+expect.tab-list = ["Alex: \n<gradient:#7DD3FC:#2563EB>&lServer</gradient>\n | \n&7Online: &f1\n"]

@@ -518,6 +518,8 @@ pub struct Expect {
     /// `players.broadcast`, in order.
     told: Option<Vec<String>>,
     broadcast: Option<Vec<String>>,
+    /// Server mods: every `players.set-tab-list` as `"Name: header | footer"`, in order.
+    tab_list: Option<Vec<String>>,
     /// Server mods: every `players.action-bar` as `"Name: text"`, in order.
     action_bar: Option<Vec<String>>,
     /// Server mods: every `players.teleport` as `"Name: dimension x y z"`, in
@@ -840,6 +842,20 @@ impl Step {
                 }
             }
         }
+        let tab_list: Vec<String> = out
+            .iter()
+            .filter_map(|o| match o {
+                Output::TabList {
+                    player,
+                    header,
+                    footer,
+                } => Some(format!(
+                    "{}: {header} | {footer}",
+                    name(&game.players, player)
+                )),
+                _ => None,
+            })
+            .collect();
         let action_bar: Vec<String> = out
             .iter()
             .filter_map(|o| match o {
@@ -971,6 +987,9 @@ impl Step {
                 })
                 .collect();
             same("broadcast", want, &got)?;
+        }
+        if let Some(want) = &e.tab_list {
+            same("tab-list", want, &tab_list)?;
         }
         if let Some(want) = &e.action_bar {
             same("action-bar", want, &action_bar)?;

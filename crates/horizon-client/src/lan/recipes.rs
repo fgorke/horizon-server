@@ -286,13 +286,16 @@ pub fn update_recipes(all: &BTreeMap<String, Box<str>>, sync: &SyncData) -> Vec<
             None => w.varint(1),
         }
         w.varint(item_stack);
-        w.varint(
-            item(horizon_world::loot::recipe_result_id(&r["result"]).unwrap_or("minecraft:air"))
-                .unwrap_or(0),
-        );
-        w.varint(r["result"]["count"].as_i64().unwrap_or(1) as i32);
-        w.varint(0); // no components added
-        w.varint(0); // nor removed
+        // ItemStackTemplate.STREAM_CODEC: the item, its count, the component patch.
+        let result = super::guest::stack_to_network(
+            |name| item(name).unwrap_or(0),
+            |registry, name| sync.id(registry, name),
+            &horizon_client::crafting::recipe_result(&r["result"]),
+        )
+        .unwrap_or_else(|| horizon_protocol::item::Stack::new(0, 1));
+        w.varint(result.item);
+        w.varint(result.count);
+        horizon_protocol::item::write_patch(&result, &mut w);
     }
     w.data
 }

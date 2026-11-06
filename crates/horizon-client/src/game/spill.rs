@@ -808,6 +808,38 @@ mod tests {
         );
     }
 
+    /// A head from a pack's recipe, placed and broken again, is the same item.
+    #[test]
+    fn a_textured_head_survives_placement_save_and_drop() {
+        let recipe = serde_json::json!({
+            "id": "minecraft:player_head",
+            "components": {
+                "custom_name": {"text": "Mini Oak Log"},
+                "note_block_sound": "minecraft:block.wood.hit",
+                "profile": {"properties": [{"name": "textures", "value": "abc"}]},
+            },
+        });
+        let original = horizon_client::crafting::recipe_result(&recipe).unwrap();
+        let Tag::Compound(components) = item_data::encode_components(&original).unwrap() else {
+            panic!("head components");
+        };
+        let (block, pos) = ("minecraft:player_head", (1, 64, 2));
+        let fresh = BlockEntity::for_block(block).unwrap();
+        let fresh = save::encode_block_entity(pos, &fresh, block);
+        let placed = block_entity_item::place(&fresh, &components, false);
+        let (_, placed) = save::decode_block_entity(&placed).unwrap();
+        let saved = save::encode_block_entity(pos, &placed, block);
+        let (_, loaded) = save::decode_block_entity(&saved).unwrap();
+        let mut pending = Pending::default();
+        pending.record([pos.0, pos.1, pos.2], &loaded, block, None);
+        let mut dropped = ItemStack::new(block, 1);
+        pending.attach([pos.0, pos.1, pos.2], &mut dropped);
+        assert_eq!(
+            item_data::encode_components(&dropped),
+            Some(Tag::Compound(components))
+        );
+    }
+
     #[test]
     fn ominous_banner_survives_placement_save_and_drop() {
         let original = raider::ominous_banner();

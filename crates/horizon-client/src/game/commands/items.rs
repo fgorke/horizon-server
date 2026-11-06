@@ -1680,6 +1680,15 @@ mod long_line_tests {
                 ),
             ),
             (
+                "data/custom/recipe/mini.json".to_owned(),
+                r#"{"type":"minecraft:stonecutting","ingredient":"minecraft:oak_log","result":{
+                    "count":8,"id":"minecraft:player_head","components":{
+                    "custom_name":{"text":"Mini Oak Log","color":"white","italic":false},
+                    "note_block_sound":"minecraft:block.wood.hit",
+                    "profile":{"properties":[{"name":"textures","value":"abc"}]}}}}"#
+                    .to_owned(),
+            ),
+            (
                 "data/custom/villager_trade/frame.json".to_owned(),
                 format!(
                     r#"{{"wants":{{"id":"minecraft:emerald","count":3}},"gives":{frame},"max_uses":16,"xp":2,"reputation_discount":0.05}}"#
@@ -1729,6 +1738,18 @@ mod long_line_tests {
             .stonecutter(&ItemStack::new("minecraft:stone", 1));
         let cut = cut.iter().find(|r| r.id == "custom:cut_frame").unwrap();
         assert!(invisible(&cut.result), "{:?}", cut.result);
+
+        // A mini block keeps what its recipe wrote under bare keys.
+        let log = game
+            .stations()
+            .recipes
+            .stonecutter(&ItemStack::new("minecraft:oak_log", 1));
+        let mini = log.iter().find(|r| r.id == "custom:mini").unwrap();
+        assert_eq!(mini.result.count, 8);
+        let data = mini.result.data().unwrap();
+        assert!(data.other("minecraft:custom_name").is_some());
+        assert!(data.other("minecraft:profile").is_some());
+        assert!(data.other("minecraft:note_block_sound").is_some());
 
         // A librarian's first level offers the pack's trade.
         let stations = game.stations();

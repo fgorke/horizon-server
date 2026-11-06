@@ -124,6 +124,8 @@ const QUIET_PER_CALL: usize = 256;
 /// A `command.run-quiet` line's length: a command with a whole block entity's NBT in it. On a
 /// wire `horizon_protocol::quiet` still cuts it to a chat command's.
 const QUIET_LINE_CHARS: usize = 1 << 20;
+/// The most characters of a tab list's header or footer.
+const TAB_LIST_CHARS: usize = 4096;
 /// How far `game.raycast` sees, in blocks.
 pub const RAYCAST_MAX: f32 = 1024.0;
 const HUD_LINES: usize = 16;
@@ -244,6 +246,12 @@ pub enum Output {
         name: String,
         text: String,
         prefix: Option<String>,
+    },
+    /// `players.set-tab-list`: the player's tab list header and footer, markup.
+    TabList {
+        player: String,
+        header: String,
+        footer: String,
     },
     /// `players.action-bar`: a line above the player's hotbar, `§` colour codes kept.
     ActionBar {
@@ -1680,6 +1688,7 @@ impl State {
                         | Output::Tell { .. }
                         | Output::Broadcast { .. }
                         | Output::ActionBar { .. }
+                        | Output::TabList { .. }
                 )
             })
             .count();
@@ -1830,6 +1839,14 @@ impl players::Host for State {
                 name,
                 player,
                 text: clip(text),
+            })
+    }
+    fn set_tab_list(&mut self, player: String, header: String, footer: String) -> bool {
+        self.snapshot.players.iter().any(|p| p.id == player)
+            && self.say(|_| Output::TabList {
+                player,
+                header: clip_to(header, TAB_LIST_CHARS),
+                footer: clip_to(footer, TAB_LIST_CHARS),
             })
     }
 }

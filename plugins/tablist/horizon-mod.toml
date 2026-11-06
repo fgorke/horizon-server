@@ -1,0 +1,8 @@
+id = "tablist"
+name = "Tab List"
+version = "0.1.0"
+description = "A header and footer for the tab list, and a web address for the server's resource pack."
+authors = ["fgorke"]
+api = "0.3"
+side = "server"
+capabilities = ["players", "network", "storage"]

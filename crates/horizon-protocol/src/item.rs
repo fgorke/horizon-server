@@ -994,7 +994,7 @@ impl Codec<Option<Stack>> for Slot {
 }
 
 /// A stack's components, without those an older client being written for lacks.
-fn write_patch(s: &Stack, w: &mut Writer) {
+pub fn write_patch(s: &Stack, w: &mut Writer) {
     let has = |kind: i32| ids::component(kind) >= 0;
     w.varint(s.added.iter().filter(|(k, _)| has(*k)).count() as i32);
     w.varint(s.removed.iter().filter(|k| has(**k)).count() as i32);

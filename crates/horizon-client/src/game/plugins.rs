@@ -828,6 +828,24 @@ mod run {
             }
         }
 
+        /// ClientboundTabListPacket to a placed player.
+        fn send_plugin_tab_list(host: &mut LanHost, id: &str, header: &str, footer: &str) {
+            let to = host
+                .hub
+                .guests
+                .iter()
+                .find(|g| g.placed && uuid_string(g.uuid) == id);
+            if let Some(conn) = to.map(|g| g.conn) {
+                host.hub.send_to(
+                    conn,
+                    &C::TabList(play::TabList {
+                        header: component_nbt(&Text::markup(header).component()),
+                        footer: component_nbt(&Text::markup(footer).component()),
+                    }),
+                );
+            }
+        }
+
         /// What plugins said and did: `Tell` and `Reply` to their player, `Broadcast` to
         /// everyone and the log, blocks queued for their level, a stopped plugin logged.
         /// Their lines are markup (`horizon_client_core::markup`), after the plugin's
@@ -901,6 +919,11 @@ mod run {
                     Output::Chat { name, text } => {
                         super::super::dedicated::log("INFO", &format!("[{name}] {text}"));
                     }
+                    Output::TabList {
+                        player,
+                        header,
+                        footer,
+                    } => Self::send_plugin_tab_list(host, &player, &header, &footer),
                     Output::ActionBar { player, text, .. } => {
                         Self::tell_plugin_player(host, &player, &Text::markup(&text), true);
                     }

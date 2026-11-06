@@ -21,6 +21,7 @@ release's files); their source is in [`plugins/`](../plugins).
 | [`paster`](../plugins/paster/src/lib.rs) | The server side of the [Litematica Server Paster](https://modrinth.com/mod/litematica-server-paster) mod (players install the mod with Litematica): operators paste schematics with their block entity and entity NBT. Only `/setblock` and `/summon`, in the sender's dimension |
 | [`regions`](../plugins/regions/src/lib.rs) | Protected regions: an operator marks a box with `/region pos1` and `pos2` and names it with `/region define <name> [full]`; `/region flag <name> <flag> on|off` turns each protection on or off (`break`, `place`, `use`: doors, trapdoors, fence gates, buttons..., `containers`, `pvp`, `damage`, `mobs`); members (`/region member`) and operators with `/region bypass` aren't stopped. The server checks them before anything happens (`world.protect`) |
 | [`stats`](../plugins/stats/src/lib.rs) | A web page on port 8100 (`data/port`) with every player's statistics, live for the players online, and their time away from the keyboard; its language in `data/lang` (`en_us`, `de_de`, ...) |
+| [`tablist`](../plugins/tablist/src/lib.rs) | The tab list's header and footer, `header` and `footer` in its `data/messages`: markup, `\n` for a new line, `{player}` and `{online}`. With a `data/pack.zip` it serves that at `/pack.zip` on port 8101 (`data/port`), for `resource-pack` in `server.properties`: a font in the pack puts a logo in the header |
 | [`voice`](../plugins/voice/src/lib.rs) | A server for the [Simple Voice Chat](https://modrinth.com/plugin/simple-voice-chat) mod on UDP port 24454 (`data/port`): proximity voice, whispering and groups |
 
 ## Recipes, loot and trades: a data pack
@@ -31,7 +32,7 @@ and `data/<namespace>/...` files in vanilla's formats. `/reload` applies a chang
 
 | File | What |
 | --- | --- |
-| `data/mine/recipe/<name>.json` | A new recipe. A file at a vanilla path, `data/minecraft/recipe/<name>.json`, replaces that recipe. `minecraft:stonecutting` and the crafting and cooking types take `"result":{"id":...,"count":...,"components":{...}}`: a name, lore, or `minecraft:entity_data` with `"Invisible":true` on an item frame. The stonecutter's list draws the item without its components; the item you take has them. A smithing transform's result takes no components |
+| `data/mine/recipe/<name>.json` | A new recipe. A file at a vanilla path, `data/minecraft/recipe/<name>.json`, replaces that recipe. `minecraft:stonecutting` and the crafting and cooking types take `"result":{"id":...,"count":...,"components":{...}}`: a name, lore, or `minecraft:entity_data` with `"Invisible":true` on an item frame. A smithing transform's result takes no components |
 | `data/minecraft/loot_table/blocks/<block>.json` | What a block drops; `entities/`, `chests/`, `gameplay/` likewise |
 | `data/mine/villager_trade/<name>.json` | A trade (`wants`, `gives` with components, `max_uses`, `xp`, `reputation_discount`), offered once it is in a tag |
 | `data/minecraft/tags/villager_trade/<profession>/level_<n>.json` | `{"values":["mine:<name>"]}` adds to what that level may offer; `"replace":true` takes the rest away. A villager rolls offers when it reaches a level: ones that have it keep theirs |
@@ -108,7 +109,7 @@ imports an interface its capabilities don't cover.
 | always | `log` | Lines in the server's log |
 | always | `random` | `bytes(len)`: random bytes from the system's secure source, for keys and ids |
 | `storage` | `storage` | A key-value store of its own (4 MiB), kept across restarts in `plugins/<id>/data/` |
-| `players` | `players` | Who is online (id, name, position, dimension, game mode, health); `rotation(player)`, `permission(player)`; `tell`, `broadcast`, `action-bar(player, text)` (with `§` colour codes); `teleport(player, dimension, x, y, z, yaw, pitch)` |
+| `players` | `players` | Who is online (id, name, position, dimension, game mode, health); `rotation(player)`, `permission(player)`; `tell`, `broadcast`, `action-bar(player, text)` (with `§` colour codes); `set-tab-list(player, header, footer)`; `teleport(player, dimension, x, y, z, yaw, pitch)` |
 | `world` | `world` | Blocks and biomes of the loaded chunks; `set-blocks`, made as `/setblock` makes them |
 | `command` | `command` | `run(line)` (256 characters), `run-quiet(lines)` (1 MiB each): vanilla commands, run as the server console (permission level 4) at the tick's end |
 | `movement` | `movement` | `motion-of(player)` (on the ground, gliding, fall distance, riding); `glide(player)` without an elytra and without fall damage; `allow-double-jump(player, allow)`, heard at the `double-jump` hook; `push(player, x, y, z)` |

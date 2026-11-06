@@ -685,6 +685,7 @@ Capability `players`, server mods only (manifest `api = "0.3"`, experimental): t
 | `rotation` | `func(player: string) -> option<tuple<f32, f32>>` | Where a player looks: yaw and pitch in degrees, as of this call; none when no player with that id is online. |
 | `permission` | `func(player: string) -> option<u8>` | A player's permission level, 0 to 4 (operators have `op-permission-level`, 4 by default); none when not online. |
 | `action-bar` | `func(player: string, text: string) -> bool` | A line above a player's hotbar (the action bar), with `§` colour codes and not after the mod's name; false when not online. Counts toward the 8 messages per call. |
+| `set-tab-list` | `func(player: string, header: string, footer: string) -> bool` | The tab list's header and footer for a player, markup, `\n` between lines, as far as 4096 characters each; empty takes one away. False when not online. Counts toward the 8 messages per call. |
 
 ## `world`
 

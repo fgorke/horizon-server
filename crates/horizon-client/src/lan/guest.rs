@@ -923,6 +923,39 @@ fn sign_text_bytes(text: &horizon_world::nbt::Tag) -> Option<Vec<u8>> {
     Some(w.data)
 }
 
+/// A `minecraft:profile` component as saved: a name alone, or `name`, `id` and `properties`.
+fn profile_component(tag: &horizon_world::nbt::Tag) -> horizon_protocol::item::Profile {
+    use horizon_world::nbt::Tag;
+    let text = crate::save::text;
+    let id = match tag.get("id") {
+        Some(Tag::IntArray(words)) if words.len() == 4 => Some(
+            words
+                .iter()
+                .fold(0u128, |id, word| (id << 32) | u128::from(*word as u32)),
+        ),
+        _ => None,
+    };
+    let properties = match tag.get("properties") {
+        Some(Tag::List(list)) => list
+            .iter()
+            .filter_map(|p| {
+                Some((
+                    text(p.get("name"))?,
+                    text(p.get("value"))?,
+                    text(p.get("signature")),
+                ))
+            })
+            .collect(),
+        _ => Vec::new(),
+    };
+    horizon_protocol::item::Profile {
+        name: text(Some(tag)).or_else(|| text(tag.get("name"))),
+        id,
+        properties,
+        skin: Default::default(),
+    }
+}
+
 /// The off hand slot is conventionally 40 in saves and 45 in the menu.
 /// `synced_id` names an entry of a synced registry (enchantments, trim
 /// materials and patterns) by its id on this connection.
@@ -1298,6 +1331,17 @@ fn network_stack(
                 ),
             ));
         }
+    }
+    // A player head's skin: without it the client draws the default head.
+    if let Some(profile) = s
+        .data()
+        .and_then(|d| d.other("minecraft:profile"))
+        .map(profile_component)
+    {
+        stack.added.push((
+            horizon_protocol::item::component::PROFILE,
+            horizon_protocol::item::Component::Profile(profile),
+        ));
     }
     // Keep the component's styles across integrated-server and LAN inventory sync.
     if let Some(name) = s.data().and_then(|d| d.other("minecraft:custom_name")) {
@@ -1804,5 +1848,33 @@ mod tests {
                 &format!("scale {scale}"),
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod profile_tests {
+    use super::profile_component;
+    use horizon_world::nbt::Tag;
+
+    /// A head with only a texture, as packs write it, and a head named after a player.
+    #[test]
+    fn a_saved_profile_becomes_the_wire_component() {
+        let skin = Tag::compound([(
+            "properties",
+            Tag::List(vec![Tag::compound([
+                ("name", Tag::String("textures".into())),
+                ("value", Tag::String("abc".into())),
+            ])]),
+        )]);
+        let profile = profile_component(&skin);
+        assert_eq!(profile.name, None);
+        assert_eq!(profile.id, None);
+        assert_eq!(
+            profile.properties,
+            vec![("textures".to_owned(), "abc".to_owned(), None)]
+        );
+        let named = profile_component(&Tag::String("Notch".into()));
+        assert_eq!(named.name.as_deref(), Some("Notch"));
+        assert!(named.properties.is_empty());
     }
 }

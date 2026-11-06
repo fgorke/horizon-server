@@ -2048,6 +2048,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "horizon-plugin-tablist"
+version = "0.1.0"
+dependencies = [
+ "horizon-mod-sdk",
+]
+
+[[package]]
 name = "horizon-plugin-voice"
 version = "0.1.0"
 dependencies = [
