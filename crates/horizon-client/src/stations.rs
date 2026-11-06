@@ -570,15 +570,11 @@ impl StationRecipes {
                 }),
                 "minecraft:stonecutting" => {
                     // A result count outside 1..=99 fails vanilla's codec: no recipe.
-                    if let Some(count) = crate::crafting::template_count(&v["result"]) {
+                    if let Some(result) = crate::crafting::Template::parse(&v["result"]) {
                         stonecutting.push(Stonecutting {
                             id,
                             input: ingredient(&v["ingredient"], items),
-                            result: ItemStack::new(
-                                horizon_world::loot::recipe_result_id(&v["result"])
-                                    .unwrap_or("minecraft:air"),
-                                count,
-                            ),
+                            result: result.create(),
                         });
                     }
                 }

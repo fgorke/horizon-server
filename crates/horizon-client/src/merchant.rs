@@ -744,10 +744,8 @@ impl Trades {
             return None;
         }
         let gives = &t["gives"];
-        let mut result = ItemStack::new(
-            gives["id"].as_str()?,
-            gives["count"].as_u64().unwrap_or(1) as u32,
-        );
+        gives["id"].as_str()?;
+        let mut result = crate::crafting::Template::parse(gives)?.create();
         let mut additional = 0;
         let modifiers: Vec<&Value> = match &t["given_item_modifier"] {
             Value::Array(a) => a.iter().collect(),

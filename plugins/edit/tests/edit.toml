@@ -1,0 +1,65 @@
+# //pos1 and //pos2 mark a box, //set and //fill fill it; only operators, and only with both corners.
+
+[[step]]
+join = "Alex"
+player = { x = 0.5, y = 64.0, z = 0.5, permission = 0 }
+command = "/pos1"
+expect.error = "You need to be an operator for that."
+
+[[step]]
+player = { x = 0.5, y = 64.0, z = 0.5, permission = 2 }
+command = "/set stone"
+expect.error = "Set both corners first: //pos1 and //pos2."
+
+[[step]]
+command = "/pos1"
+expect.feedback = "Pos1 set: 0 64 0"
+
+[[step]]
+command = "/pos2 1 65 1"
+expect.feedback = "Pos2 set: 1 65 1 (8 blocks)"
+
+[[step]]
+command = "/set"
+expect.error = "Unknown or incomplete command, see below for error"
+
+[[step]]
+command = "/set stone"
+expect.feedback = "Filled 8 blocks with minecraft:stone."
+expect.blocks = [
+    { x = 0, y = 64, z = 0, state = "minecraft:stone" },
+    { x = 1, y = 65, z = 1, state = "minecraft:stone" },
+    { x = 2, y = 65, z = 1, state = "minecraft:air" },
+]
+
+[[step]]
+command = "/fill air"
+expect.feedback = "Filled 8 blocks with minecraft:air."
+expect.blocks = [{ x = 0, y = 64, z = 0, state = "minecraft:air" }]
+
+# More than a tick's worth: the rest comes in the next ticks, and the player is told at the end.
+[[step]]
+command = "/pos2 19 64 299"
+expect.feedback = "Pos2 set: 19 64 299 (6000 blocks)"
+
+[[step]]
+command = "/set dirt"
+expect.feedback = "Filling 6000 blocks with minecraft:dirt..."
+
+[[step]]
+command = "/set stone"
+expect.error = "Your last fill is still running."
+
+[[step]]
+ticks = 1
+expect.told = ["Alex: Filled 6000 blocks with minecraft:dirt."]
+expect.blocks = [{ x = 19, y = 64, z = 299, state = "minecraft:dirt" }]
+
+# Too big: nothing happens.
+[[step]]
+command = "/pos2 2000 64 2000"
+expect.feedback = "Pos2 set: 2000 64 2000 (4004001 blocks)"
+
+[[step]]
+command = "/set air"
+expect.error = "That box is 4004001 blocks: at most 1000000 at once."

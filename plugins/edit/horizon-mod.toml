@@ -1,0 +1,8 @@
+id = "edit"
+name = "Edit"
+version = "0.1.0"
+description = "//pos1, //pos2 and //set: operators fill a box with a block, or with air."
+authors = ["fgorke"]
+api = "0.3"
+side = "server"
+capabilities = ["players", "world", "storage"]

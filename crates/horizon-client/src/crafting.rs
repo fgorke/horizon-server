@@ -289,7 +289,7 @@ pub(crate) fn template_count(v: &Value) -> Option<u32> {
     }
 }
 impl Template {
-    fn parse(v: &Value) -> Option<Self> {
+    pub(crate) fn parse(v: &Value) -> Option<Self> {
         let components = v.get("components").map(json_tag);
         let (damage, extra) = crate::item_data::decode_components(components.as_ref());
         Some(Self {

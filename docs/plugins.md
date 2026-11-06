@@ -17,10 +17,24 @@ release's files); their source is in [`plugins/`](../plugins).
 | --- | --- |
 | [`spawn`](../plugins/spawn/src/lib.rs) | `/setspawn` (operators) sets the spawn spot where you stand, looking where you look; `/spawn` (everyone) takes you there after 5 seconds standing still, the seconds left in the action bar; moving cancels it |
 | [`elytra`](../plugins/elytra/src/lib.rs) | Spawn elytra: in the region an operator marks with `/spawnelytra pos1` and `pos2`, survival players who fall or double-jump glide without an elytra, boost once with `F` and land without fall damage |
+| [`edit`](../plugins/edit/src/lib.rs) | Operators mark a box with `//pos1` and `//pos2` (where they stand, or `//pos1 <x> <y> <z>`) and fill it with `//set <block>` or `//fill <block>`, `air` to clear it: up to 1,000,000 blocks in loaded chunks, 4096 a tick, as `/setblock` sets them. No undo |
 | [`paster`](../plugins/paster/src/lib.rs) | The server side of the [Litematica Server Paster](https://modrinth.com/mod/litematica-server-paster) mod (players install the mod with Litematica): operators paste schematics with their block entity and entity NBT. Only `/setblock` and `/summon`, in the sender's dimension |
 | [`regions`](../plugins/regions/src/lib.rs) | Protected regions: an operator marks a box with `/region pos1` and `pos2` and names it with `/region define <name> [full]`; `/region flag <name> <flag> on|off` turns each protection on or off (`break`, `place`, `use`: doors, trapdoors, fence gates, buttons..., `containers`, `pvp`, `damage`, `mobs`); members (`/region member`) and operators with `/region bypass` aren't stopped. The server checks them before anything happens (`world.protect`) |
 | [`stats`](../plugins/stats/src/lib.rs) | A web page on port 8100 (`data/port`) with every player's statistics, live for the players online, and their time away from the keyboard; its language in `data/lang` (`en_us`, `de_de`, ...) |
 | [`voice`](../plugins/voice/src/lib.rs) | A server for the [Simple Voice Chat](https://modrinth.com/plugin/simple-voice-chat) mod on UDP port 24454 (`data/port`): proximity voice, whispering and groups |
+
+## Recipes, loot and trades: a data pack
+
+These need no plugin. The server loads the world's data packs: a folder in
+`<world>/datapacks/` with a `pack.mcmeta` (`{"pack":{"description":"mine","min_format":121,"max_format":121}}`)
+and `data/<namespace>/...` files in vanilla's formats. `/reload` applies a change without a restart.
+
+| File | What |
+| --- | --- |
+| `data/mine/recipe/<name>.json` | A new recipe. A file at a vanilla path, `data/minecraft/recipe/<name>.json`, replaces that recipe. `minecraft:stonecutting` and the crafting and cooking types take `"result":{"id":...,"count":...,"components":{...}}`: a name, lore, or `minecraft:entity_data` with `"Invisible":true` on an item frame. The stonecutter's list draws the item without its components; the item you take has them. A smithing transform's result takes no components |
+| `data/minecraft/loot_table/blocks/<block>.json` | What a block drops; `entities/`, `chests/`, `gameplay/` likewise |
+| `data/mine/villager_trade/<name>.json` | A trade (`wants`, `gives` with components, `max_uses`, `xp`, `reputation_discount`), offered once it is in a tag |
+| `data/minecraft/tags/villager_trade/<profession>/level_<n>.json` | `{"values":["mine:<name>"]}` adds to what that level may offer; `"replace":true` takes the rest away. A villager rolls offers when it reaches a level: ones that have it keep theirs |
 
 ## Install one
 

@@ -3458,7 +3458,11 @@ impl Game<'_> {
             return;
         }
         // A plugin's command, for every player whatever their level.
-        if self.plugin_command(host, conn, command.trim_start_matches('/')) {
+        // `//pos1` arrives as `/pos1`: a plugin may have named it so.
+        let bare = command.trim_start_matches('/');
+        if self.plugin_command(host, conn, command)
+            || (bare != command && self.plugin_command(host, conn, bare))
+        {
             return;
         }
         // ListPlayersCommand needs no permission and lists every player.

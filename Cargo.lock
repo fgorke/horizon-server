@@ -2005,6 +2005,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "horizon-plugin-edit"
+version = "0.1.0"
+dependencies = [
+ "horizon-mod-sdk",
+]
+
+[[package]]
 name = "horizon-plugin-elytra"
 version = "0.1.0"
 dependencies = [
