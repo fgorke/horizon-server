@@ -1,0 +1,8 @@
+id = "paster"
+name = "Litematica Server Paster"
+version = "0.1.0"
+description = "The server side of the Litematica Server Paster mod: operators paste schematics with their block entity and entity NBT."
+authors = ["fgorke"]
+api = "0.3"
+side = "server"
+capabilities = ["players", "channels", "command", "storage"]

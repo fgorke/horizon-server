@@ -806,6 +806,10 @@ fn quiet_commands_come_out_as_one_batch_capped() {
     assert_eq!(batches.len(), 1);
     assert_eq!(batches[0].1.len(), 256);
     assert_eq!(batches[0].1[255], "setblock 255 300 0 stone");
+    // A line with a block entity's NBT in it is not cut to a chat command's length.
+    let long = format!("setblock 0 0 0 chest{{Lock:\"{}\"}}", "x".repeat(5000));
+    let batches = quiet(&mut mods, &format!("quiet {long}"));
+    assert_eq!(batches[0].1, [long]);
 }
 
 #[test]

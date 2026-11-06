@@ -2012,6 +2012,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "horizon-plugin-paster"
+version = "0.1.0"
+dependencies = [
+ "horizon-mod-sdk",
+]
+
+[[package]]
 name = "horizon-plugin-regions"
 version = "0.1.0"
 dependencies = [

@@ -33,6 +33,7 @@ members = [
     "crates/horizon-mod-sdk",
     "crates/horizon-mods",
     "plugins/elytra",
+    "plugins/paster",
     "plugins/regions",
     "plugins/spawn",
     "plugins/stats",

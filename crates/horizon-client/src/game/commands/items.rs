@@ -1523,3 +1523,75 @@ mod stand_equip_event_tests {
         }
     }
 }
+
+/// The lines plugin `paster` runs: a command in the sender's dimension and place, with more NBT
+/// than a chat command holds.
+#[cfg(test)]
+mod long_line_tests {
+    use crate::game::{Audio, Game, Options, Progress, Settings, load_resources};
+    use horizon_client::chunk::Chunk;
+    use horizon_core::position::ChunkPos;
+    use std::sync::Arc;
+
+    #[test]
+    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    fn setblock_and_summon_take_long_nbt_under_execute() {
+        let root = std::path::PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").unwrap());
+        let settings = Settings::default();
+        let loaded = load_resources(
+            root.clone(),
+            None,
+            &root,
+            &settings,
+            std::time::Instant::now(),
+            false,
+            true,
+            &Progress::new(),
+            &mut |_, _| unreachable!(),
+        )
+        .unwrap();
+        let mut options = Options::parse(std::iter::empty()).unwrap().unwrap();
+        options.resources = root.clone();
+        options.game_dir = Some(
+            std::env::temp_dir().join(format!("horizon-long-line-unit-{}", std::process::id())),
+        );
+        options.execution_role = crate::game::execution_role::ExecutionRole::IntegratedServer;
+        let mut game = Game::new(
+            &loaded.resources,
+            loaded.pack,
+            loaded.gui.unwrap(),
+            options,
+            settings,
+            Audio::silent(&root),
+            None,
+        )
+        .unwrap();
+        game.build_registries();
+        game.set_allow_commands(true);
+        game.world
+            .chunks
+            .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
+        game.block_ticks
+            .add_empty_chunk(ChunkPos::new(0, 0))
+            .unwrap();
+        assert!(game.run_command("forceload add 0 0"));
+
+        let run = "execute in minecraft:overworld positioned 0.5 64 0.5 run";
+        let items: Vec<String> = (0..27)
+            .map(|slot| format!("{{Slot:{slot}b,id:\"minecraft:stone\",count:1}}"))
+            .collect();
+        let items = items.join(",");
+        let line =
+            format!("{run} setblock 5 200 5 minecraft:chest[facing=north]{{Items:[{items}]}}");
+        assert!(line.len() > 256);
+        assert!(game.run_command(&line), "{line}");
+        assert!(game.run_command("execute if data block 5 200 5 Items[26]"));
+        assert!(!game.run_command("execute if data block 5 200 5 Items[27]"));
+
+        let name = "x".repeat(600);
+        let line =
+            format!("{run} summon minecraft:armor_stand 6.5 200 10.5 {{CustomName:\"{name}\"}}");
+        assert!(game.run_command(&line), "{line}");
+        assert_eq!(game.armor_stands.len(), 1);
+    }
+}

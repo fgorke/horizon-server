@@ -535,6 +535,8 @@ pub struct Expect {
     /// `"ip:port hex"`, in order.
     payloads: Option<Vec<String>>,
     udp: Option<Vec<String>>,
+    /// Every `command.run-quiet` line, in order.
+    quiet: Option<Vec<String>>,
     /// The `http` request's response: its status, content type, and text its body holds.
     http_status: Option<u16>,
     http_type: Option<String>,
@@ -935,6 +937,17 @@ impl Step {
                 _ => None,
             })
         };
+        if let Some(want) = &e.quiet {
+            let got: Vec<String> = out
+                .iter()
+                .filter_map(|o| match o {
+                    Output::QuietCommands { lines, .. } => Some(lines.clone()),
+                    _ => None,
+                })
+                .flatten()
+                .collect();
+            same("quiet", want, &got)?;
+        }
         if let Some(want) = &e.told {
             let name = |id: &str| {
                 let p = game.players.iter().find(|p| p.id == id);

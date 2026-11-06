@@ -121,6 +121,9 @@ const CHAT_PER_CALL: usize = 8;
 /// `command.run-quiet` lines one call of a mod may queue (a quiet payload's
 /// cap, `horizon_protocol::quiet::MAX_LINES`).
 const QUIET_PER_CALL: usize = 256;
+/// A `command.run-quiet` line's length: a command with a whole block entity's NBT in it. On a
+/// wire `horizon_protocol::quiet` still cuts it to a chat command's.
+const QUIET_LINE_CHARS: usize = 1 << 20;
 /// How far `game.raycast` sees, in blocks.
 pub const RAYCAST_MAX: f32 = 1024.0;
 const HUD_LINES: usize = 16;
@@ -2095,7 +2098,11 @@ impl command::Host for State {
         if room > 0 && !lines.is_empty() {
             self.out.push(Output::QuietCommands {
                 mod_id: self.id.clone(),
-                lines: lines.into_iter().take(room).map(clip).collect(),
+                lines: lines
+                    .into_iter()
+                    .take(room)
+                    .map(|l| clip_to(l, QUIET_LINE_CHARS))
+                    .collect(),
             });
         }
     }
