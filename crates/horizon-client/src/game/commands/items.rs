@@ -1593,5 +1593,179 @@ mod long_line_tests {
             format!("{run} summon minecraft:armor_stand 6.5 200 10.5 {{CustomName:\"{name}\"}}");
         assert!(game.run_command(&line), "{line}");
         assert_eq!(game.armor_stands.len(), 1);
+
+        // A sloped rail whose support isn't there yet, as mid-paste. A strict block entity next
+        // to it leaves it, and keeps its own NBT; one with updates pops it off.
+        let rail = "execute if block 8 201 8 minecraft:rail[shape=ascending_east]";
+        assert!(game.run_command("setblock 8 200 8 minecraft:stone strict"));
+        assert!(game.run_command("setblock 8 201 8 minecraft:rail[shape=ascending_east] strict"));
+        assert!(game.run_command(rail));
+        let chest = format!("{run} setblock 8 201 9 minecraft:chest{{Items:[{items}]}}");
+        assert!(game.run_command(&format!("{chest} strict")));
+        assert!(game.run_command(rail), "strict leaves the rail");
+        assert!(game.run_command("execute if data block 8 201 9 Items[26]"));
+        assert!(game.run_command("setblock 8 201 9 minecraft:air strict"));
+        assert!(game.run_command(&chest));
+        assert!(!game.run_command(rail), "updates pop it off");
+    }
+
+    /// What docs/plugins.md tells a server owner to put in a data pack: a recipe and a
+    /// stonecutter recipe whose results carry components, a new villager trade, a loot table.
+    #[test]
+    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    fn a_world_pack_changes_recipes_trades_and_loot() {
+        use horizon_client::{
+            items::ItemStack,
+            merchant::{TradeContext, sequence_random},
+        };
+        let root = std::path::PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").unwrap());
+        let settings = Settings::default();
+        let loaded = load_resources(
+            root.clone(),
+            None,
+            &root,
+            &settings,
+            std::time::Instant::now(),
+            false,
+            true,
+            &Progress::new(),
+            &mut |_, _| unreachable!(),
+        )
+        .unwrap();
+        let mut options = Options::parse(std::iter::empty()).unwrap().unwrap();
+        options.resources = root.clone();
+        let dir = std::env::temp_dir().join(format!("horizon-pack-unit-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        options.game_dir = Some(dir.join("game"));
+        options.execution_role = crate::game::execution_role::ExecutionRole::IntegratedServer;
+        let mut game = Game::new(
+            &loaded.resources,
+            loaded.pack,
+            loaded.gui.unwrap(),
+            options,
+            settings,
+            Audio::silent(&root),
+            None,
+        )
+        .unwrap();
+        game.build_registries();
+        game.set_allow_commands(true);
+        game.world
+            .chunks
+            .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
+        game.block_ticks
+            .add_empty_chunk(ChunkPos::new(0, 0))
+            .unwrap();
+        assert!(game.run_command("forceload add 0 0"));
+
+        let frame = r#"{"id":"minecraft:item_frame","components":{
+            "minecraft:custom_name":"Invisible frame",
+            "minecraft:entity_data":{"id":"minecraft:item_frame","Invisible":true}}}"#;
+        let files = [
+            (
+                "pack.mcmeta".to_owned(),
+                r#"{"pack":{"description":"test","min_format":121,"max_format":121}}"#.to_owned(),
+            ),
+            (
+                "data/custom/recipe/invisible_item_frame.json".to_owned(),
+                format!(
+                    r#"{{"type":"minecraft:crafting_shaped","pattern":["GGG","GFG","GGG"],
+                    "key":{{"G":"minecraft:glass_pane","F":"minecraft:item_frame"}},"result":{frame}}}"#
+                ),
+            ),
+            (
+                "data/custom/recipe/cut_frame.json".to_owned(),
+                format!(
+                    r#"{{"type":"minecraft:stonecutting","ingredient":"minecraft:stone","result":{frame}}}"#
+                ),
+            ),
+            (
+                "data/custom/villager_trade/frame.json".to_owned(),
+                format!(
+                    r#"{{"wants":{{"id":"minecraft:emerald","count":3}},"gives":{frame},"max_uses":16,"xp":2,"reputation_discount":0.05}}"#
+                ),
+            ),
+            (
+                "data/minecraft/tags/villager_trade/librarian/level_1.json".to_owned(),
+                r#"{"replace":true,"values":["custom:frame"]}"#.to_owned(),
+            ),
+            (
+                "data/minecraft/loot_table/blocks/dirt.json".to_owned(),
+                r#"{"type":"minecraft:block","pools":[{"rolls":1,"entries":[{"type":"minecraft:item","name":"minecraft:diamond"}]}]}"#.to_owned(),
+            ),
+        ];
+        for (file, text) in &files {
+            let path = dir.join("datapacks/custom").join(file);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, text).unwrap();
+        }
+        game.world_root = dir.clone();
+        let (tables, _) = game.build_world_tables(false, &[]).unwrap();
+        game.world_tables = tables;
+
+        let invisible = |stack: &ItemStack| {
+            stack.extra.as_ref().is_some_and(|extra| {
+                extra.other.iter().any(|(k, v)| {
+                    k == "minecraft:entity_data"
+                        && horizon_client::save::number(v.get("Invisible")) == Some(1)
+                })
+            })
+        };
+
+        // Crafting: eight panes around a frame.
+        let pane = Some(ItemStack::new("minecraft:glass_pane", 1));
+        let plain = Some(ItemStack::new("minecraft:item_frame", 1));
+        let mut grid = vec![pane; 9];
+        grid[4] = plain;
+        let (id, made) = game.recipes().find(&grid, 3).unwrap();
+        assert_eq!(id, "custom:invisible_item_frame");
+        let made = made.clone();
+        assert!(invisible(&made), "{made:?}");
+
+        // The stonecutter keeps the components too.
+        let cut = game
+            .stations()
+            .recipes
+            .stonecutter(&ItemStack::new("minecraft:stone", 1));
+        let cut = cut.iter().find(|r| r.id == "custom:cut_frame").unwrap();
+        assert!(invisible(&cut.result), "{:?}", cut.result);
+
+        // A librarian's first level offers the pack's trade.
+        let stations = game.stations();
+        let ctx = TradeContext {
+            items: game.items(),
+            enchantments: &stations.enchantments,
+            variant: "minecraft:plains",
+            origin: [0.0; 3],
+            maps: None,
+        };
+        let offers = stations.trades.offers_from_set(
+            &ctx,
+            "minecraft:librarian/level_1",
+            &mut sequence_random(1, "test"),
+        );
+        assert_eq!(offers.len(), 1);
+        assert_eq!(&*offers[0].result.item, "minecraft:item_frame");
+        assert!(invisible(&offers[0].result));
+
+        // What the pack's frame hangs as: invisible.
+        assert!(game.run_command("setblock 3 100 3 minecraft:stone strict"));
+        let hit = crate::game::Hit {
+            pos: [3, 100, 3],
+            face: [0, 0, 1],
+            point: [3.5, 100.5, 4.0],
+        };
+        assert!(game.place_item_frame(&hit, &made));
+        assert!(game.item_frames.last().unwrap().invisible);
+
+        // The loot table.
+        assert!(game.run_command("setblock 5 100 5 minecraft:chest strict"));
+        assert!(
+            game.run_command("loot replace block 5 100 5 container.0 loot minecraft:blocks/dirt")
+        );
+        assert!(
+            game.run_command(r#"execute if data block 5 100 5 Items[{id:"minecraft:diamond"}]"#)
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

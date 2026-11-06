@@ -7,6 +7,10 @@
 //! console, so this one holds that back itself: only operators, only `/setblock` and `/summon`
 //! (what the mod sends), and in the sender's dimension and at their position, as their own command
 //! would be.
+//!
+//! Litematica's own `/setblock` lines end in `strict` (its `commandUseStrict`), the mod's don't.
+//! Without it each block entity updates its neighbours mid-paste, and a sloped rail whose support
+//! comes later in the paste pops off, so `setblock` lines get `strict` here too.
 mod protocol;
 
 use horizon_mod_sdk::{
@@ -21,6 +25,8 @@ use std::collections::{BTreeMap, BTreeSet};
 const OPERATOR: u8 = 2;
 /// The commands a line may run, without a namespace.
 const COMMANDS: [&str; 2] = ["setblock", "summon"];
+/// `/setblock`'s modes: a line that ends in one keeps it.
+const SETBLOCK_MODES: [&str; 4] = ["destroy", "keep", "replace", "strict"];
 /// UTF-16 units a long command may gather. Under what the host passes on (`execute ...` goes in
 /// front of it): larger than any block entity that fits a chunk's saved form in practice.
 const MAX_LINE: usize = 1_000_000;
@@ -54,8 +60,14 @@ fn console_line(line: &str, dimension: &str, at: [f64; 3]) -> Result<String, Ref
         return Err(Refusal::Command);
     }
     let [x, y, z] = at;
+    let last = line.rsplit(' ').next().unwrap_or_default();
+    let mode = if name == "setblock" && !SETBLOCK_MODES.contains(&last) {
+        " strict"
+    } else {
+        ""
+    };
     Ok(format!(
-        "execute in {dimension} positioned {x} {y} {z} run {line}"
+        "execute in {dimension} positioned {x} {y} {z} run {line}{mode}"
     ))
 }
 
@@ -172,12 +184,24 @@ mod tests {
         assert_eq!(
             console_line("/setblock 1 2 3 chest{Lock:\"x\"}", "minecraft:the_nether", AT),
             Ok(
-                "execute in minecraft:the_nether positioned 0.5 64 -2.25 run setblock 1 2 3 chest{Lock:\"x\"}"
+                "execute in minecraft:the_nether positioned 0.5 64 -2.25 run setblock 1 2 3 chest{Lock:\"x\"} strict"
                     .to_owned()
             )
         );
         assert!(console_line("summon pig 1 2 3 {}", "minecraft:overworld", AT).is_ok());
+        assert!(
+            console_line("summon pig 1 2 3 {}", "minecraft:overworld", AT)
+                .is_ok_and(|l| l.ends_with("summon pig 1 2 3 {}"))
+        );
         assert!(console_line("minecraft:setblock 1 2 3 stone", "minecraft:overworld", AT).is_ok());
+    }
+
+    #[test]
+    fn a_setblock_line_that_names_its_mode_keeps_it() {
+        for mode in ["strict", "keep", "destroy", "replace"] {
+            let line = console_line(&format!("setblock 1 2 3 stone {mode}"), "d", AT);
+            assert!(line.is_ok_and(|l| l.ends_with(&format!("stone {mode}"))));
+        }
     }
 
     #[test]
