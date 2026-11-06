@@ -55,11 +55,11 @@ ticks = 1
 expect.told = ["Alex: Filled 6000 blocks with minecraft:dirt."]
 expect.blocks = [{ x = 19, y = 64, z = 299, state = "minecraft:dirt" }]
 
-# Too big: nothing happens.
+# No limit on the size: a box of millions starts like any other.
 [[step]]
 command = "/pos2 2000 64 2000"
 expect.feedback = "Pos2 set: 2000 64 2000 (4004001 blocks)"
 
 [[step]]
 command = "/set air"
-expect.error = "That box is 4004001 blocks: at most 1000000 at once."
+expect.feedback = "Filling 4004001 blocks with minecraft:air..."

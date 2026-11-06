@@ -12,10 +12,6 @@ use std::collections::{BTreeMap, VecDeque};
 
 /// The permission level the commands need: an operator's.
 const OPERATOR: u8 = 2;
-/// The most blocks one fill may change.
-const MAX_BLOCKS: u64 = 1_000_000;
-/// The most chunks a fill's box may cross: each is checked to be loaded before it starts.
-const MAX_CHUNKS: u64 = 4096;
 /// The blocks set each tick: the most one `world.set-blocks` call takes.
 const BATCH: u64 = 4096;
 const AIR: &str = "minecraft:air";
@@ -30,10 +26,6 @@ const MESSAGES: &[(&str, &str)] = &[
     ("no_box", "Set both corners first: //pos1 and //pos2."),
     ("usage", "Usage: //set <block>"),
     ("busy", "Your last fill is still running."),
-    (
-        "too_big",
-        "That box is {blocks} blocks: at most {max} at once.",
-    ),
     ("not_loaded", "Part of that box isn't loaded."),
     ("started", "Filling {blocks} blocks with {block}..."),
     ("finished", "Filled {blocks} blocks with {block}."),
@@ -59,7 +51,7 @@ impl Cuboid {
         std::array::from_fn(|k| (i64::from(self.max[k]) - i64::from(self.min[k]) + 1) as u64)
     }
 
-    /// Its blocks. Saturates: no box that large gets past [`MAX_BLOCKS`].
+    /// Its blocks. Saturates: no box that large has all its chunks loaded.
     fn volume(&self) -> u64 {
         self.size().iter().fold(1, |n, s| n.saturating_mul(*s))
     }
@@ -79,11 +71,6 @@ impl Cuboid {
             y,
             self.min[2] + (in_layer / sx) as i32,
         ]
-    }
-
-    /// The chunks it crosses, along x and along z.
-    fn chunk_span(&self) -> [u64; 2] {
-        [0, 2].map(|k| (i64::from(self.max[k] >> 4) - i64::from(self.min[k] >> 4) + 1) as u64)
     }
 
     /// Whether the server holds every chunk it crosses, at its lowest layer.
@@ -232,12 +219,6 @@ impl Edit {
             .and_then(Selection::cuboid)
             .ok_or_else(|| self.messages.get("no_box", &[]))?;
         let blocks = cuboid.volume();
-        let [cx, cz] = cuboid.chunk_span();
-        if blocks > MAX_BLOCKS || cx.saturating_mul(cz) > MAX_CHUNKS {
-            let values: [(&str, &dyn std::fmt::Display); 2] =
-                [("blocks", &blocks), ("max", &MAX_BLOCKS)];
-            return Err(self.messages.get("too_big", &values));
-        }
         if !cuboid.loaded(&player.dimension) {
             return Err(self.messages.get("not_loaded", &[]));
         }
@@ -368,12 +349,6 @@ mod tests {
             [i32::MAX, i32::MAX, i32::MAX],
         );
         assert_eq!(c.volume(), u64::MAX);
-    }
-
-    #[test]
-    fn a_chunk_span_counts_the_chunks_crossed() {
-        assert_eq!(Cuboid::new([0, 0, 0], [15, 0, 16]).chunk_span(), [1, 2]);
-        assert_eq!(Cuboid::new([-1, 0, 0], [0, 0, 0]).chunk_span(), [2, 1]);
     }
 
     #[test]
