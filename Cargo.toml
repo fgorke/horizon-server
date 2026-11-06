@@ -56,6 +56,7 @@ members = [
     "mods/official/far-view",
     "mods/official/minimap",
     "mods/official/zoom",
+    "crates/horizon-mod-deps",
     "xtask",
     "mods/official/recipes",
 ]
