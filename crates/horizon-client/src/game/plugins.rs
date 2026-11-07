@@ -462,6 +462,21 @@ mod run {
     const RELOAD_TICKS: u32 = 5;
 
     impl Game<'_> {
+        /// What the plugins read of the server in the calls up to the next drain, and the
+        /// world's next free map id for `maps.create`.
+        pub(in crate::game) fn set_plugin_snapshot(&mut self, host: &LanHost) {
+            self.plugins.mods.set_snapshot(snapshot(host));
+            self.set_plugin_map_id();
+        }
+
+        /// The world's next free map id, for `maps.create`.
+        pub(in crate::game) fn set_plugin_map_id(&mut self) {
+            if !self.world_root.as_os_str().is_empty() {
+                let next = self.peek_map_id();
+                self.plugins.mods.set_next_map_id(next);
+            }
+        }
+
         /// Reads `plugins/` and starts every plugin there, logging each.
         fn start_plugins(&mut self) {
             self.plugins.started = true;
@@ -638,7 +653,7 @@ mod run {
         fn run_plugin_tick(&mut self, host: &mut LanHost) {
             let players = server_players(host);
             self.feed_plugin_statistics(host);
-            self.plugins.mods.set_snapshot(snapshot(host));
+            self.set_plugin_snapshot(host);
             self.lend_world();
             let before = std::mem::take(&mut self.plugins.players);
             for p in before
@@ -734,7 +749,7 @@ mod run {
             let Some(me) = server_players(host).into_iter().find(|p| p.id == id) else {
                 return false;
             };
-            self.plugins.mods.set_snapshot(snapshot(host));
+            self.set_plugin_snapshot(host);
             self.lend_world();
             let owned = self.plugins.mods.server_command(&me, line);
             self.return_world();
@@ -924,6 +939,12 @@ mod run {
                         header,
                         footer,
                     } => Self::send_plugin_tab_list(host, &player, &header, &footer),
+                    Output::NewMap {
+                        id,
+                        dimension,
+                        colors,
+                    } => self.plugin_new_map(id, &dimension, colors),
+                    Output::PaintMap { id, colors } => self.plugin_paint_map(id, &colors),
                     Output::ActionBar { player, text, .. } => {
                         Self::tell_plugin_player(host, &player, &Text::markup(&text), true);
                     }

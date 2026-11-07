@@ -520,6 +520,9 @@ pub struct Expect {
     broadcast: Option<Vec<String>>,
     /// Server mods: every `players.set-tab-list` as `"Name: header | footer"`, in order.
     tab_list: Option<Vec<String>>,
+    /// Server mods: every `maps.create` as `"new <id> <dimension>"` and `maps.paint` as
+    /// `"paint <id>"`, in order.
+    maps: Option<Vec<String>>,
     /// Server mods: every `players.action-bar` as `"Name: text"`, in order.
     action_bar: Option<Vec<String>>,
     /// Server mods: every `players.teleport` as `"Name: dimension x y z"`, in
@@ -856,6 +859,14 @@ impl Step {
                 _ => None,
             })
             .collect();
+        let maps: Vec<String> = out
+            .iter()
+            .filter_map(|o| match o {
+                Output::NewMap { id, dimension, .. } => Some(format!("new {id} {dimension}")),
+                Output::PaintMap { id, .. } => Some(format!("paint {id}")),
+                _ => None,
+            })
+            .collect();
         let action_bar: Vec<String> = out
             .iter()
             .filter_map(|o| match o {
@@ -990,6 +1001,9 @@ impl Step {
         }
         if let Some(want) = &e.tab_list {
             same("tab-list", want, &tab_list)?;
+        }
+        if let Some(want) = &e.maps {
+            same("maps", want, &maps)?;
         }
         if let Some(want) = &e.action_bar {
             same("action-bar", want, &action_bar)?;

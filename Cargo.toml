@@ -34,6 +34,7 @@ members = [
     "crates/horizon-mods",
     "plugins/elytra",
     "plugins/edit",
+    "plugins/imageframe",
     "plugins/paster",
     "plugins/regions",
     "plugins/spawn",

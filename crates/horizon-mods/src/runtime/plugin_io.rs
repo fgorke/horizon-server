@@ -1,5 +1,5 @@
 //! Server plugins' newer imports and hooks (WIT `movement`, `channels`, `network`, `random`,
-//! `statistics` and the `plugin-events` export). A plugin built before them imports none and
+//! `statistics`, `maps` (in `images`) and the `plugin-events` export). A plugin built before them imports none and
 //! exports no `plugin-events`: it loads as before and hears none of these hooks.
 //!
 //! The sockets of capability `network` are served by threads of their own, which only queue
@@ -30,6 +30,7 @@ mod bindings {
 }
 pub(super) use bindings::PluginHost;
 pub use bindings::exports::horizon::mods::plugin_events::{Datagram, Request, Response};
+pub(super) use bindings::horizon::mods::maps;
 use bindings::horizon::mods::{channels, movement, network, random, statistics};
 
 /// `channels.listen` prefixes per plugin, and `channels.send` payloads per call and their size.
@@ -90,7 +91,9 @@ pub(super) struct Io {
     http: Option<Arc<HttpInbox>>,
     /// Sockets are recorded, not opened (`cargo horizon-mod test`): sent datagrams are
     /// [`Output::UdpSent`].
-    simulated: bool,
+    pub(super) simulated: bool,
+    /// Capability `maps`' requests.
+    pub(super) images: super::images::Fetches,
     /// This call's `channels.send` payloads, `udp-send` datagrams and `push`es.
     payloads: usize,
     datagrams: usize,
@@ -105,10 +108,15 @@ struct Udp {
 }
 
 impl Io {
-    pub(super) fn new(simulated: bool, files: FilesSlot) -> Self {
+    pub(super) fn new(
+        simulated: bool,
+        files: FilesSlot,
+        map_ids: Arc<std::sync::atomic::AtomicI32>,
+    ) -> Self {
         Io {
             simulated,
             files,
+            images: super::images::Fetches::new(map_ids),
             ..Io::default()
         }
     }
@@ -117,6 +125,7 @@ impl Io {
         self.payloads = 0;
         self.datagrams = 0;
         self.pushes = 0;
+        self.images.new_call();
     }
     fn hears(&self, channel: &str) -> bool {
         self.listens.iter().any(|p| channel.starts_with(p.as_str()))
@@ -617,6 +626,7 @@ pub(super) fn add_to_linker(
     channels::add_to_linker::<State, HasSelf<State>>(linker, |s| s)?;
     network::add_to_linker::<State, HasSelf<State>>(linker, |s| s)?;
     random::add_to_linker::<State, HasSelf<State>>(linker, |s| s)?;
+    maps::add_to_linker::<State, HasSelf<State>>(linker, |s| s)?;
     statistics::add_to_linker::<State, HasSelf<State>>(linker, |s| s)
 }
 

@@ -2007,18 +2007,23 @@ name = "horizon-mods"
 version = "0.1.0"
 dependencies = [
  "getrandom 0.3.4",
+ "gif",
  "horizon-shader-api",
+ "image-webp",
  "log",
  "minisign-verify",
+ "png",
  "serde",
  "serde_json",
  "sha2",
  "toml",
+ "ureq",
  "wasmparser 0.254.2",
  "wasmtime",
  "wit-component",
  "wit-parser",
  "zip",
+ "zune-jpeg",
 ]
 
 [[package]]
@@ -2066,6 +2071,13 @@ dependencies = [
 
 [[package]]
 name = "horizon-plugin-elytra"
+version = "0.1.0"
+dependencies = [
+ "horizon-mod-sdk",
+]
+
+[[package]]
+name = "horizon-plugin-imageframe"
 version = "0.1.0"
 dependencies = [
  "horizon-mod-sdk",

@@ -2,7 +2,7 @@
 //! the swap-hands key and payloads reach them at once, their sockets between ticks
 //! ([`Game::pump_plugins`]), and the statistics of the players online once a second. What they
 //! ask of players (glides, double jumps, pushes, payloads) is made in [`apply`].
-use super::run::{server_players, snapshot, uuid_string};
+use super::run::{server_players, uuid_string};
 use crate::game::{Game, lan::LanHost};
 use horizon_core::geometry::Vec3;
 use horizon_mods::{Output, PlayerMotion, ServerFiles, ServerPlayer};
@@ -97,7 +97,7 @@ impl Game<'_> {
         let Some(me) = plugin_player(host, conn) else {
             return false;
         };
-        self.plugins.mods.set_snapshot(snapshot(host));
+        self.set_plugin_snapshot(host);
         let taken = self.plugins.mods.swap_hands(&me);
         self.route_plugin_output(host);
         taken
@@ -117,7 +117,7 @@ impl Game<'_> {
         let Some(me) = plugin_player(host, conn) else {
             return false;
         };
-        self.plugins.mods.set_snapshot(snapshot(host));
+        self.set_plugin_snapshot(host);
         let heard = self.plugins.mods.payload(&me, channel, data);
         self.route_plugin_output(host);
         heard
@@ -129,6 +129,7 @@ impl Game<'_> {
         if !self.plugins.running || !self.plugins.mods.wants_network() {
             return false;
         }
+        self.set_plugin_map_id();
         self.plugins.mods.pump_network();
         if let Some(mut host) = self.lan.take() {
             self.route_plugin_output(&mut host);

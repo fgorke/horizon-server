@@ -23,6 +23,7 @@ The contract between Horizon and its mods: the WIT package `horizon:mods@0.1.0`,
 | `channels` | [`channels`](#channels) | exchange plugin messages with the mods in players' games |
 | `network` | [`network`](#network) | open a UDP port and serve a website on a port of its own |
 | `statistics` | [`statistics`](#statistics) | read players' statistics and the names the server knew them by |
+| `maps` | [`maps`](#maps) | fetch images from the web and show them on maps |
 
 ## World `horizon-mod`
 
@@ -35,7 +36,7 @@ A client mod: runs in the player's game.
 
 A server mod (manifest `side = "server"`, `api = "0.3"`, experimental): runs where the world is simulated, on the dedicated server, a LAN host and single player's own server.
 
-- Imports (what the game offers): `log`, `storage`, `players`, `world`, `command`, `movement`, `channels`, `network`, `random`, `statistics`
+- Imports (what the game offers): `log`, `storage`, `players`, `world`, `command`, `movement`, `channels`, `network`, `random`, `statistics`, `maps`
 - Exports (what the mod provides): `server-events`, `plugin-events`
 
 ## World `server-host`
@@ -47,7 +48,7 @@ The game's side of the server plugins' imports and hooks since API level 10: a s
 
 ## World `plugin-host`
 
-- Imports (what the game offers): `movement`, `channels`, `network`, `random`, `statistics`, `players`
+- Imports (what the game offers): `movement`, `channels`, `network`, `random`, `statistics`, `maps`, `players`
 - Exports (what the mod provides): `plugin-events`
 
 ## World `horizon-ui-mod`
@@ -802,6 +803,28 @@ Capability `statistics` (server plugins): what players' statistics say.
 | `names` | `func() -> list<tuple<string, string>>` | The names the server knew players by (`usercache.json`): UUID, name. |
 | `translations` | `func(language: string, prefixes: list<string>) -> option<list<tuple<string, string>>>` | The entries of the game's language file `language` (`en_us`) whose keys start with one of `prefixes` (up to 16); none when there's no such language. |
 | `world-name` | `func() -> string` | The world folder's name. |
+
+## `maps`
+
+Access: capability `maps`.
+
+Capability `maps` (server plugins): pictures on maps, from images on the web. A picture is 128 x 128 map colours row by row from the top left, each a `MapColor` id times 4 plus its shade (0 to 3); 0 is transparent.
+
+### record `frame`
+
+One frame of a fetched image: a picture per map, row by row from the top left, and how long it shows (0 for a still image).
+
+| Field | Type | |
+| --- | --- | --- |
+| `delay-ms` | `u32` |  |
+| `pictures` | `list<list<u8>>` |  |
+
+| Function | Signature | What it does |
+| --- | --- | --- |
+| `fetch` | `func(url: string, columns: u32, rows: u32) -> result<u32, string>` | Starts fetching the image at `url` (PNG, JPEG, WebP or GIF; `http` or `https`, public addresses only, up to 16 MB and 30 seconds) and fitting it onto `columns` x `rows` maps: as large as fits without stretching, centred, dithered to the map colours. An animation keeps its frames, each at least 50 ms (a long one every second frame, shown twice as long). The request's number; an error for a bad address or size (1 to 16 maps across and down, 64 in all) or with 4 requests not yet collected. |
+| `fetched` | `func(request: u32) -> option<result<list<frame>, string>>` | A request's outcome once it is done, then never again; none while it runs or for a number never given. |
+| `create` | `func(dimension: string, picture: list<u8>) -> result<s32, string>` | A new locked map of `dimension` showing `picture`, made after this call returns and saved with the world: its id, for `filled_map[map_id=<id>]`. At most 64 per call. |
+| `paint` | `func(id: s32, picture: list<u8>) -> result<_, string>` | Replaces the picture of map `id` after this call returns, for everyone carrying it or seeing it framed; an id the world has no map for is skipped. At most 256 per call. |
 
 ## `plugin-events`
 

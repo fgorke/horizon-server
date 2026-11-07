@@ -1,0 +1,16 @@
+[package]
+name = "horizon-plugin-imageframe"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "Horizon Server plugin: images from the web on maps in item frames, animated GIFs included"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+horizon-mod-sdk = { path = "../../crates/horizon-mod-sdk" }
+
+[lints]
+workspace = true

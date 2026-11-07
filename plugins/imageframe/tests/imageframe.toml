@@ -1,0 +1,41 @@
+# /imageframe: operators only; a fetch fails in tests (no network), and nothing is made.
+
+[[step]]
+join = "Alex"
+player = { x = 0.5, y = 64.0, z = 0.5, permission = 0 }
+command = "imageframe list"
+expect.error = "You need to be an operator for that."
+
+[[step]]
+player = { x = 0.5, y = 64.0, z = 0.5, permission = 2 }
+command = "imageframe list"
+expect.feedback = "No images yet."
+
+[[step]]
+command = "imageframe create bad/name 1 1 https://example.com/a.png"
+expect.error = "A name is 1 to 32 letters, digits, - and _."
+
+[[step]]
+command = "imageframe create logo 1 1 ftp://example.com/a.png"
+expect.error = "Image logo failed: an image's address starts with http:// or https://"
+
+[[step]]
+command = "imageframe create logo 20 1 https://example.com/a.png"
+expect.error = "Image logo failed: 20 x 1 maps: 1 to 16 across and down, 64 in all"
+
+[[step]]
+command = "imageframe create logo 2 1 https://example.com/a.png"
+expect.feedback = "Fetching https://example.com/a.png for logo..."
+
+[[step]]
+ticks = 1
+expect.told = ["Alex: Image logo failed: images are not fetched in tests"]
+expect.maps = []
+
+[[step]]
+command = "imageframe get logo"
+expect.error = "There is no image called logo."
+
+[[step]]
+command = "imageframe nonsense"
+expect.error = "/imageframe create <name> <columns> <rows> <url> | get <name> | place <name> | list | delete <name> | rename <name> <new name> | pause <name> | refresh <name>"

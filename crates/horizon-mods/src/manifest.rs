@@ -113,9 +113,11 @@ pub enum Capability {
     Network,
     /// Players' statistics, saved and live (server plugins).
     Statistics,
+    /// Pictures on maps, from images on the web (server plugins).
+    Maps,
 }
 impl Capability {
-    pub const ALL: [Capability; 16] = [
+    pub const ALL: [Capability; 17] = [
         Capability::GameRead,
         Capability::Chat,
         Capability::Hud,
@@ -132,6 +134,7 @@ impl Capability {
         Capability::Channels,
         Capability::Network,
         Capability::Statistics,
+        Capability::Maps,
     ];
     /// Whether a server mod may have it: the others act on a local player.
     pub fn on_server(self) -> bool {
@@ -144,6 +147,7 @@ impl Capability {
                 | Capability::Channels
                 | Capability::Network
                 | Capability::Statistics
+                | Capability::Maps
         )
     }
     /// The WIT interface it grants, in `horizon:mods`.
@@ -165,6 +169,7 @@ impl Capability {
             Capability::Channels => "channels",
             Capability::Network => "network",
             Capability::Statistics => "statistics",
+            Capability::Maps => "maps",
         }
     }
     /// May change in any release: a mod uses it only with
@@ -204,6 +209,7 @@ impl Capability {
             Capability::Statistics => {
                 "read players' statistics and the names the server knew them by"
             }
+            Capability::Maps => "fetch images from the web and show them on maps",
         }
     }
     /// The capability a component import needs, `Ok(None)` for one every
@@ -249,6 +255,7 @@ impl fmt::Display for Capability {
             Capability::Channels => "channels",
             Capability::Network => "network",
             Capability::Statistics => "statistics",
+            Capability::Maps => "maps",
         };
         f.write_str(name)
     }

@@ -102,6 +102,8 @@ pub use recipes_bindings::horizon::mods::recipes::{
     Item as RecipeItem, Kind as RecipeKind, Recipe, Stack as RecipeStack,
 };
 use recipes_bindings::{RecipesHost, horizon::mods::browser, horizon::mods::recipes};
+mod images;
+pub use images::MAP_COLORS;
 mod plugin_io;
 use plugin_io::PluginHost;
 pub use plugin_io::{Datagram, PlayerMotion, Request, Response, ServerFiles};
@@ -247,6 +249,15 @@ pub enum Output {
         text: String,
         prefix: Option<String>,
     },
+    /// `maps.create`: a new locked map `id` of `dimension` showing `colors` (128 x 128
+    /// packed map colours).
+    NewMap {
+        id: i32,
+        dimension: String,
+        colors: Vec<u8>,
+    },
+    /// `maps.paint`: map `id`'s new picture.
+    PaintMap { id: i32, colors: Vec<u8> },
     /// `players.set-tab-list`: the player's tab list header and footer, markup.
     TabList {
         player: String,
@@ -524,6 +535,9 @@ pub struct Mods {
     files: plugin_io::FilesSlot,
     /// Sockets are recorded, not opened ([`Mods::load_simulated`]).
     simulated_network: bool,
+    /// The id `maps.create` gives next, shared by every plugin: the game sets it before its
+    /// calls ([`Mods::set_next_map_id`]) and makes the maps in order after them.
+    map_ids: Arc<std::sync::atomic::AtomicI32>,
 }
 
 impl Mods {
@@ -691,7 +705,11 @@ impl Mods {
         let snapshot = self.snapshot.clone();
         let world = self.world.clone();
         let plugin_folders = self.plugin_folders;
-        let io = plugin_io::Io::new(self.simulated_network, self.files.clone());
+        let io = plugin_io::Io::new(
+            self.simulated_network,
+            self.files.clone(),
+            self.map_ids.clone(),
+        );
         let (engine, linker) = self.engine()?;
         let component =
             Component::new(engine, wasm).map_err(|e| format!("not a component: {e}"))?;
@@ -822,6 +840,10 @@ impl Mods {
     /// What mods read until the next snapshot.
     pub fn set_snapshot(&mut self, snapshot: Snapshot) {
         self.snapshot = Arc::new(snapshot);
+    }
+    /// The world's next free map id, for `maps.create` in the calls up to the next drain.
+    pub fn set_next_map_id(&mut self, id: i32) {
+        self.map_ids.store(id, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Calls `f` on every running mod whose hooks `wants`, with `fuel`.

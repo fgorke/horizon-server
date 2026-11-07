@@ -1128,6 +1128,34 @@ impl Game<'_> {
             }
         }
     }
+    /// A plugin's `maps.create`: a locked map `id` (the id the plugins were told was next)
+    /// of `dimension` showing `colors`, as [`Game::native_new_map`] makes one. An id the world
+    /// already has is left alone.
+    pub(in crate::game) fn plugin_new_map(&mut self, id: i32, dimension: &str, colors: Vec<u8>) {
+        let next = self.peek_map_id();
+        if id < next || colors.len() != 128 * 128 {
+            log::warn!("a plugin's new map {id} is not the next free one ({next}): skipped");
+            return;
+        }
+        let mut data = MapData::fresh(0.0, 0.0, 0, dimension);
+        data.locked = true;
+        data.tracking = false;
+        data.unlimited = false;
+        data.colors = colors;
+        data.dirty = true;
+        self.maps.data.insert(id, data);
+        self.maps.last_id = Some(id);
+    }
+    /// A plugin's `maps.paint`: map `id`'s new picture, for everyone holding or seeing it.
+    pub(in crate::game) fn plugin_paint_map(&mut self, id: i32, colors: &[u8]) {
+        if colors.len() != 128 * 128 {
+            return;
+        }
+        match self.map(id) {
+            Some(map) => map.paint(colors),
+            None => log::debug!("a plugin painted map {id}, which the world doesn't have"),
+        }
+    }
     /// Registers `data` under a free map id.
     pub(super) fn new_map_id(&mut self, data: MapData) -> i32 {
         let id = self.next_map_id();
@@ -1954,6 +1982,12 @@ mod save_tests;
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "plugins")]
+    #[test]
+    fn plugins_dither_to_the_games_map_colours() {
+        assert_eq!(horizon_mods::MAP_COLORS, horizon_client::blocks::MAP_COLORS);
+    }
+
     use super::*;
 
     #[test]

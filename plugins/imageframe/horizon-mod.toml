@@ -1,0 +1,8 @@
+id = "imageframe"
+name = "Image Frame"
+version = "0.1.0"
+description = "Images from the web on maps in item frames, animated GIFs included: /imageframe for operators."
+authors = ["fgorke"]
+api = "0.3"
+side = "server"
+capabilities = ["players", "world", "storage", "command", "maps"]

@@ -834,6 +834,38 @@ interface statistics {
     world-name: func() -> string;
 }
 
+/// Capability `maps` (server plugins): pictures on maps, from images on the web.
+/// A picture is 128 x 128 map colours row by row from the top left, each a
+/// `MapColor` id times 4 plus its shade (0 to 3); 0 is transparent.
+interface maps {
+    /// One frame of a fetched image: a picture per map, row by row from the
+    /// top left, and how long it shows (0 for a still image).
+    record frame {
+        delay-ms: u32,
+        pictures: list<list<u8>>,
+    }
+    /// Starts fetching the image at `url` (PNG, JPEG, WebP or GIF; `http` or
+    /// `https`, public addresses only, up to 16 MB and 30 seconds) and
+    /// fitting it onto `columns` x `rows` maps: as large as fits without
+    /// stretching, centred, dithered to the map colours. An animation keeps
+    /// its frames, each at least 50 ms (a long one every second frame,
+    /// shown twice as long). The request's number; an error for a bad
+    /// address or size (1 to 16 maps across and down, 64 in all) or with 4
+    /// requests not yet collected.
+    fetch: func(url: string, columns: u32, rows: u32) -> result<u32, string>;
+    /// A request's outcome once it is done, then never again; none while it
+    /// runs or for a number never given.
+    fetched: func(request: u32) -> option<result<list<frame>, string>>;
+    /// A new locked map of `dimension` showing `picture`, made after this
+    /// call returns and saved with the world: its id, for
+    /// `filled_map[map_id=<id>]`. At most 64 per call.
+    create: func(dimension: string, picture: list<u8>) -> result<s32, string>;
+    /// Replaces the picture of map `id` after this call returns, for
+    /// everyone carrying it or seeing it framed; an id the world has no map
+    /// for is skipped. At most 256 per call.
+    paint: func(id: s32, picture: list<u8>) -> result<_, string>;
+}
+
 /// More of the server's calls into a plugin, beside `server-events`: a
 /// plugin built before them doesn't export these and simply hears none.
 interface plugin-events {
@@ -990,6 +1022,7 @@ world horizon-server-mod {
     import network;
     import random;
     import statistics;
+    import maps;
     export server-events;
     export plugin-events;
 }
@@ -1012,6 +1045,7 @@ world plugin-host {
     import network;
     import random;
     import statistics;
+    import maps;
     export plugin-events;
 }
 

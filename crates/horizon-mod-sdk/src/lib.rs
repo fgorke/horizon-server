@@ -206,6 +206,8 @@ pub mod server {
         Argument, ArgumentKind, ArgumentValue, BlockPos, Guest as __Guest, Registration,
         ServerCommand,
     };
+    /// API level 13: capability `maps`, pictures on maps from images on the web.
+    pub use horizon::mods::maps;
     pub use horizon::mods::players::{self, GameMode, Player};
     pub use horizon::mods::world::{self, BlockChange, ProtectedAction, Region};
     /// API level 10: capabilities `movement`, `channels`, `network` and `statistics`, and
