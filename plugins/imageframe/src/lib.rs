@@ -268,7 +268,7 @@ fn facing(face: [i32; 3]) -> u8 {
 
 fn summon(dimension: &str, at: [i32; 3], face: [i32; 3], map: i32) -> String {
     format!(
-        "execute in {dimension} run summon minecraft:item_frame {} {} {} {{Facing:{}b,Item:{{id:\"minecraft:filled_map\",count:1,components:{{\"minecraft:map_id\":{map}}}}}}}",
+        "execute in {dimension} run summon minecraft:item_frame {} {} {} {{Facing:{}b,Invisible:1b,Item:{{id:\"minecraft:filled_map\",count:1,components:{{\"minecraft:map_id\":{map}}}}}}}",
         f64::from(at[0]) + 0.5,
         f64::from(at[1]) + 0.5,
         f64::from(at[2]) + 0.5,
@@ -760,7 +760,7 @@ mod tests {
         assert_eq!(facing([1, 0, 0]), 5);
         assert_eq!(
             summon("minecraft:overworld", [1, 2, -3], [0, 0, 1], 9),
-            "execute in minecraft:overworld run summon minecraft:item_frame 1.5 2.5 -2.5 {Facing:3b,Item:{id:\"minecraft:filled_map\",count:1,components:{\"minecraft:map_id\":9}}}"
+            "execute in minecraft:overworld run summon minecraft:item_frame 1.5 2.5 -2.5 {Facing:3b,Invisible:1b,Item:{id:\"minecraft:filled_map\",count:1,components:{\"minecraft:map_id\":9}}}"
         );
     }
 }
