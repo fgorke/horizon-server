@@ -818,7 +818,7 @@ mod run {
                         continue;
                     }
                 };
-                if let Err(e) = self.place_state([b.x, b.y, b.z], state, false) {
+                if let Err(e) = self.place_state([b.x, b.y, b.z], state, false, false) {
                     log::debug!("a plugin's block at {} {} {}: {e:?}", b.x, b.y, b.z);
                 }
             }
