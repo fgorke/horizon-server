@@ -1,7 +1,7 @@
 //! What an intro is made of, and how it is stored: poses tick by tick (the camera's path, each
 //! figure's walk), the island and the ground under it, the schematic it is built from, and the
 //! settings.
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 /// Where something is and where it looks, one tick of a recording.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -70,40 +70,13 @@ pub struct Island {
 pub type Footprint = [i32; 4];
 
 impl Island {
-    /// `dimension drop`, then the states (`P state`), then a line a block (`B x y z state#`),
-    /// then the ground's states in the blocks' order (`G state#`).
+    /// `dimension drop`, then a line a block (`B x y z state#`), then the ground's states in
+    /// the blocks' order (`G state#`); each state is numbered by a `P state` line before its
+    /// first use.
     pub fn text(&self) -> String {
-        fn index<'a>(
-            palette: &mut HashMap<&'a str, usize>,
-            states: &mut Vec<&'a str>,
-            s: &'a str,
-        ) -> usize {
-            let n = palette.len();
-            *palette.entry(s).or_insert_with(|| {
-                states.push(s);
-                n
-            })
-        }
-        let mut palette: HashMap<&str, usize> = HashMap::new();
-        let mut states: Vec<&str> = Vec::new();
-        let blocks: Vec<String> = self
-            .blocks
-            .iter()
-            .map(|([x, y, z], s)| {
-                let i = index(&mut palette, &mut states, s);
-                format!("B {x} {y} {z} {i}")
-            })
-            .collect();
-        let ground: Vec<String> = self
-            .ground
-            .iter()
-            .map(|s| format!("G {}", index(&mut palette, &mut states, s)))
-            .collect();
-        let mut out = vec![format!("{} {}", self.dimension, self.drop)];
-        out.extend(states.iter().map(|s| format!("P {s}")));
-        out.extend(blocks);
-        out.extend(ground);
-        out.join("\n")
+        let mut w = IslandWriter::default();
+        while !w.write(self, usize::MAX) {}
+        w.out
     }
 
     pub fn parse(text: &str) -> Option<Island> {
@@ -140,7 +113,30 @@ impl Island {
     /// The blocks with a side open to something not of the island: the ones a rising
     /// copy needs, since the others are never seen.
     pub fn surface(&self) -> Vec<usize> {
-        let cells: HashSet<[i32; 3]> = self.blocks.iter().map(|(p, _)| *p).collect();
+        if self.blocks.is_empty() {
+            return Vec::new();
+        }
+        // A grid over the island's box, a block of air all round: cheap to look up in.
+        let f = self.footprint();
+        let (low, high) = self.heights();
+        let lo = [f[0] - 1, low - 1, f[2] - 1];
+        let size = [
+            (f[1] - f[0] + 3) as usize,
+            (high - low + 3) as usize,
+            (f[3] - f[2] + 3) as usize,
+        ];
+        let at = |[x, y, z]: [i32; 3]| {
+            let (x, y, z) = (
+                (x - lo[0]) as usize,
+                (y - lo[1]) as usize,
+                (z - lo[2]) as usize,
+            );
+            (y * size[2] + z) * size[0] + x
+        };
+        let mut solid = vec![false; size[0] * size[1] * size[2]];
+        for (p, _) in &self.blocks {
+            solid[at(*p)] = true;
+        }
         const SIDES: [[i32; 3]; 6] = [
             [1, 0, 0],
             [-1, 0, 0],
@@ -155,7 +151,7 @@ impl Island {
             .filter(|(_, ([x, y, z], _))| {
                 SIDES
                     .iter()
-                    .any(|[dx, dy, dz]| !cells.contains(&[x + dx, y + dy, z + dz]))
+                    .any(|[dx, dy, dz]| !solid[at([x + dx, y + dy, z + dz])])
             })
             .map(|(i, _)| i)
             .collect()
@@ -176,6 +172,54 @@ impl Island {
     }
 }
 
+/// An island's text, written a slice at a time: a big island's in one go costs more than a
+/// tick allows.
+#[derive(Default)]
+pub struct IslandWriter {
+    pub out: String,
+    palette: HashMap<String, usize>,
+    /// Lines written: the blocks', then the ground's.
+    done: usize,
+}
+
+impl IslandWriter {
+    /// Writes up to `lines` more lines of `island`: true once it is all written.
+    pub fn write(&mut self, island: &Island, lines: usize) -> bool {
+        use std::fmt::Write;
+        let all = island.blocks.len() * 2;
+        if self.done == 0 && self.out.is_empty() {
+            let _ = write!(self.out, "{} {}", island.dimension, island.drop);
+        }
+        let end = self.done.saturating_add(lines).min(all);
+        for i in self.done..end {
+            let n = island.blocks.len();
+            let state = if i < n {
+                &island.blocks[i].1
+            } else {
+                &island.ground[i - n]
+            };
+            let index = match self.palette.get(state.as_str()) {
+                Some(&k) => k,
+                None => {
+                    let k = self.palette.len();
+                    self.palette.insert(state.clone(), k);
+                    self.out.push_str("\nP ");
+                    self.out.push_str(state);
+                    k
+                }
+            };
+            if i < n {
+                let [x, y, z] = island.blocks[i].0;
+                let _ = write!(self.out, "\nB {x} {y} {z} {index}");
+            } else {
+                let _ = write!(self.out, "\nG {index}");
+            }
+        }
+        self.done = end;
+        end == all
+    }
+}
+
 /// Whether `x z` is over the island (with a block to spare): what stands there rises with it.
 pub fn over(f: &Footprint, x: f64, z: f64) -> bool {
     let (x, z) = (x.floor() as i32, z.floor() as i32);
@@ -191,20 +235,35 @@ pub struct Schematic {
 }
 
 impl Schematic {
+    #[cfg(test)]
     pub fn parse(text: &str) -> Option<Schematic> {
         let mut lines = text.lines();
-        let ground = lines.next()?.strip_prefix("ground ")?.trim().parse().ok()?;
+        let ground = Schematic::header(lines.next()?)?;
         let mut blocks = Vec::new();
-        for line in lines.filter(|l| !l.trim().is_empty()) {
-            let mut p = line.splitn(4, ' ');
-            let mut n = || p.next()?.parse::<i32>().ok();
-            let pos = [n()?, n()?, n()?];
-            let state = p.next()?.trim().to_owned();
-            if !is_air(&state) {
-                blocks.push((pos, state));
+        for line in lines {
+            if let Some(b) = Schematic::line(line)? {
+                blocks.push(b);
             }
         }
         Some(Schematic { ground, blocks })
+    }
+
+    /// The first line: `ground <y>`.
+    pub fn header(line: &str) -> Option<i32> {
+        line.strip_prefix("ground ")?.trim().parse().ok()
+    }
+
+    /// A block line, `x y z state`: None when it is malformed, `Some(None)` for air or a
+    /// blank line.
+    pub fn line(line: &str) -> Option<Option<Block>> {
+        if line.trim().is_empty() {
+            return Some(None);
+        }
+        let mut p = line.splitn(4, ' ');
+        let mut n = || p.next()?.parse::<i32>().ok();
+        let pos = [n()?, n()?, n()?];
+        let state = p.next()?.trim();
+        Some((!is_air(state)).then(|| (pos, state.to_owned())))
     }
 
     /// The middle of the blocks' x and z.

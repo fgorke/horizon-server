@@ -23,13 +23,13 @@ use horizon_mod_sdk::{
     server::{Player, Registration, ServerMod, cinematic, players, world},
     storage,
 };
-use scene::{Footprint, Island, Pose, Schematic, Settings, is_air, parse_track, track_text};
+use scene::{Footprint, Island, Pose, Settings, is_air, parse_track, track_text};
 use show::{BLOCKS_PER_TICK, Mode, Npc, Scene, Show};
 use std::collections::{BTreeSet, VecDeque};
 
 const OPERATOR: u8 = 2;
 const SETTINGS: &str = "settings";
-const ISLAND: &str = "island";
+pub(crate) const ISLAND: &str = "island";
 const SCHEMATIC: &str = "schematic";
 const CAMERA: &str = "camera";
 const SEEN: &str = "seen";
@@ -42,7 +42,7 @@ const MAX_NPCS: usize = 32;
 /// A recording's ticks: five minutes.
 pub(crate) const MAX_FRAMES: usize = 6000;
 /// The island's blocks and the box `capture` reads.
-const MAX_ISLAND: usize = 32768;
+pub(crate) const MAX_ISLAND: usize = 32768;
 const MAX_BOX: i64 = 128 * 128 * 128;
 /// Ticks between a join and the intro (the player's chunks arrive meanwhile, blinded), and
 /// before a show (the island's blocks go out meanwhile).
@@ -83,7 +83,7 @@ const MESSAGES: &[(&str, &str)] = &[
     ("bad_build", "Can't build there: {why}."),
     (
         "building",
-        "Building the island: {count} blocks over the next ticks...",
+        "Building the island from the schematic over the next ticks...",
     ),
     (
         "built",
@@ -362,6 +362,11 @@ impl Intro {
 
     fn keep_island(&mut self, island: Island) -> String {
         save(ISLAND, &island.text());
+        self.adopt_island(island)
+    }
+
+    /// Takes an island already saved.
+    fn adopt_island(&mut self, island: Island) -> String {
         let count = island.blocks.len();
         let drop = island.drop;
         self.settings.drop = drop;
@@ -379,25 +384,16 @@ impl Intro {
             .ok()
             .filter(|l| (8..=256).contains(l))
             .ok_or_else(|| self.say("usage", &[]))?;
-        let schematic = load(SCHEMATIC)
-            .and_then(|t| Schematic::parse(&t))
-            .ok_or_else(|| self.say("no_schematic", &[]))?;
-        if schematic.blocks.len() > MAX_ISLAND {
-            return Err(self.say("big_island", &[]));
-        }
+        let text = load(SCHEMATIC).ok_or_else(|| self.say("no_schematic", &[]))?;
         let feet = [
             player.x.floor() as i32,
             player.y.floor() as i32,
             player.z.floor() as i32,
         ];
-        let build = Build::plan(&schematic, &player.id, &player.dimension, feet, lift)
+        let build = Build::new(text, &player.id, &player.dimension, feet, lift)
             .map_err(|why| self.say("bad_build", &[("why", &why)]))?;
-        if !build.loaded() {
-            return Err(self.say("unloaded", &[]));
-        }
-        let count = build.progress().1;
         self.build = Some(build);
-        Ok(self.say("building", &[("count", &count)]))
+        Ok(self.say("building", &[]))
     }
 
     fn step_build(&mut self) {
@@ -414,7 +410,7 @@ impl Intro {
                 let (low, _) = island.heights();
                 let bottom = low - island.drop;
                 let drop = island.drop;
-                self.keep_island(island);
+                self.adopt_island(island);
                 let count = self.island.as_ref().map_or(0, |i| i.blocks.len());
                 let line = self.say(
                     "built",
