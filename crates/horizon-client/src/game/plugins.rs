@@ -13,6 +13,8 @@ use horizon_protocol::packets::play::{self, Clientbound as C};
 use horizon_world::registry::BlockStateId;
 
 #[cfg(feature = "plugins")]
+mod cinematic;
+#[cfg(feature = "plugins")]
 mod io;
 
 /// How often, between ticks, the server looks at the plugins' sockets.
@@ -945,6 +947,9 @@ mod run {
                         colors,
                     } => self.plugin_new_map(id, &dimension, colors),
                     Output::PaintMap { id, colors } => self.plugin_paint_map(id, &colors),
+                    Output::Cinematic { player, action } => {
+                        self.apply_plugin_cinematic(host, &player, action);
+                    }
                     Output::ActionBar { player, text, .. } => {
                         Self::tell_plugin_player(host, &player, &Text::markup(&text), true);
                     }

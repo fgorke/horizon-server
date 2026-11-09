@@ -42,6 +42,7 @@ members = [
     "plugins/elytra",
     "plugins/edit",
     "plugins/imageframe",
+    "plugins/intro",
     "plugins/paster",
     "plugins/regions",
     "plugins/spawn",

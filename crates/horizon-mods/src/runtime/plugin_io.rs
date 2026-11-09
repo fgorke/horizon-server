@@ -30,8 +30,8 @@ mod bindings {
 }
 pub(super) use bindings::PluginHost;
 pub use bindings::exports::horizon::mods::plugin_events::{Datagram, Request, Response};
-pub(super) use bindings::horizon::mods::maps;
 use bindings::horizon::mods::{channels, movement, network, random, statistics};
+pub(super) use bindings::horizon::mods::{cinematic, maps};
 
 /// `channels.listen` prefixes per plugin, and `channels.send` payloads per call and their size.
 const LISTENS: usize = 16;
@@ -94,6 +94,9 @@ pub(super) struct Io {
     pub(super) simulated: bool,
     /// Capability `maps`' requests.
     pub(super) images: super::images::Fetches,
+    /// Capability `cinematic`'s entity calls and blocks in this call.
+    pub(super) cinematic_calls: usize,
+    pub(super) cinematic_blocks: usize,
     /// This call's `channels.send` payloads, `udp-send` datagrams and `push`es.
     payloads: usize,
     datagrams: usize,
@@ -126,6 +129,8 @@ impl Io {
         self.datagrams = 0;
         self.pushes = 0;
         self.images.new_call();
+        self.cinematic_calls = 0;
+        self.cinematic_blocks = 0;
     }
     fn hears(&self, channel: &str) -> bool {
         self.listens.iter().any(|p| channel.starts_with(p.as_str()))
@@ -627,6 +632,7 @@ pub(super) fn add_to_linker(
     network::add_to_linker::<State, HasSelf<State>>(linker, |s| s)?;
     random::add_to_linker::<State, HasSelf<State>>(linker, |s| s)?;
     maps::add_to_linker::<State, HasSelf<State>>(linker, |s| s)?;
+    cinematic::add_to_linker::<State, HasSelf<State>>(linker, |s| s)?;
     statistics::add_to_linker::<State, HasSelf<State>>(linker, |s| s)
 }
 

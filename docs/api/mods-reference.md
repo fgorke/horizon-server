@@ -24,6 +24,7 @@ The contract between Horizon and its mods: the WIT package `horizon:mods@0.1.0`,
 | `network` | [`network`](#network) | open a UDP port and serve a website on a port of its own |
 | `statistics` | [`statistics`](#statistics) | read players' statistics and the names the server knew them by |
 | `maps` | [`maps`](#maps) | fetch images from the web and show them on maps |
+| `cinematic` | [`cinematic`](#cinematic) | show players blocks and figures only they see, move their camera and hide the other players from them |
 
 ## World `horizon-mod`
 
@@ -36,7 +37,7 @@ A client mod: runs in the player's game.
 
 A server mod (manifest `side = "server"`, `api = "0.3"`, experimental): runs where the world is simulated, on the dedicated server, a LAN host and single player's own server.
 
-- Imports (what the game offers): `log`, `storage`, `players`, `world`, `command`, `movement`, `channels`, `network`, `random`, `statistics`, `maps`
+- Imports (what the game offers): `log`, `storage`, `players`, `world`, `command`, `movement`, `channels`, `network`, `random`, `statistics`, `maps`, `cinematic`
 - Exports (what the mod provides): `server-events`, `plugin-events`
 
 ## World `server-host`
@@ -48,7 +49,7 @@ The game's side of the server plugins' imports and hooks since API level 10: a s
 
 ## World `plugin-host`
 
-- Imports (what the game offers): `movement`, `channels`, `network`, `random`, `statistics`, `maps`, `players`
+- Imports (what the game offers): `movement`, `channels`, `network`, `random`, `statistics`, `maps`, `cinematic`, `players`
 - Exports (what the mod provides): `plugin-events`
 
 ## World `horizon-ui-mod`
@@ -803,6 +804,33 @@ Capability `statistics` (server plugins): what players' statistics say.
 | `names` | `func() -> list<tuple<string, string>>` | The names the server knew players by (`usercache.json`): UUID, name. |
 | `translations` | `func(language: string, prefixes: list<string>) -> option<list<tuple<string, string>>>` | The entries of the game's language file `language` (`en_us`) whose keys start with one of `prefixes` (up to 16); none when there's no such language. |
 | `world-name` | `func() -> string` | The world folder's name. |
+
+## `cinematic`
+
+Access: capability `cinematic`.
+
+Capability `cinematic` (server plugins): what one player alone sees, for cutscenes. Blocks that aren't there, entities nobody else sees, the camera on one of them, the other players hidden. The server's world stays as it is and it is all vanilla packets: players need no mod. Everything is sent after the call returns; false (or an error) when the player isn't on.
+
+### record `ghost-block`
+
+A block one player sees in place of the real one.
+
+| Field | Type | |
+| --- | --- | --- |
+| `x` | `s32` |  |
+| `y` | `s32` |  |
+| `z` | `s32` |  |
+| `state` | `string` | `minecraft:oak_log[axis=y]`; `minecraft:air` hides the real block. |
+
+| Function | Signature | What it does |
+| --- | --- | --- |
+| `show-blocks` | `func(player: string, blocks: list<ghost-block>) -> bool` | Shows `blocks` to `player` alone, until their chunk is sent to them again or the block really changes (the real one is back then). At most 8192 per call; an unknown state is skipped (and logged). |
+| `spawn` | `func(player: string, kind: string, x: f64, y: f64, z: f64, yaw: f32, pitch: f32, nbt: string) -> result<u32, string>` | An entity only `player` sees: `kind` is `block_display`, `item_display`, `text_display`, `mannequin` or `armor_stand`, `nbt` its data as `/summon` reads it, `{}` or empty for none (`{block_state:{Name:"minecraft:stone"},teleport_duration:3}`). A mannequin's `profile:"<name>"` wears that player's skin and `CustomName` with `CustomNameVisible:1b` shows a name over it. It never moves by itself, falls or is saved, and is gone when the player changes dimension or leaves. Its id; an error for another kind, an nbt over 4096 characters or 4096 entity calls in this call already. |
+| `set` | `func(player: string, entity: u32, nbt: string) -> bool` | Gives one of `player`'s entities this data in place of what it had: a display's transformation eases over its `interpolation_duration`. |
+| `move-to` | `func(player: string, entity: u32, x: f64, y: f64, z: f64, yaw: f32, pitch: f32) -> bool` | Moves one of `player`'s entities: a display eases over its `teleport_duration`, the others over 3 ticks. |
+| `remove` | `func(player: string, entities: list<u32>) -> bool` | Takes `player`'s entities away. |
+| `view` | `func(player: string, entity: option<u32>) -> bool` | `player` sees through one of their entities, wherever it goes (a spectator's own movement stops), or through their own eyes again (none). |
+| `hide-players` | `func(player: string, hidden: bool) -> bool` | Hides every other player from `player` (true), or shows them again. |
 
 ## `maps`
 

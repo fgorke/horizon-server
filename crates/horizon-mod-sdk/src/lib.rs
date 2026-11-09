@@ -206,6 +206,8 @@ pub mod server {
         Argument, ArgumentKind, ArgumentValue, BlockPos, Guest as __Guest, Registration,
         ServerCommand,
     };
+    /// API level 14: capability `cinematic`, what one player alone sees (cutscenes).
+    pub use horizon::mods::cinematic;
     /// API level 13: capability `maps`, pictures on maps from images on the web.
     pub use horizon::mods::maps;
     pub use horizon::mods::players::{self, GameMode, Player};

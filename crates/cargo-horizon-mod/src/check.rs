@@ -267,6 +267,7 @@ fn play(path: &Path, report: &mut Report) -> Result<(), String> {
             Output::TabList { header, footer, .. } => format!("tab list: {header} | {footer}"),
             Output::NewMap { id, dimension, .. } => format!("new map {id} in {dimension}"),
             Output::PaintMap { id, .. } => format!("painted map {id}"),
+            Output::Cinematic { action, .. } => format!("cinematic: {action:?}"),
             Output::Glide { .. } => "started a glide".to_string(),
             Output::AllowDoubleJump { allow, .. } => format!("double jump allowed: {allow}"),
             Output::Push {

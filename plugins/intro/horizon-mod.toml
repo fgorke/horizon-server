@@ -1,0 +1,8 @@
+id = "intro"
+name = "Intro"
+version = "0.1.0"
+description = "A cutscene for each player's first join, which only they see: a recorded camera, recorded figures, and the spawn island tearing out of the ground. /intro for operators."
+authors = ["fgorke"]
+api = "0.3"
+side = "server"
+capabilities = ["players", "world", "storage", "command", "cinematic"]

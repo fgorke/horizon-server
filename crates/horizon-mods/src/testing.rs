@@ -523,6 +523,10 @@ pub struct Expect {
     /// Server mods: every `maps.create` as `"new <id> <dimension>"` and `maps.paint` as
     /// `"paint <id>"`, in order.
     maps: Option<Vec<String>>,
+    /// Server mods: every `cinematic` call as `"Name: blocks <n>"`, `"Name: spawn <kind>"`,
+    /// `"Name: set"`, `"Name: move"`, `"Name: remove <n>"`, `"Name: view <own|entity>"` and
+    /// `"Name: hide <true|false>"`, in order.
+    cinematic: Option<Vec<String>>,
     /// Server mods: every `players.action-bar` as `"Name: text"`, in order.
     action_bar: Option<Vec<String>>,
     /// Server mods: every `players.teleport` as `"Name: dimension x y z"`, in
@@ -867,6 +871,27 @@ impl Step {
                 _ => None,
             })
             .collect();
+        let cinematic: Vec<String> = out
+            .iter()
+            .filter_map(|o| match o {
+                Output::Cinematic { player, action } => {
+                    use crate::CinematicAction as A;
+                    let what = match action {
+                        A::Blocks(b) => format!("blocks {}", b.len()),
+                        A::Spawn { kind, .. } => format!("spawn {kind}"),
+                        A::Set { .. } => "set".to_owned(),
+                        A::Move { .. } => "move".to_owned(),
+                        A::Remove(ids) => format!("remove {}", ids.len()),
+                        A::View(id) => {
+                            format!("view {}", if id.is_some() { "entity" } else { "own" })
+                        }
+                        A::HidePlayers(h) => format!("hide {h}"),
+                    };
+                    Some(format!("{}: {what}", name(&game.players, player)))
+                }
+                _ => None,
+            })
+            .collect();
         let action_bar: Vec<String> = out
             .iter()
             .filter_map(|o| match o {
@@ -1004,6 +1029,9 @@ impl Step {
         }
         if let Some(want) = &e.maps {
             same("maps", want, &maps)?;
+        }
+        if let Some(want) = &e.cinematic {
+            same("cinematic", want, &cinematic)?;
         }
         if let Some(want) = &e.action_bar {
             same("action-bar", want, &action_bar)?;

@@ -20,7 +20,7 @@ type Entry = (u8, i32, Value);
 /// `Invisible` and `Glowing` (DATA_SHARED_FLAGS_ID 0x20 and 0x40),
 /// `CustomName`, `CustomNameVisible`, `Silent` and `NoGravity` (ids 2 to 5);
 /// then the defaults of all of them.
-fn entity_data(tag: &Tag) -> (Vec<Entry>, Vec<Entry>) {
+pub(super) fn entity_data(tag: &Tag) -> (Vec<Entry>, Vec<Entry>) {
     let flag = |key: &str| match tag.get(key) {
         Some(Tag::Byte(v)) => *v != 0,
         Some(Tag::Int(v)) => *v != 0,

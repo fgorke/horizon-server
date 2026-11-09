@@ -1,0 +1,66 @@
+# /intro: operators set it up; it doesn't play before the island and the camera are there; a
+# recording shows the intro around the operator (the others hidden) until /intro stop.
+
+[[step]]
+join = "Alex"
+player = { x = 0.5, y = 64.0, z = 0.5, permission = 0 }
+command = "intro status"
+expect.error = "You need to be an operator for that."
+
+[[step]]
+command = "intro skip"
+expect.error = "You're in no intro."
+
+[[step]]
+player = { x = 0.5, y = 64.0, z = 0.5, permission = 2 }
+command = "intro play"
+expect.error = "The intro isn't ready: build or capture the island (/intro build, /intro island capture)."
+
+[[step]]
+command = "intro island capture"
+expect.error = "Set /intro island pos1 and pos2 first."
+
+[[step]]
+command = "intro island pos1"
+expect.feedback = "Island corner pos1 set to 0 64 0."
+
+[[step]]
+command = "intro rip 1 10"
+expect.error = "/intro status | play [player] | stop | skip | reset <player|all> | build <lift> | island pos1|pos2|drop <blocks>|capture | rip <tick> <rise ticks> | shake <blocks> | camera record|delete | npc record <name|self> | npc delete <name> | npc list"
+
+[[step]]
+command = "intro rip 40 60"
+expect.feedback = "The island tears loose at tick 40 and rises for 60 ticks."
+
+[[step]]
+command = "intro npc record a b"
+expect.error = "/intro status | play [player] | stop | skip | reset <player|all> | build <lift> | island pos1|pos2|drop <blocks>|capture | rip <tick> <rise ticks> | shake <blocks> | camera record|delete | npc record <name|self> | npc delete <name> | npc list"
+
+[[step]]
+command = "intro npc record self"
+expect.feedback = "Recording figure self: /intro stop ends it."
+
+[[step]]
+ticks = 8
+expect.cinematic = ["Alex: hide true"]
+
+[[step]]
+command = "intro stop"
+expect.feedback = "Saved figure self: 3 ticks."
+expect.cinematic = ["Alex: view own", "Alex: hide false"]
+
+[[step]]
+command = "intro npc list"
+expect.feedback = "Figures: self (3 ticks)"
+
+[[step]]
+command = "intro status"
+expect.feedback = "Island: none. Camera: not recorded. Figures: 1. Tears loose at tick 40, rises 60 ticks, 60 blocks."
+
+[[step]]
+command = "intro build 5"
+expect.error = "/intro status | play [player] | stop | skip | reset <player|all> | build <lift> | island pos1|pos2|drop <blocks>|capture | rip <tick> <rise ticks> | shake <blocks> | camera record|delete | npc record <name|self> | npc delete <name> | npc list"
+
+[[step]]
+command = "intro build 60"
+expect.error = "There is no schematic: put one in the plugin's data/schematic."

@@ -115,9 +115,11 @@ pub enum Capability {
     Statistics,
     /// Pictures on maps, from images on the web (server plugins).
     Maps,
+    /// What one player alone sees: blocks, entities, the camera (server plugins).
+    Cinematic,
 }
 impl Capability {
-    pub const ALL: [Capability; 17] = [
+    pub const ALL: [Capability; 18] = [
         Capability::GameRead,
         Capability::Chat,
         Capability::Hud,
@@ -135,6 +137,7 @@ impl Capability {
         Capability::Network,
         Capability::Statistics,
         Capability::Maps,
+        Capability::Cinematic,
     ];
     /// Whether a server mod may have it: the others act on a local player.
     pub fn on_server(self) -> bool {
@@ -148,6 +151,7 @@ impl Capability {
                 | Capability::Network
                 | Capability::Statistics
                 | Capability::Maps
+                | Capability::Cinematic
         )
     }
     /// The WIT interface it grants, in `horizon:mods`.
@@ -170,6 +174,7 @@ impl Capability {
             Capability::Network => "network",
             Capability::Statistics => "statistics",
             Capability::Maps => "maps",
+            Capability::Cinematic => "cinematic",
         }
     }
     /// May change in any release: a mod uses it only with
@@ -210,6 +215,9 @@ impl Capability {
                 "read players' statistics and the names the server knew them by"
             }
             Capability::Maps => "fetch images from the web and show them on maps",
+            Capability::Cinematic => {
+                "show players blocks and figures only they see, move their camera and hide the other players from them"
+            }
         }
     }
     /// The capability a component import needs, `Ok(None)` for one every
@@ -256,6 +264,7 @@ impl fmt::Display for Capability {
             Capability::Network => "network",
             Capability::Statistics => "statistics",
             Capability::Maps => "maps",
+            Capability::Cinematic => "cinematic",
         };
         f.write_str(name)
     }

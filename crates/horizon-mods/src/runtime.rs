@@ -102,6 +102,8 @@ pub use recipes_bindings::horizon::mods::recipes::{
     Item as RecipeItem, Kind as RecipeKind, Recipe, Stack as RecipeStack,
 };
 use recipes_bindings::{RecipesHost, horizon::mods::browser, horizon::mods::recipes};
+mod cinematic;
+pub use cinematic::CinematicAction;
 mod images;
 pub use images::MAP_COLORS;
 mod plugin_io;
@@ -258,6 +260,11 @@ pub enum Output {
     },
     /// `maps.paint`: map `id`'s new picture.
     PaintMap { id: i32, colors: Vec<u8> },
+    /// Capability `cinematic`: what the player with this id alone sees.
+    Cinematic {
+        player: String,
+        action: CinematicAction,
+    },
     /// `players.set-tab-list`: the player's tab list header and footer, markup.
     TabList {
         player: String,
