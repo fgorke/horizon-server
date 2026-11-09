@@ -7,8 +7,9 @@
 //! player alone (capability `cinematic`): vanilla packets, no client mod.
 //!
 //! Operators set it up in game: `/intro build <lift>` builds the island from the schematic in
-//! storage key `schematic` (`ground <y>`, then `x y z state` a line) where they stand, the
-//! crater under them and the island `lift` blocks up (or `/intro island pos1|pos2`, `drop`,
+//! storage key `schematic` (`ground <y>`, then `x y z state` a block, `L x y z state` the
+//! crater's lining) where they stand, the crater under them and the island `lift` blocks up,
+//! and `/intro unbuild` puts back what it replaced (or `/intro island pos1|pos2`, `drop`,
 //! `capture` takes one already built); `/intro camera record` and `/intro npc record
 //! <name|self>` record while the intro plays around them, `/intro stop` ends a recording;
 //! `/intro rip <tick> <rise ticks>` times the tearing loose.
@@ -16,7 +17,7 @@ mod build;
 mod scene;
 mod show;
 
-use build::Build;
+use build::{Build, UNDO, Unbuild};
 use horizon_mod_sdk::{
     command,
     messages::Messages,
@@ -53,7 +54,7 @@ const MESSAGES: &[(&str, &str)] = &[
     ("not_operator", "You need to be an operator for that."),
     (
         "usage",
-        "/intro status | play [player] | stop | skip | reset <player|all> | build <lift> | island pos1|pos2|drop <blocks>|capture | rip <tick> <rise ticks> | shake <blocks> | camera record|delete | npc record <name|self> | npc delete <name> | npc list",
+        "/intro status | play [player] | stop | skip | reset <player|all> | build <lift> | unbuild | island pos1|pos2|drop <blocks>|capture | rip <tick> <rise ticks> | shake <blocks> | camera record|delete | npc record <name|self> | npc delete <name> | npc list",
     ),
     ("pos", "Island corner {which} set to {x} {y} {z}."),
     (
@@ -90,7 +91,24 @@ const MESSAGES: &[(&str, &str)] = &[
         "The island stands, {count} blocks, {drop} blocks over its crater. Protect x {x1}..{x2}, y {y1}..{y2}, z {z1}..{z2}, and set the world spawn on it.",
     ),
     ("build_failed", "Building the island failed: {error}"),
-    ("busy_build", "An island is being built already."),
+    (
+        "busy_build",
+        "An island is being built or taken down already.",
+    ),
+    (
+        "built_already",
+        "There is a built island: /intro unbuild takes it down first.",
+    ),
+    ("no_undo", "There is no built island to take down."),
+    (
+        "unbuilding",
+        "Taking the island down and putting back what it replaced...",
+    ),
+    (
+        "unbuilt",
+        "The island is gone: {count} blocks are back as they were.",
+    ),
+    ("unbuild_failed", "Taking the island down failed: {error}"),
     ("not_ready", "The intro isn't ready: {missing}."),
     ("playing", "Playing the intro for {name}."),
     ("busy", "{name} is in an intro already."),
@@ -132,6 +150,7 @@ struct Intro {
     /// Blocks still to set right for players whose show ended.
     restores: Vec<(String, VecDeque<Vec<cinematic::GhostBlock>>)>,
     build: Option<Build>,
+    unbuild: Option<Unbuild>,
     messages: Messages,
 }
 
@@ -207,6 +226,9 @@ impl Intro {
     fn start(&mut self, player: &Player, mode: Mode, wait: u32) -> Result<(), String> {
         if self.show_of(&player.id).is_some() {
             return Err(self.say("busy", &[("name", &player.name)]));
+        }
+        if self.build.is_some() || self.unbuild.is_some() {
+            return Err(self.say("busy_build", &[]));
         }
         let (yaw, pitch) = players::rotation(&player.id).unwrap_or((0.0, 0.0));
         let mut lines = Vec::new();
@@ -375,9 +397,53 @@ impl Intro {
         self.say("captured", &[("count", &count), ("drop", &drop)])
     }
 
-    fn start_build(&mut self, player: &Player, lift: &str) -> Result<String, String> {
-        if self.build.is_some() {
+    fn start_unbuild(&mut self, player: &Player) -> Result<String, String> {
+        if self.build.is_some() || self.unbuild.is_some() {
             return Err(self.say("busy_build", &[]));
+        }
+        let unbuild = load(UNDO)
+            .and_then(|text| Unbuild::new(text, &player.id))
+            .ok_or_else(|| self.say("no_undo", &[]))?;
+        // Nobody watches an island that is going away.
+        for show in std::mem::take(&mut self.shows) {
+            let player = show.player.clone();
+            if let Some(line) = self.finish(show) {
+                players::tell(&player, &line);
+            }
+        }
+        self.restores.clear();
+        self.unbuild = Some(unbuild);
+        Ok(self.say("unbuilding", &[]))
+    }
+
+    fn step_unbuild(&mut self) {
+        let Some(unbuild) = self.unbuild.as_mut() else {
+            return;
+        };
+        let player = unbuild.player.clone();
+        let line = match unbuild.step() {
+            Ok(false) => return,
+            Ok(true) => {
+                let count = unbuild.count();
+                storage::delete(UNDO);
+                storage::delete(ISLAND);
+                self.island = None;
+                self.footprint = [0; 4];
+                self.surface.clear();
+                self.say("unbuilt", &[("count", &count)])
+            }
+            Err(error) => self.say("unbuild_failed", &[("error", &error)]),
+        };
+        self.unbuild = None;
+        players::tell(&player, &line);
+    }
+
+    fn start_build(&mut self, player: &Player, lift: &str) -> Result<String, String> {
+        if self.build.is_some() || self.unbuild.is_some() {
+            return Err(self.say("busy_build", &[]));
+        }
+        if storage::get(UNDO).is_some() {
+            return Err(self.say("built_already", &[]));
         }
         let lift = lift
             .parse::<i32>()
@@ -482,6 +548,7 @@ impl Intro {
                 Ok(self.say("reset", &[("name", name)]))
             }
             ["build", lift] => self.start_build(player, lift),
+            ["unbuild"] => self.start_unbuild(player),
             ["island", which @ ("pos1" | "pos2")] => {
                 let at = [
                     player.x.floor() as i32,
@@ -620,6 +687,7 @@ impl ServerMod for Intro {
             shows: Vec::new(),
             restores: Vec::new(),
             build: None,
+            unbuild: None,
             messages: Messages::load(MESSAGES),
         };
         if let Some(island) = load(ISLAND).and_then(|t| Island::parse(&t)) {
@@ -676,6 +744,7 @@ impl ServerMod for Intro {
 
     fn tick(&mut self, _tick: u64) {
         self.step_build();
+        self.step_unbuild();
         let mut budget = BLOCKS_PER_TICK;
         for (player, queue) in &mut self.restores {
             while let Some(chunk) = queue.front() {

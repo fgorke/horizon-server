@@ -1,23 +1,30 @@
 //! `/intro build <lift>`: the schematic's island into the world, as the intro leaves it. Its
 //! ground layer goes where the operator stands, its middle under them; the piece is cut out of
-//! the ground there (a crater, and the air over it cleared) and stands `lift` blocks higher.
-//! Then the island is read back, as `capture` would, and saved.
+//! the ground there (a crater, and the air over it cleared), the crater lined, and the island
+//! stands `lift` blocks higher. Then the island is read back, as `capture` would, and saved,
+//! and so is every block the build replaced: `/intro unbuild` ([`Unbuild`]) puts them back.
 //!
 //! A plugin's call has a CPU budget, and an island has thousands of blocks, so every part of
-//! the work runs over the ticks in slices: reading the schematic, planning, carving, placing,
-//! checking, reading back.
-use crate::scene::{Block, Island, IslandWriter, Schematic, is_air};
-use horizon_mod_sdk::server::world::{self, BlockChange};
+//! the work runs over the ticks in slices.
+use crate::scene::{Block, Island, IslandReader, IslandWriter, Schematic, is_air};
+use horizon_mod_sdk::{
+    server::world::{self, BlockChange},
+    storage,
+};
 use std::collections::HashMap;
 
-/// `world.set-blocks`' limit per call.
-const PER_TICK: usize = 4096;
-/// Schematic lines read, blocks checked or read back, per tick.
+/// Blocks set a tick, each read first for the undo (`world.set-blocks` takes 4096).
+const SETS_PER_TICK: usize = 2048;
+/// Blocks set a tick when nothing is read.
+const RESTORES_PER_TICK: usize = 4096;
+/// Text lines read or written, blocks checked or read back, per tick.
 const LINES_PER_TICK: usize = 2000;
 const CHECKS_PER_TICK: usize = 2048;
 const AIR: &str = "minecraft:air";
 /// The world's build limit.
 const TOP: i32 = 319;
+/// The storage key of what a build replaced.
+pub const UNDO: &str = "undo";
 
 #[derive(Debug, PartialEq)]
 enum Phase {
@@ -29,6 +36,8 @@ enum Phase {
     Crater,
     /// The crater, from the top down so nothing is left standing on air.
     Carve,
+    /// The crater's lining.
+    Line,
     /// The island, from the bottom up so each block has what it stands on.
     Place,
     /// Blocks that broke off while their neighbours were missing, again.
@@ -37,6 +46,8 @@ enum Phase {
     Read,
     /// The island saved, as `capture` saves it.
     Save,
+    /// What the build replaced, saved.
+    SaveUndo,
     Done,
 }
 
@@ -47,12 +58,14 @@ pub struct Build {
     feet: [i32; 3],
     text: String,
     schematic: Schematic,
-    /// Where the schematic's corner goes in the ground.
-    offset: [i32; 3],
     carve: Vec<[i32; 3]>,
+    /// The lining, in the ground.
+    lining: Vec<Block>,
     /// The island in the sky, bottom up.
     sky: Vec<Block>,
     island: Island,
+    /// Every block the build replaced, in order, as it was.
+    undo: Island,
     writer: IslandWriter,
     phase: Phase,
     next: usize,
@@ -71,6 +84,11 @@ impl Build {
         let first = text.lines().next().unwrap_or_default();
         let ground = Schematic::header(first).ok_or("its first line isn't ground <y>")?;
         let start = first.len() + 1;
+        let empty = |drop| Island {
+            dimension: dimension.to_owned(),
+            drop,
+            ..Island::default()
+        };
         Ok(Build {
             player: player.to_owned(),
             dimension: dimension.to_owned(),
@@ -79,59 +97,51 @@ impl Build {
             text,
             schematic: Schematic {
                 ground,
-                blocks: Vec::new(),
+                ..Schematic::default()
             },
-            offset: [0; 3],
             carve: Vec::new(),
+            lining: Vec::new(),
             sky: Vec::new(),
-            island: Island {
-                dimension: dimension.to_owned(),
-                drop: lift,
-                ..Island::default()
-            },
+            island: empty(lift),
+            undo: empty(0),
             writer: IslandWriter::default(),
             phase: Phase::Parse(start),
             next: 0,
         })
     }
 
-    /// Blocks set so far and in all (0 of 0 while the schematic is read).
-    #[cfg(test)]
-    fn progress(&self) -> (usize, usize) {
-        let all = self.carve.len() + self.sky.len() * 3;
-        let done = match self.phase {
-            Phase::Parse(_) | Phase::Plan | Phase::Crater => 0,
-            Phase::Carve => self.next,
-            Phase::Place => self.carve.len() + self.next,
-            Phase::Fix => self.carve.len() + self.sky.len() + self.next,
-            Phase::Read => self.carve.len() + self.sky.len() * 2 + self.next,
-            Phase::Save | Phase::Done => all,
-        };
-        (done, all)
-    }
-
-    /// One tick's work. `Ok(Some(island))` when the island stands and is read back.
+    /// One tick's work. `Ok(Some(island))` when the island stands and both it and the undo
+    /// are saved.
     pub fn step(&mut self) -> Result<Option<Island>, String> {
         match self.phase {
             Phase::Parse(at) => self.parse(at)?,
             Phase::Plan => self.plan()?,
             Phase::Crater => self.crater(),
             Phase::Carve => {
-                let end = (self.next + PER_TICK).min(self.carve.len());
+                let end = (self.next + SETS_PER_TICK).min(self.carve.len());
                 let blocks: Vec<BlockChange> = self.carve[self.next..end]
                     .iter()
                     .map(|p| change(*p, AIR))
                     .collect();
-                world::set_blocks(&self.dimension, &blocks)?;
-                self.advance(end, self.carve.len(), Phase::Place);
+                self.set(blocks)?;
+                self.advance(end, self.carve.len(), Phase::Line);
+            }
+            Phase::Line => {
+                let end = (self.next + SETS_PER_TICK).min(self.lining.len());
+                let blocks: Vec<BlockChange> = self.lining[self.next..end]
+                    .iter()
+                    .map(|(p, s)| change(*p, s))
+                    .collect();
+                self.set(blocks)?;
+                self.advance(end, self.lining.len(), Phase::Place);
             }
             Phase::Place => {
-                let end = (self.next + PER_TICK).min(self.sky.len());
+                let end = (self.next + SETS_PER_TICK).min(self.sky.len());
                 let blocks: Vec<BlockChange> = self.sky[self.next..end]
                     .iter()
                     .map(|(p, s)| change(*p, s))
                     .collect();
-                world::set_blocks(&self.dimension, &blocks)?;
+                self.set(blocks)?;
                 self.advance(end, self.sky.len(), Phase::Fix);
             }
             Phase::Fix => {
@@ -155,14 +165,33 @@ impl Build {
             }
             Phase::Save => {
                 if self.writer.write(&self.island, LINES_PER_TICK) {
-                    let text = std::mem::take(&mut self.writer.out);
-                    horizon_mod_sdk::storage::set(crate::ISLAND, text.as_bytes())?;
+                    let text = std::mem::take(&mut self.writer);
+                    storage::set(crate::ISLAND, text.out.as_bytes())?;
+                    self.phase = Phase::SaveUndo;
+                }
+            }
+            Phase::SaveUndo => {
+                if self.writer.write(&self.undo, LINES_PER_TICK) {
+                    let text = std::mem::take(&mut self.writer);
+                    storage::set(UNDO, text.out.as_bytes())?;
                     self.phase = Phase::Done;
                 }
             }
             Phase::Done => return Ok(Some(std::mem::take(&mut self.island))),
         }
         Ok(None)
+    }
+
+    /// Sets `blocks`, first noting what each replaces.
+    fn set(&mut self, blocks: Vec<BlockChange>) -> Result<(), String> {
+        for b in &blocks {
+            let was = world::get_block(&self.dimension, b.x, b.y, b.z)
+                .ok_or_else(|| format!("{} {} {} isn't loaded", b.x, b.y, b.z))?;
+            if was != b.state {
+                self.undo.blocks.push(([b.x, b.y, b.z], was));
+            }
+        }
+        world::set_blocks(&self.dimension, &blocks)
     }
 
     fn advance(&mut self, end: usize, len: usize, then: Phase) {
@@ -178,11 +207,12 @@ impl Build {
         let mut used = 0;
         for line in rest.split_inclusive('\n').take(LINES_PER_TICK) {
             used += line.len();
-            let block = Schematic::line(line.trim_end()).ok_or_else(|| {
+            let parsed = Schematic::line(line).ok_or_else(|| {
                 format!("a schematic line isn't x y z state: {}", line.trim_end())
             })?;
-            self.schematic.blocks.extend(block);
-            if self.schematic.blocks.len() > crate::MAX_ISLAND {
+            self.schematic.add(parsed);
+            let s = &self.schematic;
+            if s.blocks.len() > crate::MAX_ISLAND || s.lining.len() > crate::MAX_ISLAND {
                 return Err(format!("it has over {} blocks", crate::MAX_ISLAND));
             }
         }
@@ -203,8 +233,7 @@ impl Build {
         }
         let [cx, cz] = s.centre();
         let feet = self.feet;
-        self.offset = [feet[0] - cx, feet[1] - 1 - s.ground, feet[2] - cz];
-        let [ox, oy, oz] = self.offset;
+        let [ox, oy, oz] = [feet[0] - cx, feet[1] - 1 - s.ground, feet[2] - cz];
         let lift = self.lift;
         let mut sky: Vec<Block> = std::mem::take(&mut self.schematic.blocks)
             .into_iter()
@@ -215,9 +244,17 @@ impl Build {
         if top > TOP {
             return Err(format!("its top would be at y {top}, over {TOP}"));
         }
+        let mut lining: Vec<Block> = std::mem::take(&mut self.schematic.lining)
+            .into_iter()
+            .map(|([x, y, z], s)| ([x + ox, y + oy, z + oz], s))
+            .collect();
+        lining.sort_unstable_by_key(|([x, y, z], _)| (*y, *z, *x));
         // Every chunk the work touches is loaded.
-        let mut chunks: Vec<(i32, i32)> =
-            sky.iter().map(|([x, _, z], _)| (x >> 4, z >> 4)).collect();
+        let mut chunks: Vec<(i32, i32)> = sky
+            .iter()
+            .chain(&lining)
+            .map(|([x, _, z], _)| (x >> 4, z >> 4))
+            .collect();
         chunks.sort_unstable();
         chunks.dedup();
         if !chunks
@@ -227,6 +264,7 @@ impl Build {
             return Err("part of it isn't loaded: stand nearer".into());
         }
         self.sky = sky;
+        self.lining = lining;
         self.phase = Phase::Crater;
         Ok(())
     }
@@ -280,6 +318,55 @@ impl Build {
     }
 }
 
+/// `/intro unbuild`: the blocks a build replaced, back, the last first.
+pub struct Unbuild {
+    pub player: String,
+    reader: Option<IslandReader>,
+    undo: Island,
+    /// Blocks still to put back: `undo.blocks[..left]`.
+    left: usize,
+}
+
+impl Unbuild {
+    /// None when `text` isn't an undo.
+    pub fn new(text: String, player: &str) -> Option<Unbuild> {
+        Some(Unbuild {
+            player: player.to_owned(),
+            reader: Some(IslandReader::new(text)?),
+            undo: Island::default(),
+            left: 0,
+        })
+    }
+
+    /// One tick's work: `Ok(true)` once everything is back.
+    pub fn step(&mut self) -> Result<bool, String> {
+        if let Some(reader) = &mut self.reader {
+            if reader.read(LINES_PER_TICK).ok_or("the undo is damaged")? {
+                let reader = self.reader.take().ok_or("the undo is damaged")?;
+                self.undo = reader.finish().ok_or("the undo is damaged")?;
+                self.left = self.undo.blocks.len();
+            }
+            return Ok(false);
+        }
+        let start = self.left.saturating_sub(RESTORES_PER_TICK);
+        let blocks: Vec<BlockChange> = self.undo.blocks[start..self.left]
+            .iter()
+            .rev()
+            .map(|(p, s)| change(*p, s))
+            .collect();
+        if !blocks.is_empty() {
+            world::set_blocks(&self.undo.dimension, &blocks)?;
+        }
+        self.left = start;
+        Ok(start == 0)
+    }
+
+    /// Blocks put back, of all.
+    pub fn count(&self) -> usize {
+        self.undo.blocks.len()
+    }
+}
+
 fn change([x, y, z]: [i32; 3], state: &str) -> BlockChange {
     BlockChange {
         x,
@@ -293,8 +380,8 @@ fn change([x, y, z]: [i32; 3], state: &str) -> BlockChange {
 mod tests {
     use super::*;
 
-    /// A pillar of 3 under the ground layer (y 2) and a block on top (y 3).
-    const PILLAR: &str = "ground 2\n1 0 1 minecraft:stone\n1 1 1 minecraft:stone\n1 2 1 minecraft:dirt\n1 3 1 minecraft:oak_log[axis=y]\n";
+    /// A pillar of 3 under the ground layer (y 2) and a block on top (y 3), lined.
+    const PILLAR: &str = "ground 2\n1 0 1 minecraft:stone\n1 1 1 minecraft:stone\n1 2 1 minecraft:dirt\n1 3 1 minecraft:oak_log[axis=y]\nL 2 1 1 minecraft:andesite\n";
 
     #[test]
     fn the_island_goes_up_and_the_crater_down() {
@@ -303,6 +390,10 @@ mod tests {
         b.parse(9).unwrap();
         assert_eq!(b.phase, Phase::Plan);
         assert_eq!(b.schematic.blocks.len(), 4);
+        assert_eq!(
+            b.schematic.lining,
+            [([2, 1, 1], "minecraft:andesite".into())]
+        );
         // Plan reads the world (none in a unit test): its arithmetic, by hand.
         let [cx, cz] = b.schematic.centre();
         assert_eq!([cx, cz], [1, 1]);
@@ -321,7 +412,6 @@ mod tests {
         assert_eq!(carved, [64, 63, 62, 61]);
         assert!(b.carve.iter().all(|[x, _, z]| (*x, *z) == (10, 20)));
         assert_eq!(b.phase, Phase::Carve);
-        assert_eq!(b.progress(), (0, 16));
     }
 
     #[test]
@@ -344,5 +434,6 @@ mod tests {
         assert!(Build::new("1 2 3 minecraft:stone".into(), "p", "d", [0; 3], 50).is_err());
         let mut b = Build::new("ground 0\nnonsense".into(), "p", "d", [0; 3], 50).unwrap();
         assert!(b.step().is_err());
+        assert!(Unbuild::new(String::new(), "p").is_none());
     }
 }

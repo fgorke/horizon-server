@@ -26,7 +26,7 @@ expect.feedback = "Island corner pos1 set to 0 64 0."
 
 [[step]]
 command = "intro rip 1 10"
-expect.error = "/intro status | play [player] | stop | skip | reset <player|all> | build <lift> | island pos1|pos2|drop <blocks>|capture | rip <tick> <rise ticks> | shake <blocks> | camera record|delete | npc record <name|self> | npc delete <name> | npc list"
+expect.error = "/intro status | play [player] | stop | skip | reset <player|all> | build <lift> | unbuild | island pos1|pos2|drop <blocks>|capture | rip <tick> <rise ticks> | shake <blocks> | camera record|delete | npc record <name|self> | npc delete <name> | npc list"
 
 [[step]]
 command = "intro rip 40 60"
@@ -34,7 +34,7 @@ expect.feedback = "The island tears loose at tick 40 and rises for 60 ticks."
 
 [[step]]
 command = "intro npc record a b"
-expect.error = "/intro status | play [player] | stop | skip | reset <player|all> | build <lift> | island pos1|pos2|drop <blocks>|capture | rip <tick> <rise ticks> | shake <blocks> | camera record|delete | npc record <name|self> | npc delete <name> | npc list"
+expect.error = "/intro status | play [player] | stop | skip | reset <player|all> | build <lift> | unbuild | island pos1|pos2|drop <blocks>|capture | rip <tick> <rise ticks> | shake <blocks> | camera record|delete | npc record <name|self> | npc delete <name> | npc list"
 
 [[step]]
 command = "intro npc record self"
@@ -59,7 +59,7 @@ expect.feedback = "Island: none. Camera: not recorded. Figures: 1. Tears loose a
 
 [[step]]
 command = "intro build 5"
-expect.error = "/intro status | play [player] | stop | skip | reset <player|all> | build <lift> | island pos1|pos2|drop <blocks>|capture | rip <tick> <rise ticks> | shake <blocks> | camera record|delete | npc record <name|self> | npc delete <name> | npc list"
+expect.error = "/intro status | play [player] | stop | skip | reset <player|all> | build <lift> | unbuild | island pos1|pos2|drop <blocks>|capture | rip <tick> <rise ticks> | shake <blocks> | camera record|delete | npc record <name|self> | npc delete <name> | npc list"
 
 [[step]]
 command = "intro build 60"

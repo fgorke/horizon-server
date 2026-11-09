@@ -79,35 +79,11 @@ impl Island {
         w.out
     }
 
+    /// An island's text read back; with no `G` lines, a list of blocks (an undo).
     pub fn parse(text: &str) -> Option<Island> {
-        let mut lines = text.lines();
-        let mut head = lines.next()?.split_whitespace();
-        let mut island = Island {
-            dimension: head.next()?.to_owned(),
-            drop: head.next()?.parse().ok()?,
-            ..Island::default()
-        };
-        let mut states: Vec<&str> = Vec::new();
-        for line in lines {
-            let (kind, rest) = line.split_once(' ')?;
-            let state = |i: &str| {
-                states
-                    .get(i.parse::<usize>().ok()?)
-                    .map(|s| (*s).to_owned())
-            };
-            match kind {
-                "P" => states.push(rest),
-                "B" => {
-                    let mut p = rest.split(' ');
-                    let mut n = || p.next()?.parse::<i32>().ok();
-                    let pos = [n()?, n()?, n()?];
-                    island.blocks.push((pos, state(p.next()?)?));
-                }
-                "G" => island.ground.push(state(rest)?),
-                _ => return None,
-            }
-        }
-        (island.ground.len() == island.blocks.len()).then_some(island)
+        let mut r = IslandReader::new(text.to_owned())?;
+        while !r.read(usize::MAX)? {}
+        r.finish()
     }
 
     /// The blocks with a side open to something not of the island: the ones a rising
@@ -186,7 +162,7 @@ impl IslandWriter {
     /// Writes up to `lines` more lines of `island`: true once it is all written.
     pub fn write(&mut self, island: &Island, lines: usize) -> bool {
         use std::fmt::Write;
-        let all = island.blocks.len() * 2;
+        let all = island.blocks.len() + island.ground.len();
         if self.done == 0 && self.out.is_empty() {
             let _ = write!(self.out, "{} {}", island.dimension, island.drop);
         }
@@ -220,32 +196,117 @@ impl IslandWriter {
     }
 }
 
+/// An island's text, read a slice at a time.
+pub struct IslandReader {
+    text: String,
+    at: usize,
+    states: Vec<String>,
+    pub island: Island,
+}
+
+impl IslandReader {
+    /// None when the first line isn't `dimension drop`.
+    pub fn new(text: String) -> Option<IslandReader> {
+        let first = text.lines().next()?;
+        let mut head = first.split_whitespace();
+        let island = Island {
+            dimension: head.next()?.to_owned(),
+            drop: head.next()?.parse().ok()?,
+            ..Island::default()
+        };
+        let at = (first.len() + 1).min(text.len());
+        Some(IslandReader {
+            text,
+            at,
+            states: Vec::new(),
+            island,
+        })
+    }
+
+    /// Reads up to `lines` more lines: `Some(true)` once all are read, None at a bad line.
+    pub fn read(&mut self, lines: usize) -> Option<bool> {
+        let rest = self.text.get(self.at..)?;
+        let mut used = 0;
+        for line in rest.split_inclusive('\n').take(lines) {
+            used += line.len();
+            let line = line.trim_end();
+            if line.is_empty() {
+                continue;
+            }
+            let (kind, rest) = line.split_once(' ')?;
+            let state = |i: &str| self.states.get(i.parse::<usize>().ok()?).cloned();
+            match kind {
+                "P" => self.states.push(rest.to_owned()),
+                "B" => {
+                    let mut p = rest.split(' ');
+                    let mut n = || p.next()?.parse::<i32>().ok();
+                    let pos = [n()?, n()?, n()?];
+                    let s = state(p.next()?)?;
+                    self.island.blocks.push((pos, s));
+                }
+                "G" => {
+                    let s = state(rest)?;
+                    self.island.ground.push(s);
+                }
+                _ => return None,
+            }
+        }
+        self.at += used;
+        Some(self.at >= self.text.len())
+    }
+
+    /// The island read: None when its ground doesn't match its blocks.
+    pub fn finish(self) -> Option<Island> {
+        let i = self.island;
+        (i.ground.is_empty() || i.ground.len() == i.blocks.len()).then_some(i)
+    }
+}
+
 /// Whether `x z` is over the island (with a block to spare): what stands there rises with it.
 pub fn over(f: &Footprint, x: f64, z: f64) -> bool {
     let (x, z) = (x.floor() as i32, z.floor() as i32);
     (f[0] - 1..=f[1] + 1).contains(&x) && (f[2] - 1..=f[3] + 1).contains(&z)
 }
 
-/// A schematic to build the island from: its blocks relative to its corner, and the layer
-/// that lies at ground level (`ground <y>`, then `x y z state` a line).
+/// A schematic to build the island from: its blocks relative to its corner, the layer that
+/// lies at ground level, and the crater's lining, which only the ground gets (`ground <y>`,
+/// then `x y z state` a block, `L x y z state` a lining block).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Schematic {
     pub ground: i32,
     pub blocks: Vec<Block>,
+    pub lining: Vec<Block>,
+}
+
+/// One line of a schematic.
+#[derive(Debug, PartialEq)]
+pub enum Line {
+    Block(Block),
+    Lining(Block),
+    /// Air, or a blank line.
+    Skip,
 }
 
 impl Schematic {
     #[cfg(test)]
     pub fn parse(text: &str) -> Option<Schematic> {
         let mut lines = text.lines();
-        let ground = Schematic::header(lines.next()?)?;
-        let mut blocks = Vec::new();
+        let mut s = Schematic {
+            ground: Schematic::header(lines.next()?)?,
+            ..Schematic::default()
+        };
         for line in lines {
-            if let Some(b) = Schematic::line(line)? {
-                blocks.push(b);
-            }
+            s.add(Schematic::line(line)?);
         }
-        Some(Schematic { ground, blocks })
+        Some(s)
+    }
+
+    pub fn add(&mut self, line: Line) {
+        match line {
+            Line::Block(b) => self.blocks.push(b),
+            Line::Lining(b) => self.lining.push(b),
+            Line::Skip => {}
+        }
     }
 
     /// The first line: `ground <y>`.
@@ -253,17 +314,29 @@ impl Schematic {
         line.strip_prefix("ground ")?.trim().parse().ok()
     }
 
-    /// A block line, `x y z state`: None when it is malformed, `Some(None)` for air or a
-    /// blank line.
-    pub fn line(line: &str) -> Option<Option<Block>> {
-        if line.trim().is_empty() {
-            return Some(None);
+    /// A line, `x y z state` or `L x y z state`: None when it is malformed.
+    pub fn line(line: &str) -> Option<Line> {
+        let line = line.trim();
+        if line.is_empty() {
+            return Some(Line::Skip);
         }
+        let (lining, line) = match line.strip_prefix("L ") {
+            Some(rest) => (true, rest),
+            None => (false, line),
+        };
         let mut p = line.splitn(4, ' ');
         let mut n = || p.next()?.parse::<i32>().ok();
         let pos = [n()?, n()?, n()?];
         let state = p.next()?.trim();
-        Some((!is_air(state)).then(|| (pos, state.to_owned())))
+        if is_air(state) {
+            return Some(Line::Skip);
+        }
+        let b = (pos, state.to_owned());
+        Some(if lining {
+            Line::Lining(b)
+        } else {
+            Line::Block(b)
+        })
     }
 
     /// The middle of the blocks' x and z.
