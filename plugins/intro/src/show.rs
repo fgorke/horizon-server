@@ -3,7 +3,7 @@
 //! (entities only they have), the island tearing loose (block displays rising, the ground's
 //! real crater shown again, block particles and sounds sent to them alone), and what stands on
 //! the island rising with it.
-use crate::scene::{Footprint, Island, Pose, Settings, shake, state_nbt};
+use crate::scene::{Footprint, Grid, Island, Pose, Settings, shake, state_nbt};
 use horizon_mod_sdk::{
     command,
     server::{GameMode, cinematic, players},
@@ -24,6 +24,9 @@ const GHOST_LEAD: u32 = 10;
 /// A show that began right after a join sends them once more at this tick: chunks that
 /// arrived late brought the real blocks.
 const GHOST_AGAIN: u32 = 30;
+/// Ticks a display stands in the ground before it is told to rise: a client that hears of a
+/// display and of its rise in one tick never draws it below, and puts it straight up.
+const SETTLE: u32 = 6;
 /// Ticks between a recording's timeline updates.
 const BAR_EVERY: u32 = 5;
 /// The eyes' height above the feet.
@@ -59,6 +62,7 @@ pub struct Scene<'a> {
     pub footprint: Footprint,
     /// The island blocks a rising copy needs.
     pub surface: &'a [usize],
+    pub grid: &'a Grid,
     pub camera: &'a [Pose],
     pub npcs: &'a [Npc],
 }
@@ -118,6 +122,10 @@ pub struct Show {
     displays: Vec<(u32, usize)>,
     made: usize,
     started: usize,
+    /// The tick the last display was made at.
+    made_at: u32,
+    /// Rising as blocks: how far up the island is shown.
+    risen: i32,
     /// Whether the island's blocks went out, and whether they go out a second time.
     ghosted: bool,
     again: bool,
@@ -218,6 +226,8 @@ impl Show {
             displays: Vec::new(),
             made: 0,
             started: 0,
+            made_at: 0,
+            risen: 0,
             ghosted: false,
             again: wait > GHOST_AGAIN,
             bar: None,
@@ -373,9 +383,14 @@ impl Show {
         };
         let s = scene.settings;
         let (rip, rise) = (s.rip.max(3), s.rise.max(1));
+        if s.blocks {
+            self.rise_as_blocks(scene, island);
+            return;
+        }
         let all = scene.surface.len();
-        // Two calls a display, and the ticks they take at a full budget, with some to spare.
-        let lead = (all * 2).div_ceil(CALLS_PER_TICK) as u32 + 4;
+        // The ticks making them and telling them take at a full budget, the wait between, and
+        // some to spare.
+        let lead = all.div_ceil(CALLS_PER_TICK) as u32 * 2 + SETTLE + 4;
         if self.tick >= rip.saturating_sub(lead).max(1) && self.made < all {
             let end = (self.made + budget.calls).min(all);
             budget.calls -= end - self.made;
@@ -397,8 +412,10 @@ impl Show {
                 }
             }
             self.made = end;
+            self.made_at = self.tick;
         }
-        if self.made >= all && self.started < self.displays.len() {
+        let settled = self.made >= all && self.tick >= self.made_at + SETTLE;
+        if settled && self.started < self.displays.len() {
             let end = (self.started + budget.calls).min(self.displays.len());
             budget.calls -= end - self.started;
             // Told ahead of the rip they wait for it; told late, they make up the time.
@@ -421,6 +438,26 @@ impl Show {
             let ids: Vec<u32> = self.displays.iter().map(|(id, _)| *id).collect();
             cinematic::remove(&self.player, &ids);
             self.displays.clear();
+        }
+    }
+
+    /// The island rising as blocks: each tick what a step up changes for the eye, as far as
+    /// the island should be by then. Behind (a tick's blocks are limited), it steps further
+    /// at once.
+    fn rise_as_blocks(&mut self, scene: &Scene, island: &Island) {
+        if self.landed || !self.ghosts.is_empty() {
+            return;
+        }
+        let to = (scene.settings.lift(self.tick, island.drop).floor() as i32).min(island.drop);
+        if to > self.risen {
+            let step = island.step(scene.grid, self.risen, to);
+            self.queue(step.iter().map(|(p, s)| ghost(*p, s)).collect());
+            self.risen = to;
+        }
+        if self.risen >= island.drop {
+            // It stands as the world has it: nothing more to set right.
+            self.cratered = true;
+            self.landed = true;
         }
     }
 
@@ -625,6 +662,7 @@ mod tests {
             island: Some(&island),
             footprint: island.footprint(),
             surface: &[0],
+            grid: &island.grid(),
             camera: &[],
             npcs: &[],
         };

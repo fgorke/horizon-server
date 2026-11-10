@@ -163,33 +163,31 @@ impl Island {
         r.finish()
     }
 
-    /// The blocks with a side open to something not of the island: the ones a rising
-    /// copy needs, since the others are never seen.
-    pub fn surface(&self) -> Vec<usize> {
+    /// The island's blocks by where they stand: a grid over its box.
+    pub fn grid(&self) -> Grid {
         if self.blocks.is_empty() {
-            return Vec::new();
+            return Grid::default();
         }
-        // A grid over the island's box, a block of air all round: cheap to look up in.
         let f = self.footprint();
         let (low, high) = self.heights();
-        let lo = [f[0] - 1, low - 1, f[2] - 1];
-        let size = [
-            (f[1] - f[0] + 3) as usize,
-            (high - low + 3) as usize,
-            (f[3] - f[2] + 3) as usize,
-        ];
-        let at = |[x, y, z]: [i32; 3]| {
-            let (x, y, z) = (
-                (x - lo[0]) as usize,
-                (y - lo[1]) as usize,
-                (z - lo[2]) as usize,
-            );
-            (y * size[2] + z) * size[0] + x
+        let lo = [f[0], low, f[2]];
+        let size = [f[1] - f[0] + 1, high - low + 1, f[3] - f[2] + 1];
+        let mut grid = Grid {
+            lo,
+            size,
+            cells: vec![NONE; (size[0] * size[1] * size[2]) as usize],
         };
-        let mut solid = vec![false; size[0] * size[1] * size[2]];
-        for (p, _) in &self.blocks {
-            solid[at(*p)] = true;
+        for (i, (p, _)) in self.blocks.iter().enumerate() {
+            if let Some(cell) = grid.cell(*p) {
+                grid.cells[cell] = i as u32;
+            }
         }
+        grid
+    }
+
+    /// The blocks a rising copy needs: those with a side open to air or to a block one sees
+    /// past (stairs, glass, leaves...). The others are never seen.
+    pub fn surface(&self, grid: &Grid) -> Vec<usize> {
         const SIDES: [[i32; 3]; 6] = [
             [1, 0, 0],
             [-1, 0, 0],
@@ -198,16 +196,50 @@ impl Island {
             [0, 0, 1],
             [0, 0, -1],
         ];
+        // Asked once a kind of block: an island has thousands of blocks of a few kinds.
+        let mut kinds: HashMap<&str, bool> = HashMap::new();
+        let hides: Vec<bool> = self
+            .blocks
+            .iter()
+            .map(|(_, s)| *kinds.entry(s.as_str()).or_insert_with(|| occludes(s)))
+            .collect();
         self.blocks
             .iter()
             .enumerate()
             .filter(|(_, ([x, y, z], _))| {
-                SIDES
-                    .iter()
-                    .any(|[dx, dy, dz]| !solid[at([x + dx, y + dy, z + dz])])
+                SIDES.iter().any(|[dx, dy, dz]| {
+                    grid.get([x + dx, y + dy, z + dz]).is_none_or(|n| !hides[n])
+                })
             })
             .map(|(i, _)| i)
             .collect()
+    }
+
+    /// What changes for the eye when the island, `from` blocks up from the ground, goes to
+    /// `to` blocks up: the cells that get another block, and the cells it leaves, which show
+    /// the ground it was torn from again (or air, over it).
+    pub fn step(&self, grid: &Grid, from: i32, to: i32) -> Vec<Block> {
+        let by = to - from;
+        let mut out = Vec::new();
+        if by <= 0 {
+            return out;
+        }
+        for ([x, y, z], state) in &self.blocks {
+            // Where this block goes stood the island's block `by` higher.
+            let was = grid.get([*x, y + by, *z]).map(|n| &self.blocks[n].1);
+            if was != Some(state) {
+                out.push(([*x, y - self.drop + to, *z], state.clone()));
+            }
+            // Where it stood comes the block `by` lower, or nothing.
+            if grid.get([*x, y - by, *z]).is_none() {
+                let ground = grid
+                    .get([*x, y + from, *z])
+                    .and_then(|n| self.ground.get(n));
+                let left = ground.map_or("minecraft:air", String::as_str);
+                out.push(([*x, y - self.drop + from, *z], left.to_owned()));
+            }
+        }
+        out
     }
 
     pub fn footprint(&self) -> Footprint {
@@ -223,6 +255,75 @@ impl Island {
         let ys = self.blocks.iter().map(|([_, y, _], _)| *y);
         (ys.clone().min().unwrap_or(0), ys.max().unwrap_or(0))
     }
+}
+
+const NONE: u32 = u32::MAX;
+
+/// Which of an island's blocks stands where.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Grid {
+    lo: [i32; 3],
+    size: [i32; 3],
+    cells: Vec<u32>,
+}
+
+impl Grid {
+    fn cell(&self, p: [i32; 3]) -> Option<usize> {
+        let d = [p[0] - self.lo[0], p[1] - self.lo[1], p[2] - self.lo[2]];
+        (0..3)
+            .all(|i| (0..self.size[i]).contains(&d[i]))
+            .then(|| ((d[1] * self.size[2] + d[2]) * self.size[0] + d[0]) as usize)
+    }
+
+    /// The index of the island's block at `p`, in the sky.
+    pub fn get(&self, p: [i32; 3]) -> Option<usize> {
+        let i = self.cells[self.cell(p)?];
+        (i != NONE).then_some(i as usize)
+    }
+}
+
+/// Whether a block hides what is behind it: a full, opaque cube. Told by its name, and no
+/// when in doubt: a block shown for nothing costs little, one missing leaves a hole.
+pub fn occludes(state: &str) -> bool {
+    let id = state.split('[').next().unwrap_or(state);
+    let id = id.strip_prefix("minecraft:").unwrap_or(id);
+    const OPEN: [&str; 12] = [
+        "stairs", "slab", "wall", "fence", "pane", "door", "glass", "leaves", "path", "farmland",
+        "button", "plate",
+    ];
+    const FULL: [&str; 30] = [
+        "stone",
+        "dirt",
+        "grass_block",
+        "andesite",
+        "diorite",
+        "granite",
+        "gravel",
+        "sand",
+        "_ore",
+        "planks",
+        "_log",
+        "_wood",
+        "bricks",
+        "deepslate",
+        "podzol",
+        "clay",
+        "terracotta",
+        "concrete",
+        "wool",
+        "hay_block",
+        "barrel",
+        "smoker",
+        "furnace",
+        "crafting_table",
+        "bookshelf",
+        "beehive",
+        "tuff",
+        "mud",
+        "basalt",
+        "obsidian",
+    ];
+    !OPEN.iter().any(|w| id.contains(w)) && FULL.iter().any(|w| id.contains(w))
 }
 
 /// An island's text, written a slice at a time: a big island's in one go costs more than a
@@ -466,6 +567,8 @@ pub struct Settings {
     pub rip: u32,
     pub rise: u32,
     pub shake: f32,
+    /// The island rises as blocks, a step a tick, instead of as displays gliding.
+    pub blocks: bool,
 }
 
 impl Default for Settings {
@@ -477,6 +580,7 @@ impl Default for Settings {
             rip: 80,
             rise: 100,
             shake: 0.3,
+            blocks: false,
         }
     }
 }
@@ -490,6 +594,9 @@ impl Settings {
             format!("rise {}", self.rise),
             format!("shake {}", self.shake),
         ];
+        if self.blocks {
+            lines.push("rise blocks".into());
+        }
         if let Some(p) = pos(self.pos1) {
             lines.push(format!("pos1 {p}"));
         }
@@ -513,8 +620,9 @@ impl Settings {
             match words.as_slice() {
                 ["drop", v] => s.drop = v.parse().unwrap_or(s.drop),
                 ["rip", v] => s.rip = v.parse().unwrap_or(s.rip),
-                ["rise", v] => s.rise = v.parse().unwrap_or(s.rise),
+                ["rise", v] if *v != "blocks" => s.rise = v.parse().unwrap_or(s.rise),
                 ["shake", v] => s.shake = v.parse().unwrap_or(s.shake),
+                ["rise", "blocks"] => s.blocks = true,
                 ["pos1", rest @ ..] => s.pos1 = pos(rest),
                 ["pos2", rest @ ..] => s.pos2 = pos(rest),
                 _ => {}
@@ -602,8 +710,11 @@ mod tests {
     fn islands_round_trip_and_find_their_surface() {
         let island = cube();
         assert_eq!(Island::parse(&island.text()), Some(island.clone()));
-        let surface = island.surface();
+        let grid = island.grid();
+        let surface = island.surface(&grid);
         assert_eq!(surface.len(), 26);
+        assert_eq!(grid.get([0, 100, 0]), Some(0));
+        assert_eq!(grid.get([3, 100, 0]), None);
         assert!(!surface.iter().any(|&i| island.blocks[i].0 == [1, 101, 1]));
         assert_eq!(island.footprint(), [0, 2, 0, 2]);
         assert_eq!(island.heights(), (100, 102));
@@ -659,12 +770,71 @@ mod tests {
             rip: 10,
             rise: 100,
             shake: 0.5,
+            blocks: true,
         };
         assert_eq!(Settings::parse(&s.text()), s);
         assert_eq!(Settings::parse(""), Settings::default());
         assert_eq!(s.lift(5, 60), 0.0);
         assert_eq!(s.lift(60, 60), 30.0);
         assert_eq!(s.lift(500, 60), 60.0);
+    }
+
+    #[test]
+    fn one_sees_past_stairs_but_not_past_stone() {
+        assert!(occludes("minecraft:stone"));
+        assert!(occludes("minecraft:oak_log[axis=y]"));
+        assert!(occludes("minecraft:iron_ore"));
+        assert!(!occludes("minecraft:spruce_stairs[facing=north]"));
+        assert!(!occludes("minecraft:stone_brick_slab[type=bottom]"));
+        assert!(!occludes("minecraft:glass"));
+        assert!(!occludes("minecraft:oak_leaves[persistent=true]"));
+        assert!(!occludes("minecraft:lantern[hanging=true]"));
+        // The cube's middle shows once a side of it is glass.
+        let mut island = cube();
+        let side = island
+            .blocks
+            .iter()
+            .position(|(p, _)| *p == [0, 101, 1])
+            .unwrap();
+        island.blocks[side].1 = "minecraft:glass".into();
+        assert_eq!(island.surface(&island.grid()).len(), 27);
+    }
+
+    #[test]
+    fn a_step_changes_only_what_the_eye_sees_change() {
+        // A column: stone, stone, dirt, 30 over the ground it left as a, b, c.
+        let island = Island {
+            dimension: "d".into(),
+            drop: 30,
+            blocks: vec![
+                ([0, 100, 0], "minecraft:stone".into()),
+                ([0, 101, 0], "minecraft:stone".into()),
+                ([0, 102, 0], "minecraft:dirt".into()),
+            ],
+            ground: vec!["a".into(), "b".into(), "c".into()],
+        };
+        let grid = island.grid();
+        let mut one = island.step(&grid, 0, 1);
+        one.sort();
+        // The lower stone moves into stone: nothing to send for it.
+        assert_eq!(
+            one,
+            [
+                ([0, 70, 0], "a".to_owned()),
+                ([0, 72, 0], "minecraft:stone".to_owned()),
+                ([0, 73, 0], "minecraft:dirt".to_owned()),
+            ]
+        );
+        // Out of the ground by two more: the ground's b and c show, then air.
+        let mut more = island.step(&grid, 1, 3);
+        more.sort();
+        assert_eq!(more[0], ([0, 71, 0], "b".to_owned()));
+        assert_eq!(more[1], ([0, 72, 0], "c".to_owned()));
+        assert_eq!(island.step(&grid, 29, 30).len(), 3);
+        assert!(island.step(&grid, 5, 5).is_empty());
+        let last = island.step(&grid, 29, 30);
+        assert!(last.contains(&([0, 99, 0], "minecraft:air".to_owned())));
+        assert!(last.contains(&([0, 102, 0], "minecraft:dirt".to_owned())));
     }
 
     #[test]

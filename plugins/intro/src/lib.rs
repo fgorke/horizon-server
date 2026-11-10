@@ -29,8 +29,8 @@ use horizon_mod_sdk::{
     storage,
 };
 use scene::{
-    Footprint, Island, Point, Pose, Settings, is_air, parse_points, parse_track, path, point_tick,
-    points_text, track_text,
+    Footprint, Grid, Island, Point, Pose, Settings, is_air, parse_points, parse_track, path,
+    point_tick, points_text, track_text,
 };
 use show::{BLOCKS_PER_TICK, Budget, CALLS_PER_TICK, EYES, Mode, Npc, Scene, Show};
 use std::collections::{BTreeSet, VecDeque};
@@ -66,7 +66,7 @@ const MESSAGES: &[(&str, &str)] = &[
     ("not_operator", "You need to be an operator for that."),
     (
         "usage",
-        "/intro status | play [player] | stop | skip | reset <player|all> | build <lift> | unbuild | island pos1|pos2|drop <blocks>|capture | rip <tick> <rise ticks> | shake <blocks> | stage | camera add [ticks]|set <n>|remove <n>|points|record|delete | npc record <name|self> | npc delete <name> | npc list",
+        "/intro status | play [player] | stop | skip | reset <player|all> | build <lift> | unbuild | island pos1|pos2|drop <blocks>|capture | rip <tick> <rise ticks> | rise displays|blocks | shake <blocks> | stage | camera add [ticks]|set <n>|remove <n>|points|record|delete | npc record <name|self> | npc delete <name> | npc list",
     ),
     ("pos", "Island corner {which} set to {x} {y} {z}."),
     (
@@ -78,6 +78,14 @@ const MESSAGES: &[(&str, &str)] = &[
         "The island tears loose at tick {tick} and rises for {rise} ticks.",
     ),
     ("shake", "The camera shakes {blocks} blocks."),
+    (
+        "rise_displays",
+        "The island rises as displays: gliding, its hidden inside left out.",
+    ),
+    (
+        "rise_blocks",
+        "The island rises as blocks: whole, a block's step at a time.",
+    ),
     ("no_box", "Set /intro island pos1 and pos2 first."),
     ("big_box", "That box is too big: at most 128 x 128 x 128."),
     (
@@ -184,6 +192,7 @@ struct Intro {
     island: Option<Island>,
     footprint: Footprint,
     surface: Vec<usize>,
+    grid: Grid,
     camera: Vec<Pose>,
     /// The points the camera's path was made from, if it was.
     points: Vec<Point>,
@@ -242,6 +251,7 @@ impl Intro {
             island: self.island.as_ref(),
             footprint: self.footprint,
             surface: &self.surface,
+            grid: &self.grid,
             camera: &self.camera,
             npcs: &self.npcs,
         }
@@ -249,7 +259,8 @@ impl Intro {
 
     fn set_island(&mut self, island: Island) {
         self.footprint = island.footprint();
-        self.surface = island.surface();
+        self.grid = island.grid();
+        self.surface = island.surface(&self.grid);
         self.island = Some(island);
     }
 
@@ -619,6 +630,7 @@ impl Intro {
                 self.island = None;
                 self.footprint = [0; 4];
                 self.surface.clear();
+                self.grid = Grid::default();
                 self.say("unbuilt", &[("count", &count)])
             }
             Err(error) => self.say("unbuild_failed", &[("error", &error)]),
@@ -774,6 +786,18 @@ impl Intro {
                 save(SETTINGS, &self.settings.text());
                 Ok(self.say("rip", &[("tick", &tick), ("rise", &rise)]))
             }
+            ["rise", how @ ("displays" | "blocks")] => {
+                self.settings.blocks = *how == "blocks";
+                save(SETTINGS, &self.settings.text());
+                Ok(self.say(
+                    if self.settings.blocks {
+                        "rise_blocks"
+                    } else {
+                        "rise_displays"
+                    },
+                    &[],
+                ))
+            }
             ["shake", blocks] => {
                 let blocks = blocks
                     .parse::<f32>()
@@ -879,6 +903,7 @@ impl ServerMod for Intro {
             island: None,
             footprint: [0; 4],
             surface: Vec::new(),
+            grid: Grid::default(),
             camera,
             points,
             npcs,
