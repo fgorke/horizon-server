@@ -10,9 +10,13 @@
 //! storage key `schematic` (`ground <y>`, then `x y z state` a block, `L x y z state` the
 //! crater's lining) where they stand, the crater under them and the island `lift` blocks up,
 //! and `/intro unbuild` puts back what it replaced (or `/intro island pos1|pos2`, `drop`,
-//! `capture` takes one already built); `/intro camera record` and `/intro npc record
-//! <name|self>` record while the intro plays around them, `/intro stop` ends a recording;
-//! `/intro rip <tick> <rise ticks>` times the tearing loose.
+//! `capture` takes one already built). The camera flies through points set one by one
+//! (`/intro camera add [ticks]` where the operator is, `set`, `remove`, `points`), a curve
+//! through them all, or as it was flown (`/intro camera record`); `/intro stage` shows the
+//! operator the island in the ground, as the intro starts, to set the points by. `/intro npc
+//! record <name|self>` records a figure while the intro plays around it, with the intro's
+//! timeline as a bossbar; `/intro stop` ends a recording; `/intro rip <tick> <rise ticks>`
+//! times the tearing loose.
 mod build;
 mod scene;
 mod show;
@@ -24,8 +28,11 @@ use horizon_mod_sdk::{
     server::{Player, Registration, ServerMod, cinematic, players, world},
     storage,
 };
-use scene::{Footprint, Island, Pose, Settings, is_air, parse_track, track_text};
-use show::{BLOCKS_PER_TICK, Mode, Npc, Scene, Show};
+use scene::{
+    Footprint, Island, Point, Pose, Settings, is_air, parse_points, parse_track, path, point_tick,
+    points_text, track_text,
+};
+use show::{BLOCKS_PER_TICK, Budget, CALLS_PER_TICK, EYES, Mode, Npc, Scene, Show};
 use std::collections::{BTreeSet, VecDeque};
 
 const OPERATOR: u8 = 2;
@@ -33,6 +40,11 @@ const SETTINGS: &str = "settings";
 pub(crate) const ISLAND: &str = "island";
 const SCHEMATIC: &str = "schematic";
 const CAMERA: &str = "camera";
+/// The camera's points, when it was set by points.
+const POINTS: &str = "camera-points";
+const MAX_POINTS: usize = 64;
+/// Ticks from a camera point to the next, unless given.
+const POINT_TICKS: u32 = 60;
 const SEEN: &str = "seen";
 /// The figures' names, a line each.
 const NPCS: &str = "npcs";
@@ -47,14 +59,14 @@ pub(crate) const MAX_ISLAND: usize = 32768;
 const MAX_BOX: i64 = 128 * 128 * 128;
 /// Ticks between a join and the intro (the player's chunks arrive meanwhile, blinded), and
 /// before a show (the island's blocks go out meanwhile).
-const JOIN_WAIT: u32 = 40;
+const JOIN_WAIT: u32 = 100;
 const PLAY_WAIT: u32 = 10;
 
 const MESSAGES: &[(&str, &str)] = &[
     ("not_operator", "You need to be an operator for that."),
     (
         "usage",
-        "/intro status | play [player] | stop | skip | reset <player|all> | build <lift> | unbuild | island pos1|pos2|drop <blocks>|capture | rip <tick> <rise ticks> | shake <blocks> | camera record|delete | npc record <name|self> | npc delete <name> | npc list",
+        "/intro status | play [player] | stop | skip | reset <player|all> | build <lift> | unbuild | island pos1|pos2|drop <blocks>|capture | rip <tick> <rise ticks> | shake <blocks> | stage | camera add [ticks]|set <n>|remove <n>|points|record|delete | npc record <name|self> | npc delete <name> | npc list",
     ),
     ("pos", "Island corner {which} set to {x} {y} {z}."),
     (
@@ -133,6 +145,35 @@ const MESSAGES: &[(&str, &str)] = &[
     ("npcs", "Figures: {list}"),
     ("no_npcs", "No figures yet."),
     (
+        "point_added",
+        "Camera point {n} set here, {ticks} ticks after the one before. The camera runs {total} ticks.",
+    ),
+    ("point_set", "Camera point {n} moved here."),
+    (
+        "point_removed",
+        "Camera point {n} removed. The camera runs {total} ticks.",
+    ),
+    ("no_point", "There is no camera point {n}."),
+    ("points", "Camera points: {list}"),
+    (
+        "no_points",
+        "No camera points yet: /intro camera add [ticks] sets one where you are.",
+    ),
+    (
+        "too_long",
+        "That is too many points or ticks: at most 64 points and 6000 ticks.",
+    ),
+    ("no_island", "There is no island yet."),
+    (
+        "staged_on",
+        "You see the island in the ground, as the intro starts. /intro stage again shows it as it is.",
+    ),
+    ("staged_off", "You see the island as it is again."),
+    (
+        "bar",
+        "{what} · {time} s · tears loose at {rip} s · up at {up} s",
+    ),
+    (
         "status",
         "Island: {island}. Camera: {camera}. Figures: {npcs}. Tears loose at tick {rip}, rises {rise} ticks, {drop} blocks.",
     ),
@@ -144,7 +185,11 @@ struct Intro {
     footprint: Footprint,
     surface: Vec<usize>,
     camera: Vec<Pose>,
+    /// The points the camera's path was made from, if it was.
+    points: Vec<Point>,
     npcs: Vec<Npc>,
+    /// Operators who see the island in the ground (`/intro stage`).
+    staged: BTreeSet<String>,
     seen: BTreeSet<String>,
     shows: Vec<Show>,
     /// Blocks still to set right for players whose show ended.
@@ -245,8 +290,25 @@ impl Intro {
         if !lines.is_empty() {
             command::run_quiet(&lines);
         }
-        // The island's blocks take a few ticks to go out.
+        // The show sets the island's blocks itself, and right again at its end.
         self.restores.retain(|(p, _)| *p != player.id);
+        self.staged.remove(&player.id);
+        let bar = match &mode {
+            Mode::Play => None,
+            Mode::Camera => Some("the camera".to_owned()),
+            Mode::Npc(name) => Some(format!("figure {name}")),
+        }
+        .map(|what| {
+            self.say(
+                "bar",
+                &[
+                    ("what", &what),
+                    ("time", &"{time}"),
+                    ("rip", &"{rip}"),
+                    ("up", &"{up}"),
+                ],
+            )
+        });
         let home = Pose {
             x: player.x,
             y: player.y,
@@ -254,7 +316,7 @@ impl Intro {
             yaw,
             pitch,
         };
-        let show = Show::new(
+        let mut show = Show::new(
             &player.id,
             &player.name,
             mode,
@@ -262,8 +324,8 @@ impl Intro {
             home,
             &player.dimension,
             player.game_mode,
-            &self.scene(),
         );
+        show.bar = bar;
         self.shows.push(show);
         Ok(())
     }
@@ -315,7 +377,133 @@ impl Intro {
         save(CAMERA, &track_text(&frames));
         let ticks = frames.len();
         self.camera = frames;
+        // A flown camera takes the place of one set by points.
+        self.points.clear();
+        storage::delete(POINTS);
         self.say("saved", &[("what", &"the camera"), ("ticks", &ticks)])
+    }
+
+    /// The operator's eyes now, as the camera would be there at `tick` of the intro.
+    fn eyes(&self, player: &Player, tick: u32) -> Pose {
+        let (yaw, pitch) = players::rotation(&player.id).unwrap_or((0.0, 0.0));
+        let pose = Pose {
+            x: player.x,
+            y: player.y + EYES,
+            z: player.z,
+            yaw,
+            pitch,
+        };
+        self.scene().recorded(pose, tick)
+    }
+
+    /// Takes the points as the camera's path: its frames made anew and both saved. With
+    /// under two points there is no path.
+    fn keep_points(&mut self, points: Vec<Point>) -> Result<usize, String> {
+        let total = point_tick(&points, points.len().saturating_sub(1)) as usize + 1;
+        if points.len() > MAX_POINTS || total > MAX_FRAMES {
+            return Err(self.say("too_long", &[]));
+        }
+        self.camera = path(&points);
+        self.points = points;
+        if self.points.is_empty() {
+            storage::delete(POINTS);
+        } else {
+            save(POINTS, &points_text(&self.points));
+        }
+        if self.camera.is_empty() {
+            storage::delete(CAMERA);
+        } else {
+            save(CAMERA, &track_text(&self.camera));
+        }
+        Ok(self.camera.len())
+    }
+
+    fn camera_points(&mut self, player: &Player, words: &[&str]) -> Result<String, String> {
+        let index = |n: &str| n.parse::<usize>().ok().filter(|n| *n >= 1).map(|n| n - 1);
+        let mut points = self.points.clone();
+        match words {
+            ["add"] | ["add", _] => {
+                let ticks = match words.get(1) {
+                    Some(t) => t
+                        .parse::<u32>()
+                        .ok()
+                        .filter(|t| (1..=1200).contains(t))
+                        .ok_or_else(|| self.say("usage", &[]))?,
+                    None => POINT_TICKS,
+                };
+                let ticks = if points.is_empty() { 0 } else { ticks };
+                let at = point_tick(&points, points.len().saturating_sub(1)) + ticks;
+                points.push(Point {
+                    pose: self.eyes(player, at),
+                    ticks,
+                });
+                let n = points.len();
+                let total = self.keep_points(points)?;
+                Ok(self.say(
+                    "point_added",
+                    &[("n", &n), ("ticks", &ticks), ("total", &total)],
+                ))
+            }
+            ["set", n] => {
+                let i = index(n)
+                    .filter(|i| *i < points.len())
+                    .ok_or_else(|| self.say("no_point", &[("n", n)]))?;
+                points[i].pose = self.eyes(player, point_tick(&points, i));
+                self.keep_points(points)?;
+                Ok(self.say("point_set", &[("n", n)]))
+            }
+            ["remove", n] => {
+                let i = index(n)
+                    .filter(|i| *i < points.len())
+                    .ok_or_else(|| self.say("no_point", &[("n", n)]))?;
+                points.remove(i);
+                if let Some(first) = points.first_mut() {
+                    first.ticks = 0;
+                }
+                let total = self.keep_points(points)?;
+                Ok(self.say("point_removed", &[("n", n), ("total", &total)]))
+            }
+            ["points"] => {
+                if points.is_empty() {
+                    return Ok(self.say("no_points", &[]));
+                }
+                let list: Vec<String> = points
+                    .iter()
+                    .enumerate()
+                    .map(|(i, p)| {
+                        let at = point_tick(&points, i);
+                        let Pose { x, y, z, .. } = p.pose;
+                        format!("{} at tick {at} ({x:.0} {y:.0} {z:.0})", i + 1)
+                    })
+                    .collect();
+                Ok(self.say("points", &[("list", &list.join(", "))]))
+            }
+            _ => Err(self.say("usage", &[])),
+        }
+    }
+
+    /// Shows an operator the island in the ground, or as it is again.
+    fn stage(&mut self, player: &Player) -> Result<String, String> {
+        if self.show_of(&player.id).is_some() {
+            return Err(self.say("busy", &[("name", &player.name)]));
+        }
+        let island = self
+            .island
+            .as_ref()
+            .ok_or_else(|| self.say("no_island", &[]))?;
+        let on = !self.staged.remove(&player.id);
+        let blocks = if on {
+            show::in_ground(island)
+        } else {
+            show::as_it_is(island)
+        };
+        if on {
+            self.staged.insert(player.id.clone());
+        }
+        self.restores.retain(|(p, _)| *p != player.id);
+        self.restores
+            .push((player.id.clone(), show::chunks(blocks)));
+        Ok(self.say(if on { "staged_on" } else { "staged_off" }, &[]))
     }
 
     fn keep_npc(&mut self, name: String, frames: Vec<Pose>) -> String {
@@ -412,6 +600,7 @@ impl Intro {
             }
         }
         self.restores.clear();
+        self.staged.clear();
         self.unbuild = Some(unbuild);
         Ok(self.say("unbuilding", &[]))
     }
@@ -599,9 +788,17 @@ impl Intro {
                 self.start(player, Mode::Camera, 0)?;
                 Ok(self.say("recording", &[("what", &"the camera")]))
             }
+            ["stage"] => self.stage(player),
+            ["camera", rest @ ..]
+                if matches!(rest.first(), Some(&("add" | "set" | "remove" | "points"))) =>
+            {
+                self.camera_points(player, rest)
+            }
             ["camera", "delete"] => {
                 self.camera.clear();
+                self.points.clear();
                 storage::delete(CAMERA);
+                storage::delete(POINTS);
                 Ok(self.say("deleted", &[("what", &"the camera")]))
             }
             ["npc", "record", name] => {
@@ -657,6 +854,7 @@ impl ServerMod for Intro {
             .map(|t| Settings::parse(&t))
             .unwrap_or_default();
         let camera = load(CAMERA).map(|t| parse_track(&t)).unwrap_or_default();
+        let points = load(POINTS).map(|t| parse_points(&t)).unwrap_or_default();
         let seen = load(SEEN)
             .map(|t| {
                 t.lines()
@@ -682,7 +880,9 @@ impl ServerMod for Intro {
             footprint: [0; 4],
             surface: Vec::new(),
             camera,
+            points,
             npcs,
+            staged: BTreeSet::new(),
             seen,
             shows: Vec::new(),
             restores: Vec::new(),
@@ -708,9 +908,11 @@ impl ServerMod for Intro {
 
     fn player_left(&mut self, player: &Player) {
         self.restores.retain(|(p, _)| *p != player.id);
+        self.staged.remove(&player.id);
         // Their client forgets what it was shown; their game mode goes back now.
         if let Some(i) = self.show_of(&player.id) {
             let show = self.shows.remove(i);
+            show.drop_bar();
             if matches!(show.mode, Mode::Play | Mode::Camera) {
                 command::run_quiet(&[format!(
                     "gamemode {} {}",
@@ -745,13 +947,16 @@ impl ServerMod for Intro {
     fn tick(&mut self, _tick: u64) {
         self.step_build();
         self.step_unbuild();
-        let mut budget = BLOCKS_PER_TICK;
+        let mut budget = Budget {
+            blocks: BLOCKS_PER_TICK,
+            calls: CALLS_PER_TICK,
+        };
         for (player, queue) in &mut self.restores {
             while let Some(chunk) = queue.front() {
-                if chunk.len() > budget {
+                if chunk.len() > budget.blocks {
                     break;
                 }
-                budget -= chunk.len();
+                budget.blocks -= chunk.len();
                 let chunk = queue.pop_front().unwrap_or_default();
                 cinematic::show_blocks(player, &chunk);
             }

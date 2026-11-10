@@ -52,6 +52,83 @@ pub fn parse_track(text: &str) -> Vec<Pose> {
     text.lines().filter_map(Pose::parse).collect()
 }
 
+/// A point of the camera's path: where it is, and the ticks it takes to get there from the
+/// point before (nothing, for the first).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Point {
+    pub pose: Pose,
+    pub ticks: u32,
+}
+
+/// The points, a line each: `ticks x y z yaw pitch`.
+pub fn points_text(points: &[Point]) -> String {
+    let lines: Vec<String> = points
+        .iter()
+        .map(|p| format!("{} {}", p.ticks, p.pose.line()))
+        .collect();
+    lines.join("\n")
+}
+
+pub fn parse_points(text: &str) -> Vec<Point> {
+    text.lines()
+        .filter_map(|line| {
+            let (ticks, pose) = line.split_once(' ')?;
+            Some(Point {
+                pose: Pose::parse(pose)?,
+                ticks: ticks.parse().ok()?,
+            })
+        })
+        .collect()
+}
+
+/// The tick the camera reaches point `n` at.
+pub fn point_tick(points: &[Point], n: usize) -> u32 {
+    points.iter().take(n + 1).skip(1).map(|p| p.ticks).sum()
+}
+
+/// The camera's path through the points, a pose a tick: a curve through them all
+/// (Catmull-Rom), turning the short way round. Nothing with under two points.
+pub fn path(points: &[Point]) -> Vec<Pose> {
+    if points.len() < 2 {
+        return Vec::new();
+    }
+    // Yaws without the jump from 180 to -180, so the curve turns the short way.
+    let mut yaws: Vec<f64> = Vec::with_capacity(points.len());
+    for p in points {
+        let yaw = f64::from(p.pose.yaw);
+        let turned = match yaws.last() {
+            Some(&last) => last + (yaw - last + 180.0).rem_euclid(360.0) - 180.0,
+            None => yaw,
+        };
+        yaws.push(turned);
+    }
+    let last = points.len() - 1;
+    let curve = |get: &dyn Fn(usize) -> f64, i: usize, u: f64| {
+        let (p0, p1) = (get(i.saturating_sub(1)), get(i));
+        let (p2, p3) = (get(i + 1), get((i + 2).min(last)));
+        0.5 * (2.0 * p1
+            + (p2 - p0) * u
+            + (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3) * u * u
+            + (3.0 * p1 - p0 - 3.0 * p2 + p3) * u * u * u)
+    };
+    let mut frames = vec![points[0].pose];
+    for i in 0..last {
+        let ticks = points[i + 1].ticks.max(1);
+        for k in 1..=ticks {
+            let u = f64::from(k) / f64::from(ticks);
+            let yaw = curve(&|n| yaws[n], i, u);
+            frames.push(Pose {
+                x: curve(&|n| points[n].pose.x, i, u),
+                y: curve(&|n| points[n].pose.y, i, u),
+                z: curve(&|n| points[n].pose.z, i, u),
+                yaw: ((yaw + 180.0).rem_euclid(360.0) - 180.0) as f32,
+                pitch: curve(&|n| f64::from(points[n].pose.pitch), i, u).clamp(-90.0, 90.0) as f32,
+            });
+        }
+    }
+    frames
+}
+
 /// A block: where, and its state (`minecraft:oak_log[axis=y]`).
 pub type Block = ([i32; 3], String);
 
@@ -588,6 +665,31 @@ mod tests {
         assert_eq!(s.lift(5, 60), 0.0);
         assert_eq!(s.lift(60, 60), 30.0);
         assert_eq!(s.lift(500, 60), 60.0);
+    }
+
+    #[test]
+    fn the_camera_curves_through_its_points() {
+        let at = |x: f64, yaw: f32, ticks: u32| Point {
+            pose: Pose {
+                x,
+                yaw,
+                ..Pose::default()
+            },
+            ticks,
+        };
+        let points = [at(0.0, 170.0, 0), at(10.0, -170.0, 10), at(30.0, -90.0, 20)];
+        assert_eq!(parse_points(&points_text(&points)), points);
+        assert_eq!(point_tick(&points, 0), 0);
+        assert_eq!(point_tick(&points, 2), 30);
+        let frames = path(&points);
+        assert_eq!(frames.len(), 31);
+        // It passes through each point at its tick, and turns the short way (through 180).
+        assert_eq!(frames[0], points[0].pose);
+        assert!((frames[10].x - 10.0).abs() < 1e-9);
+        assert!((frames[30].x - 30.0).abs() < 1e-9);
+        assert!(frames[5].yaw.abs() > 170.0);
+        assert!(frames.windows(2).all(|w| w[1].x > w[0].x));
+        assert!(path(&points[..1]).is_empty());
     }
 
     #[test]
