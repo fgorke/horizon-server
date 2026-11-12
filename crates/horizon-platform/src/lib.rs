@@ -11,6 +11,12 @@
 /// memory.
 pub use horizon_system as system;
 
+/// The benchmark report format and its hardware probes (`horizon-bench`).
+pub use horizon_bench as bench;
+
+/// The `.hzperf` capture contract and its files (`horizon-perf-format`).
+pub use horizon_perf_format as perf_format;
+
 /// The pinned Minecraft version: its id, protocol and data version.
 pub use horizon_core::version;
 
@@ -46,7 +52,18 @@ pub use horizon_server_files as server_files;
 /// [`hooks::register`] it before the game starts (docs/layers.md, "How a Horizon crate plugs
 /// in"). The engine's dispatch side is not part of the API.
 pub mod hooks {
-    pub use horizon_hooks::{Hooks, Started, TooLate, register, tunnel};
+    /// The players the game shows (`horizon_hooks::players`): the views [`Hooks::frame`] and
+    /// [`Hooks::tick`] get, the pose a crate lays over a player's body, what goes by their names,
+    /// the crate's sprites, the camera, and what a crate draws on them.
+    pub use horizon_hooks::players::{
+        BODY_PARTS, Badge, BodyPose, Bone, CameraOverride, CameraView, Frame, Gear, Kind, Light,
+        Look, Mark, Mesh, Motion, NameDecoration, PartPoses, Particle, Pass, PlayerDraw,
+        PlayerModel, PlayerModels, Quad, SpriteStore, Sprites, View,
+    };
+    pub use horizon_hooks::{
+        Activity, Client, Dimension, GameMode, GetTheGame, Hooks, Play, Started, TooLate, perf,
+        register, seat, tunnel,
+    };
 }
 
 /// The settings store (`horizon_hooks::settings`): a crate's own `key:value` lines in the game
@@ -57,10 +74,25 @@ pub mod settings {
 
 /// Settings pages a crate adds to the options screens (docs/layers.md, "Platform registries").
 pub mod pages {
-    pub use horizon_hooks::pages::{Act, Label, Page, Place, Row, register};
+    pub use horizon_hooks::pages::{Act, Label, Page, Place, Row, connect, register};
+}
+
+/// The lang files with a crate's text, loaded with the game's own (docs/layers.md, "Platform
+/// registries").
+pub mod lang {
+    pub use horizon_hooks::lang::{Files, register};
 }
 
 /// Drawing on the HUD (docs/layers.md, "Platform registries").
 pub mod hud {
     pub use horizon_hooks::hud::{Canvas, Corner, Layer, register};
+}
+
+/// The multiplayer server list as vanilla stores it (`servers.dat`): read, write, add, remove,
+/// and the lock held while it is read and written back.
+#[cfg(feature = "protocol")]
+pub mod servers {
+    pub use horizon_protocol::servers::{
+        ServerEntry, load, lock, parse_address, prepend, remove_where, save,
+    };
 }

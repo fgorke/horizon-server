@@ -155,10 +155,9 @@ Horizon's own extras and its product, and every built-in address of an outside s
   and partner servers in the list, Play with Friends and its relay, Discord, the "I'm playing" ping, telemetry and
   benchmark uploads, releases and updates, the hosting supervisor, the launcher.
 - **Examples:** `horizon-addresses`, `horizon-cosmetics`, `horizon-friends`, `horizon-relay`, `horizon-telemetry`,
-  `horizon-bench`, `horizon-release-sign`, `horizon-server`, `horizon-mod-registry`, `horizon-heartbeat`,
-  `horizon-official`, `launcher/`. Still in engine crates today: `game/cosmetics.rs`, `game/emotes.rs`,
-  `game/discord.rs`, `game/extras.rs`, `game/tweaks.rs`, `multiplayer.rs` (`add_official_server`), `extras_ui.rs`,
-  `pvp.rs`.
+  `horizon-perf-share`, `horizon-release-sign`, `horizon-server`, `horizon-mod-registry`, `horizon-heartbeat`,
+  `horizon-official`, `horizon-official-servers`, `horizon-discord`, `launcher/`. Still in engine crates today:
+  `game/cosmetics.rs`, `game/emotes.rs`, `game/extras.rs`, `game/tweaks.rs`, `extras_ui.rs`, `pvp.rs`.
 - **Rules:**
   - It uses the platform's public API only, never the engine.
   - Until it moves, every Horizon feature in the game sits behind the `horizon-extras` feature
@@ -288,7 +287,7 @@ build pays nothing.
 
 The hooks today: `started` (once, when someone plays: not a dedicated server, a benchmark or an automated run),
 `published` (the world opened to or closed from LAN or friends, on change), `shutdown` (the window closed, the
-world saved) and `tunnel` (the resolver of `friend:` addresses, Play with Friends'). **A hook you need and don't find:** add a method with an empty default to `Hooks` and a function in
+world saved) and `tunnel` (the resolver of `friend:` addresses, Play with Friends') and `captures` (Open and Share for saved performance captures, `horizon-perf-share`: with none registered the game offers neither). **A hook you need and don't find:** add a method with an empty default to `Hooks` and a function in
 `horizon_hooks::engine` that the engine calls where vanilla does the matching thing; give it plain data or a type
 the engine owns, never one from above. A hook that needs engine types the platform doesn't expose yet (a draw
 context for HUD and chat overlays, a settings page) comes with that type's platform API (M6). An extension point
@@ -323,8 +322,8 @@ hook (#14081), `seat()` (#14096).
   only calls it.
 - With nothing registered, the engine does no work: a load of an empty slice where it would dispatch. It makes
   no allocation, no draw call and no file. A vanilla build (horizon-client, horizon-plain) is unchanged.
-- Visible text is a translation key the registrant ships in its lang files, never English in code. Values a
-  player typed (a name, a path) are the exception.
+- Visible text is a translation key the registrant ships in its lang files ([Lang files](#lang-files-horizon_platformlang)),
+  never English in code. Values a player typed (a name, a path) are the exception.
 - Splitscreen players are one process, one thread, each `Game` in turn (`game/split.rs`), so a crate's statics
   are shared by them. Every call (stores, pages, layers, hooks) happens on one player's turn, and
   `horizon_platform::hooks::seat()` (0 for P1) says whose: a crate keeps per-player state indexed by it.
@@ -364,7 +363,7 @@ pub trait Store: Sync {
 A page lives in the options screen's shell, and its entry sits on one of the game's menus.
 
 ```rust
-pub enum Place { HorizonSettings, Title, Pause }
+pub enum Place { HorizonSettings, Pause, Extras, Title }
 pub trait Page: Sync {
     fn id(&self) -> &'static str;            // stable, for horizon-ctl and the page stack
     fn title(&self) -> &'static str;         // translation key
@@ -372,6 +371,7 @@ pub trait Page: Sync {
     fn rows(&self, rows: &mut Vec<Row>);     // asked when the page is drawn, not every frame elsewhere
     fn act(&self, row: usize, act: Act);     // a click, a reverse click, a slider's value, a key
     fn tooltip(&self, row: usize) -> Option<Label> { None }   // hover text, may follow the value
+    fn back(&self) -> &'static str { "gui.done" }            // the leave button of a page drawn as a screen
 }
 pub enum Row {
     Heading(&'static str),                   // translation key
@@ -379,17 +379,36 @@ pub enum Row {
     Toggle { label: &'static str, on: bool },
     Cycle { label: &'static str, value: Label },
     Slider { label: &'static str, value: f32, text: Label },   // value in 0..=1
-    Button { label: &'static str },
+    Button { label: &'static str, active: bool, half: bool, footer: bool },  // Row::button(..).half()...
     Key { label: &'static str, key: String },                 // a binding: `key.keyboard.z`
+    Text { text: String, quiet: bool, groups: bool },         // Row::text(..): white or grey, wrapped
+    Space(u8),                                                // GUI pixels, on a page drawn as a screen
+    Field { label: &'static str, text: String, max: usize },  // Row::field(..).max(n): an EditBox, on a page drawn as a screen
 }
 pub enum Label { Key(&'static str), Value(String) }
-pub enum Act { Press, PressBack, Slide(f32), Bind(String) }
+pub enum Act { Press, PressBack, Slide(f32), Bind(String), Edit(String), Submit }
+pub fn connect(address: impl Into<String>);                   // from a Title page's act: join that server
 ```
 
 - `HorizonSettings`: a row of the Horizon Settings page, after the engine's own pages. `Title` and `Pause`: a
   button on the title screen or the pause menu that opens the page. These buttons exist only when something
   registered, so the vanilla menus keep vanilla's look. The page is drawn with the same widgets, tooltips,
   narration, controller focus and `horizon-ctl` ids as the engine's pages.
+- `Button` and `Text` are built with `Row::button` and `Row::text` and their options: `.active(false)` greys a
+  button, `.half()` puts two side by side, `.footer()` sets one beside Done on a page drawn as its own screen,
+  `.quiet()` greys text, `.groups()` breaks it only between `-`-separated groups (an invite code). In the options
+  shell, text is notes and space is nothing.
+- `Title` is the title screen's Friends icon slot (vanilla's `CommonButtons.friends`), not a new row: the icon
+  keeps its place and look at every GUI scale, and opens the first page registered there as a form drawn as Join a
+  Friend is (`multiplayer/page.rs`): the title, the rows from y 53 (a field's grey label, its 200-wide box 11
+  below, 41 a field), the buttons in a column from a quarter of the height + 114, the back button last
+  (`Page::back`, `gui.cancel` for a form). It shows heading, note, text, space, field and button rows. With no page
+  there the icon opens the engine's Join a Friend while an invite-code resolver is registered, else it is
+  inactive.
+- `Field` is vanilla's `EditBox` on a page drawn as its own screen: focus by click or Tab, typing, the caret keys,
+  selection, copy and paste, at most `max` characters (32 by default). The engine keeps its text while the page is
+  open and sends each change (`Act::Edit`, before any other act or redraw reaches the page) and Enter
+  (`Act::Submit`). The options shell has no field.
 - Rows are rebuilt when the page is drawn or acted on, like the engine's own pages: no cost while no page is
   open.
 - The engine keeps native mods' pages (`Page::NativeMod`) as they are. Both kinds sit in one module that
@@ -422,6 +441,102 @@ pub trait Layer: Sync {
   reads the engine's.
 - Sprites, items and the player's state come with their platform API (M6). They are not in this first
   version.
+
+### Look (`horizon_platform::look`)
+
+What the engine draws differently for a crate above, as plain data: PvP & HUD's knobs today (#14217).
+
+```rust
+pub struct Look {       // #[non_exhaustive]; Default is vanilla's
+    pub legacy_pose: bool, pub hide_attack_indicator: bool,
+    pub mute_attack_sounds: bool, pub hide_attack_particles: bool,
+    pub frame: Frame,   // outline, hurt overlay and glint colours
+    pub shield_size: u8, pub totem_scale: f32, pub fire_lower: f32,
+    pub clear_lava: bool, pub clear_water: bool, pub chat: Chat,
+    pub hide_effect_icons: bool, pub time_of_day: Option<i64>, pub weather: Option<(f32, f32)>,
+}
+pub fn update(change: impl FnOnce(&mut Look));  // the player whose turn it is (`seat()`)
+```
+
+- Pushed, not asked: a crate changes its own fields when its settings load or change (several crates share the
+  look, each keeping to its fields), and the engine reads it where it draws (`game/look.rs`, the only reader).
+  Nothing is called per frame, and a seat nothing changed sees vanilla's.
+- A knob is named by what it changes in the picture or the sound, never by the feature that uses it. A new knob
+  is a field added with vanilla's value as its default.
+
+### Container screens (`horizon_platform::containers`)
+
+Input and drawing on an open container screen (the inventory, chests, furnaces, crafting tables...), for the
+extras that act on one: Mouse Tweaks and sorting (M5).
+
+```rust
+/// The open screen's menu, for the length of one call. The engine implements it.
+pub trait Container {
+    fn menu(&self) -> &str;                     // "inventory", "minecraft:generic_9x3", "minecraft:furnace"...
+    fn slots(&self) -> Vec<Slot>;               // every slot drawn, in the screen's order
+    fn stack(&mut self, slot: SlotId) -> Option<Stack>;
+    fn carried(&self) -> Option<Stack>;         // the stack on the cursor
+    fn takes_one(&mut self, slot: SlotId, of: &Stack) -> bool;  // the menu's rules: mayPlace, the slot's limit
+    fn landing(&mut self, slot: SlotId) -> Vec<SlotId>;         // where quickMoveStack would put its items
+    fn click(&mut self, slot: SlotId, click: Click) -> bool;    // one ordinary click, as vanilla sends it
+    fn spread(&self) -> usize;                  // the slots vanilla's quick craft drag covers now
+    fn cursor(&self) -> (f32, f32);             // GUI pixels, from the panel's corner
+    fn shift(&self) -> bool;
+    fn order(&mut self, slot: SlotId) -> (u32, String);         // the creative tabs' order and the shown name
+}
+pub struct SlotId(pub u32);                     // opaque, stable while the screen is open
+pub struct Slot { pub id: SlotId, pub role: Role, pub x: f32, pub y: f32 }  // top left, from the panel's corner
+pub enum Role { Hotbar, Inventory, Storage, Input, Result, Equipment, Other }   // a crafting grid is Input
+pub struct Stack { pub item: String, pub count: u32, pub max: u32, pub kind: u64 }  // kind: equal for the same item and components
+pub enum Click { Pick { right: bool }, QuickMove, Put { one: bool } }               // Put: a one-slot QUICK_CRAFT drag
+
+// In `Hooks`, each `false` (or nothing) by default, so vanilla's handling runs:
+fn container_press(&self, c: &mut dyn Container, slot: Option<SlotId>, right: bool) -> bool;
+fn container_drag(&self, c: &mut dyn Container, slot: Option<SlotId>) -> bool;  // the cursor moved, a button held
+fn container_release(&self, c: &mut dyn Container);
+fn container_wheel(&self, c: &mut dyn Container, slot: Option<SlotId>, steps: f32) -> bool;
+fn container_key(&self, c: &mut dyn Container, slot: Option<SlotId>, key: &str) -> bool;  // `key.keyboard.r`, `key.mouse.middle`
+fn container_draw(&self, c: &dyn Container, canvas: &mut dyn hud::Canvas);    // over the panel, from its corner
+```
+
+- `true` means the hook took the input: vanilla's press, drag or wheel doesn't run, and a press or drag taken
+  ends vanilla's quick craft drag, as Mouse Tweaks' right-drag replaces it. Every hook hears `release`. The
+  first hook that returns `true` wins.
+- Each `click` is an ordinary slot click: the menu engine's on the player's own world, a `ContainerClick` on a
+  server. So an extra built on it works wherever vanilla's clicks do, and anticheats see vanilla's packets.
+- The engine offers every menu screen's slots; the crate decides which menus it acts in, by `menu()` (Mouse
+  Tweaks stays out of those whose slots cost or trigger something: anvils, enchanting, merchants, beacons,
+  crafters). Creative's tabs are no container screen.
+- The reads that ask the menu's rules take `&mut self`, as the engine's do; drawing gets `&dyn Container`,
+  so it reads the rest only.
+- The engine builds a `Container` only when a hook is registered and a container screen gets input or draws.
+  Without one there is no cost, and vanilla's handling is unchanged.
+- `order` is the only text: Sorting ranks by it. The rest is ids and numbers, so the API names no engine type
+  (`ItemStack` stays in the engine).
+
+### Lang files (`horizon_platform::lang`)
+
+A crate keeps the text for its keys in its own folder, `crates/<name>/assets/lang/<code>.json`, with the same
+shape as the engine's `assets/horizon/lang` files (flat `"key": "text"` lines, `en_us.json` the reference).
+It registers them as `(code, JSON)` pairs, usually `include_str!`s:
+
+```rust
+static LANG: &horizon_platform::lang::Files = &[
+    ("en_us", include_str!("../assets/lang/en_us.json")),
+    ("fr_fr", include_str!("../assets/lang/fr_fr.json")),
+];
+horizon_platform::lang::register(LANG)?;
+```
+
+- The game loads them into its `horizon` namespace right after its own bundled file for the same language, so a
+  resource pack still overrides them, and a language a crate lacks falls back to its English.
+- A key belongs to one folder. On a key the engine's file also has, the engine's text wins (and the
+  `lang.rs` test fails).
+- Regional variants read their language's file as the engine's do (`fr_ca` reads `fr_fr`, `de_ch` reads `de_de`
+  without `ß`).
+- `tools/lang_coverage.py` reports each crate's folder beside the engine's. A person's review of a crate's entry
+  is kept in `tools/lang_review/<name>/<code>.json` ([translations.md](translations.md)).
+- With nothing registered, a language loads exactly as before.
 
 ## Extras that may leave the game
 
@@ -467,14 +582,14 @@ All three run in CI's verify job and in `tools/pr_ready.py`.
 
 ### Today's exceptions
 
-47, on main at d5504cd328 (2026-11-08):
+30, the `allowed` list in `tools/layers.json` on main at a89f338 (2026-11-11). That file is the source of truth:
+`python3 tools/check_layers.py` prints the current count and `--list` prints each exception.
 
 | Crate | Uses, against the rule |
 |---|---|
-| `horizon-client` | platform: `horizon-anticheat`, `-chat-filter`, `-dualsense`, `-hdr`, `-mod-api-gen`, `-mods`, `-optifine`, `-shader-api`, `-shaders`, `-theme`; Horizon: `horizon-bench`, `-cosmetics`, `-friends`, `-telemetry` |
-| `horizon-client-lib` | the same, plus `horizon-mcp`, minus `horizon-mod-api-gen` and `horizon-friends` (left through `Hooks::tunnel`) |
-| `horizon-client-render` | platform: `horizon-hdr`, `-mod-api-gen`, `-optifine`, `-polytone`, `-shader-api`, `-shaders`, `-theme`; Horizon: `horizon-bench`, `-cosmetics`, `-telemetry` |
-| `horizon-client-input` | platform: `horizon-dualsense`, `horizon-theme` |
+| `horizon-client` | platform: `horizon-anticheat`, `-chat-filter`, `-dualsense`, `-hdr`, `-mod-api-gen`, `-mods`, `-optifine`, `-shader-api`, `-shaders`, `-theme`; Horizon: `horizon-cosmetics`, `-friends`, `-telemetry` |
+| `horizon-client-lib` | platform: `horizon-anticheat`, `-hdr`, `-mcp`, `-mods`, `-optifine`, `-shader-api`, `-shaders`; Horizon: `horizon-telemetry` |
+| `horizon-client-render` | platform: `horizon-hdr`, `-optifine`, `-polytone`, `-shader-api`, `-shaders` |
 
 No platform crate depends on Horizon.
 
@@ -511,9 +626,10 @@ Horizon's own and third-party addresses (Horizon layer):
 |---|---|---|
 | `play.playhorizon.dev` (status `:24454`), previously `horizon.bunchy7s.dev` | the official server in the list, its status | `horizon-addresses` (#12993), `launcher/links.json` |
 | `cosmetics.playhorizon.dev` | cosmetics, emotes, presence | `horizon-addresses` (#12993) |
+| `playhorizon.dev/perf`, `playhorizon.dev/api/perf/captures` | the performance viewer Open shows a saved capture in, and the upload behind Share (`HORIZON_PERF_VIEWER`, `HORIZON_PERF_CAPTURES` override them) | `horizon-addresses`, used by `horizon-perf-share` |
 | `telemetry.playhorizon.dev` | opt-in telemetry, the "I'm playing" ping, benchmark uploads | `horizon-addresses` (#12993) |
 | `stun.cloudflare.com`, `stun.l.google.com` | Play with Friends NAT discovery | `horizon-addresses` (#12993) |
-| `afri-network.co.za` | the withdrawn partner server, so the game can remove the entry it added | `multiplayer.rs` (`WITHDRAWN_PARTNER`) |
+| `afri-network.co.za` | the withdrawn partner server, so the game can remove the entry it added | `horizon-addresses` |
 | `horizon-rust.github.io/horizon-mods`, `github.com/horizon-rust/horizon-mods` | the mod registry index and files: a build of this repository alone asks the player for a registry | `mod_registry.rs`, `horizon-mods/src/index*.rs`, `cargo-horizon-mod` |
 | `api.modrinth.com`, `cdn.modrinth.com` | the in-game resource pack browser, modpack porting | `pack_browser.rs`, `horizon-port-pack` |
 | `github.com`, `raw.githubusercontent.com`, `gitlab.com`, `maven.neoforged.net` | modpack porting's sources | `horizon-port-pack` |
