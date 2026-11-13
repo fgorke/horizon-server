@@ -198,6 +198,28 @@ mod regions {
             true
         }
 
+        /// The boxes of `dimension` where regions deny blocks growing (`block-growth`): x1 y1 z1
+        /// x2 y2 z2, each pair in order.
+        pub(in crate::game) fn no_grow_boxes(&self, dimension: &str) -> Vec<[i32; 6]> {
+            self.plugins
+                .regions
+                .iter()
+                .map(|(_, r)| r)
+                .filter(|r| r.dimension == dimension && r.deny.contains(&ProtectedAction::BlockGrowth))
+                .map(|r| {
+                    let (a, b) = (r.pos1, r.pos2);
+                    [
+                        a.0.min(b.0),
+                        a.1.min(b.1),
+                        a.2.min(b.2),
+                        a.0.max(b.0),
+                        a.1.max(b.1),
+                        a.2.max(b.2),
+                    ]
+                })
+                .collect()
+        }
+
         /// Whether any region denies mobs spawning by themselves (`mob-spawns`).
         pub(in crate::game) fn spawns_guarded(&self) -> bool {
             self.plugins
@@ -250,6 +272,9 @@ mod regions {
 impl Game<'_> {
     pub(in crate::game) fn spawns_guarded(&self) -> bool {
         false
+    }
+    pub(in crate::game) fn no_grow_boxes(&self, _dimension: &str) -> Vec<[i32; 6]> {
+        Vec::new()
     }
     pub(in crate::game) fn spawn_denied(&self, _dimension: &str, _pos: [i32; 3]) -> bool {
         false

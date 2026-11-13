@@ -738,6 +738,10 @@ interface %world {
         /// Mobs and animals spawning by themselves (natural spawning), for everyone: a
         /// region's exempt players don't matter. Spawn eggs, spawners and commands still spawn.
         mob-spawns,
+        /// Blocks growing and spreading by themselves (random ticks): crops, saplings, vines,
+        /// grass, mycelium, kelp, cane, bamboo, cactus... Leaves don't decay, ice and snow don't
+        /// melt and copper doesn't age either. For everyone.
+        block-growth,
     }
     record region {
         dimension: string,

@@ -719,6 +719,7 @@ What a protected region keeps players from doing.
 | `damage` | Survival and adventure players taking damage of any kind. |
 | `hurt-mobs` | Hitting mobs and animals. |
 | `mob-spawns` | Mobs and animals spawning by themselves (natural spawning), for everyone: a region's exempt players don't matter. Spawn eggs, spawners and commands still spawn. |
+| `block-growth` | Blocks growing and spreading by themselves (random ticks): crops, saplings, vines, grass, mycelium, kelp, cane, bamboo, cactus... Leaves don't decay, ice and snow don't melt and copper doesn't age either. For everyone. |
 
 ### record `region`
 

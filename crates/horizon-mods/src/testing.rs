@@ -1140,6 +1140,7 @@ fn region_line(r: &crate::Region) -> String {
             A::Damage => "damage",
             A::HurtMobs => "hurt-mobs",
             A::MobSpawns => "mob-spawns",
+            A::BlockGrowth => "block-growth",
         })
         .collect();
     let ((x1, y1, z1), (x2, y2, z2)) = (r.pos1, r.pos2);
