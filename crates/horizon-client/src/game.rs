@@ -876,6 +876,8 @@ struct GameLevel<'w> {
     /// Where `Block.dropResources` puts the drops instead of popping them,
     /// while a mod's machine breaks a block (`native_machine_destroy_block`).
     drop_into: Option<Vec<ItemStack>>,
+    /// Plugins' regions where blocks don't grow (`block-growth`): no random ticks there.
+    no_grow: Vec<[i32; 6]>,
 }
 struct PlayerCollision {
     y: f64,
@@ -1306,6 +1308,15 @@ impl LevelAccess for GameLevel<'_> {
         state: &mut BlockStateId,
         handled: &mut bool,
     ) {
+        // A plugin's region where blocks don't grow: the block's random tick doesn't run.
+        if self.no_grow.iter().any(|b| {
+            (b[0]..=b[3]).contains(&pos.x)
+                && (b[1]..=b[4]).contains(&pos.y)
+                && (b[2]..=b[5]).contains(&pos.z)
+        }) {
+            *handled = true;
+            return;
+        }
         if self.native_authoritative {
             // Any block the hook writes moves the world's revision on.
             let revision = self.world.revision;
@@ -3905,6 +3916,7 @@ impl Game<'_> {
         }
         let native_authoritative = self.native_authoritative();
         let environment_type = self.dimension_type();
+        let no_grow = self.no_grow_boxes(self.dim.id());
         let mut level = GameLevel {
             gateway_servers: &mut self.be_anims.gateway_servers,
             border: self.border.geometry(),
@@ -3972,6 +3984,7 @@ impl Game<'_> {
             drop_tool: None,
             drop_breaker_at: None,
             drop_into: None,
+            no_grow,
         };
         let result = f(self.res.behaviours(), &mut level, &mut self.block_ticks);
         self.flush_spill();

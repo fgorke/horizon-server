@@ -24,7 +24,7 @@ const KEY: &str = "regions";
 /// `full` regions reach from the bottom of every dimension to its top.
 const FULL_HEIGHT: (i32, i32) = (-2048, 4095);
 /// The protections, by the name `/region flag` takes, in the order they are listed.
-const FLAGS: [(&str, ProtectedAction); 8] = [
+const FLAGS: [(&str, ProtectedAction); 9] = [
     ("break", ProtectedAction::BreakBlocks),
     ("place", ProtectedAction::PlaceBlocks),
     ("use", ProtectedAction::UseBlocks),
@@ -33,6 +33,7 @@ const FLAGS: [(&str, ProtectedAction); 8] = [
     ("damage", ProtectedAction::Damage),
     ("mobs", ProtectedAction::HurtMobs),
     ("nospawn", ProtectedAction::MobSpawns),
+    ("nogrow", ProtectedAction::BlockGrowth),
 ];
 /// The flag that keeps players inside the region.
 const NO_EXIT: &str = "noexit";

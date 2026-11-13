@@ -205,7 +205,9 @@ mod regions {
                 .regions
                 .iter()
                 .map(|(_, r)| r)
-                .filter(|r| r.dimension == dimension && r.deny.contains(&ProtectedAction::BlockGrowth))
+                .filter(|r| {
+                    r.dimension == dimension && r.deny.contains(&ProtectedAction::BlockGrowth)
+                })
                 .map(|r| {
                     let (a, b) = (r.pos1, r.pos2);
                     [
