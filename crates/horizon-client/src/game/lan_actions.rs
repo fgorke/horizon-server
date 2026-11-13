@@ -4474,16 +4474,8 @@ impl Game<'_> {
             if let Some(play) = host.play.get_mut(&conn) {
                 play.hook = None;
             }
-            // ServerPlayer.die: deaths, what killed them, and the
-            // time-since counters restart.
-            self.as_guest(host, conn, |game| {
-                game.stats.custom("deaths", 1);
-                if let Some(kind) = game.combat_killer_kind() {
-                    game.stats.add("killed_by", &kind, 1);
-                }
-                game.stats.reset("custom", "minecraft:time_since_death");
-                game.stats.reset("custom", "minecraft:time_since_rest");
-            });
+            // The deaths, `killed_by` and the timers they reset are ServerPlayer.die's,
+            // below: counting them here too counted every death twice.
         }
         let here = host.hub.here(&host.hub.guests[gi]);
         let g = &mut host.hub.guests[gi];

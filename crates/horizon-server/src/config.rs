@@ -38,6 +38,7 @@ seed = ""                    # empty: a random seed on the first start
 game_mode = "survival"       # survival, creative, adventure or spectator
 difficulty = "easy"          # peaceful, easy, normal or hard
 hardcore = false             # one life: a player who dies becomes a spectator
+mob_cap_percent = 100        # natural spawning's mob caps, in percent of vanilla's (200: twice the mobs)
 
 # Any other server.properties key, spelled as vanilla spells it, for example:
 # spawn-protection = 16
@@ -111,7 +112,7 @@ enabled = true               # false pauses it and keeps the webhook
 "##;
 
 /// Each typed setting: its section, its name, and the vanilla key it writes.
-pub(crate) const TYPED: [(&str, &str, &str); 17] = [
+pub(crate) const TYPED: [(&str, &str, &str); 18] = [
     ("server", "motd", "motd"),
     ("server", "port", "server-port"),
     ("server", "bind", "server-ip"),
@@ -137,6 +138,7 @@ pub(crate) const TYPED: [(&str, &str, &str); 17] = [
     ("world", "game_mode", "gamemode"),
     ("world", "difficulty", "difficulty"),
     ("world", "hardcore", "hardcore"),
+    ("world", "mob_cap_percent", "horizon-mob-cap-percent"),
 ];
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -232,6 +234,8 @@ pub struct World {
     pub game_mode: String,
     pub difficulty: String,
     pub hardcore: bool,
+    /// Natural spawning's mob caps, in percent of vanilla's.
+    pub mob_cap_percent: u32,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -461,6 +465,7 @@ impl Default for World {
             game_mode: "survival".into(),
             difficulty: "easy".into(),
             hardcore: false,
+            mob_cap_percent: 100,
         }
     }
 }
@@ -959,6 +964,7 @@ mod tests {
                 let vanilla_like = match key.as_str() {
                     "horizon-admin-feedback-to-ops" => "true",
                     "horizon-accept-older-clients" => "false",
+                    "horizon-mob-cap-percent" => "100",
                     _ => "0",
                 };
                 assert_eq!(value, vanilla_like, "{key}");

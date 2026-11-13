@@ -143,6 +143,7 @@ fn range(section: &str, field: &str) -> Option<std::ops::RangeInclusive<i64>> {
         ("server", "view_distance" | "simulation_distance") => Some(2..=32),
         ("server", "max_view_distance") => Some(0..=32),
         ("server", "max_players") => Some(1..=1000),
+        ("world", "mob_cap_percent") => Some(0..=1000),
         ("backups", "keep") => Some(1..=1000),
         _ => None,
     }

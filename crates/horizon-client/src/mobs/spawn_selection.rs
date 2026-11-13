@@ -853,6 +853,24 @@ impl PlayerCells {
     }
 }
 
+/// The mob caps, in percent of vanilla's (`server.toml`'s `world.mob_cap_percent`).
+static CAP_PERCENT: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(100);
+
+/// Sets the mob caps to `percent` of vanilla's (0 to 1000).
+pub fn set_cap_percent(percent: i32) {
+    CAP_PERCENT.store(percent.clamp(0, 1000), std::sync::atomic::Ordering::Relaxed);
+}
+
+/// A category's cap (`MobCategory.getMaxInstancesPerChunk`), scaled by [`set_cap_percent`].
+fn cap(category: Category) -> i32 {
+    let percent = CAP_PERCENT.load(std::sync::atomic::Ordering::Relaxed);
+    if percent == 100 {
+        category.max()
+    } else {
+        category.max() * percent / 100
+    }
+}
+
 /// A player as the spawn caps see it.
 #[derive(Clone, Copy, Debug)]
 pub struct SpawnPlayer {
@@ -965,7 +983,7 @@ impl SpawnState {
     }
     /// `canSpawnForCategoryGlobal`.
     pub fn can_spawn_global(&self, category: Category) -> bool {
-        let max = category.max() * self.spawnable_chunks / 289;
+        let max = cap(category) * self.spawnable_chunks / 289;
         self.counts[category.index()] < max
     }
     /// `canSpawnForCategoryLocal` (`LocalMobCapCalculator.canSpawn`).
@@ -975,7 +993,7 @@ impl SpawnState {
         let near = self.players_near(cx, cz);
         self.near_list[near]
             .iter()
-            .any(|&p| self.player_counts[p][category.index()] < category.max())
+            .any(|&p| self.player_counts[p][category.index()] < cap(category))
     }
     /// `getFilteredSpawningCategories`.
     pub fn filtered_categories(

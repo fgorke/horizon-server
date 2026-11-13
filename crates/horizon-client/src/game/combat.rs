@@ -500,14 +500,6 @@ impl Game<'_> {
             damage.in_tag(id, tag) || damage.in_tag(id, &format!("minecraft:{tag}"))
         })
     }
-    /// The kind of the mob behind the last combat entry, for `Stats.ENTITY_KILLED_BY`.
-    pub(super) fn combat_killer_kind(&self) -> Option<String> {
-        let (id, _) = self.combat.entries.last()?.attacker.clone()?;
-        self.mobs
-            .iter()
-            .find(|m| m.id == id)
-            .map(|m| m.kind.id.clone())
-    }
     /// `CombatTracker.getMostSignificantFall`.
     fn most_significant_fall(&self) -> Option<usize> {
         let (mut result, mut alternative) = (None, None);

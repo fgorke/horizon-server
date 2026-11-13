@@ -692,6 +692,8 @@ const LEGACY_PRESET_NAMES: [(&str, horizon_client::save::WorldPreset); 2] = [
 
 /// server.properties' line for `server.toml`'s `max_view_distance` (horizon-server writes it).
 const FAR_PROPERTY: &str = "horizon-max-view-distance";
+/// server.properties' line for `server.toml`'s `mob_cap_percent` (horizon-server writes it).
+const MOB_CAP_PROPERTY: &str = "horizon-mob-cap-percent";
 /// A tick slower than this, in milliseconds, enters the slow ring (five ticks' worth, a stall players feel) unless `HORIZON_SPIKES` names another.
 pub(super) const SLOW_TICK_MS: f32 = 250.0;
 /// `MinecraftServer.OVERLOADED_WARNING_INTERVAL_NANOS` plus 100 ticks: the
@@ -1317,6 +1319,20 @@ impl Game<'_> {
             .and_then(|v| v.trim().parse::<i32>().ok())
             .unwrap_or(0)
             .clamp(0, 32);
+        // server.toml's `mob_cap_percent`: natural spawning's caps.
+        let mob_cap = props
+            .raw
+            .get(MOB_CAP_PROPERTY)
+            .and_then(|v| v.trim().parse::<i32>().ok())
+            .unwrap_or(100)
+            .clamp(0, 1000);
+        horizon_client::mobs::spawn_selection::set_cap_percent(mob_cap);
+        if mob_cap != 100 {
+            log(
+                "INFO",
+                &format!("Mob caps at {mob_cap} % of vanilla's (mob_cap_percent)"),
+            );
+        }
         let (registry, biomes) = (self.pack.assets.registry, self.res.biomes().clone());
         if let Some(host) = self.lan.as_mut() {
             if far > host.hub.config.view_distance {

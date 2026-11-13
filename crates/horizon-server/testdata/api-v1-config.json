@@ -49,6 +49,7 @@
           "difficulty": "easy",
           "game_mode": "survival",
           "hardcore": false,
+          "mob_cap_percent": 100,
           "name": "world",
           "seed": ""
         }
