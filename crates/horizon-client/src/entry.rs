@@ -323,6 +323,10 @@ pub fn main_with(mods: crate::mod_api::Mods) {
     }
     horizon_hooks::engine::shutdown();
     logging::flush();
+    // An operator's /restart: the supervisor starts the game again.
+    if game::exit_code::RESTART_ASKED.load(std::sync::atomic::Ordering::SeqCst) {
+        std::process::exit(game::exit_code::RESTART);
+    }
 }
 
 /// The JVM raises its open-file limit to the hard limit as it starts

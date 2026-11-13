@@ -14,6 +14,9 @@ use horizon_client::{
 };
 use horizon_protocol::text::translatable;
 
+/// The permission level `/restart` needs.
+const RESTART_LEVEL: u8 = 3;
+
 impl Game<'_> {
     /// Commands.CommandSelection.DEDICATED: on an integrated server these do
     /// not exist.
@@ -32,6 +35,29 @@ impl Game<'_> {
         self.feedback(Text::translate("commands.stop.stopping", &[]));
         lists.lock().unwrap().stop = true;
         Ok(1)
+    }
+
+    /// `/restart` from a guest: an operator (level [`RESTART_LEVEL`]) stops the server as `stop`
+    /// does, and the game ends with `exit_code::RESTART`, which the supervisor restarts at once.
+    pub(in crate::game) fn restart_reply(
+        &mut self,
+        host: &crate::game::lan::LanHost,
+        conn: u32,
+    ) -> Text {
+        let Some(g) = host.hub.guest(conn) else {
+            return Text::literal(String::new());
+        };
+        if g.permission < RESTART_LEVEL {
+            return Text::legacy("§cOnly operators may restart the server.");
+        }
+        let name = g.name.clone();
+        let Ok(lists) = self.dedicated_lists() else {
+            return Text::legacy("§cOnly a dedicated server restarts.");
+        };
+        crate::game::exit_code::RESTART_ASKED.store(true, std::sync::atomic::Ordering::SeqCst);
+        super::super::dedicated::log("INFO", &format!("{name} restarts the server"));
+        lists.lock().unwrap().stop = true;
+        Text::legacy("§7Restarting the server...")
     }
 
     /// SaveAllCommand. Every save waits for the chunks to be written, so

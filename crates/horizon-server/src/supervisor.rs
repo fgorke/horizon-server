@@ -158,6 +158,10 @@ fn prepare_world(shared: &Arc<Shared>, dir: &Path, config: &Config) -> Result<()
     Ok(())
 }
 
+/// The exit code of a game that an operator's `/restart` ended (horizon-client's
+/// `exit_code::RESTART`).
+const GAME_RESTART: i32 = 75;
+
 enum Exit {
     /// Asked to stop, or the game ended by itself without an error (`stop` typed in its console, the EULA
     /// not agreed, the port taken): not restarted.
@@ -841,6 +845,11 @@ fn supervise(
         match child.try_wait() {
             Ok(Some(_)) if not_up => return Exit::NotUp,
             Ok(Some(_)) if restart => return Exit::Restart,
+            // An operator's /restart in the game: saved and stopped, to be started again.
+            Ok(Some(status)) if stopping.is_none() && status.code() == Some(GAME_RESTART) => {
+                note(shared, "INFO", "The game asked for a restart (/restart)");
+                return Exit::Restart;
+            }
             Ok(Some(status)) if stopping.is_some() || status.success() => return Exit::Stopped,
             Ok(Some(status)) => return Exit::Crashed(status),
             Ok(None) => thread::sleep(Duration::from_millis(50)),

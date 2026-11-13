@@ -3648,6 +3648,18 @@ impl Game<'_> {
             );
             return;
         }
+        if words == ["restart"] {
+            let reply = self.restart_reply(host, conn);
+            let content = horizon_client::lan::data::component_nbt(&reply.component());
+            host.hub.send_to(
+                conn,
+                &C::SystemChat(play::SystemChat {
+                    content,
+                    overlay: false,
+                }),
+            );
+            return;
+        }
         if words == ["tps"] {
             let content =
                 horizon_client::lan::data::component_nbt(&self.tps_reply(host).component());

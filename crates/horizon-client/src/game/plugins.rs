@@ -242,7 +242,7 @@ fn plugin_paths(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
 /// A command name plugins may not take: vanilla's, and this server's own.
 #[cfg_attr(not(feature = "plugins"), allow(dead_code))]
 fn reserved_command(name: &str) -> bool {
-    const OWN: [&str; 4] = ["dimension", "tps", "list", "plugins"];
+    const OWN: [&str; 5] = ["dimension", "tps", "list", "plugins", "restart"];
     let d = horizon_command::vanilla::game_dispatcher();
     OWN.contains(&name)
         || d.nodes[0]
@@ -362,7 +362,7 @@ mod run {
 
     /// Horizon Server's own commands (`game/lan_actions.rs`): in the tree players get, so their
     /// chat box colours and completes them as vanilla's.
-    fn own_commands() -> [(String, Value); 3] {
+    fn own_commands() -> [(String, Value); 4] {
         let leaf = json!({"type": "literal", "executable": true});
         let on_off = json!({
             "type": "literal",
@@ -371,6 +371,7 @@ mod run {
         });
         [
             ("tps".into(), leaf.clone()),
+            ("restart".into(), leaf.clone()),
             (
                 "plugins".into(),
                 json!({"type": "literal", "executable": true, "children": {"reload": leaf}}),

@@ -97,6 +97,12 @@ pub mod exit_code {
     pub const USAGE: i32 = 2;
     /// A panic; a crash report was saved.
     pub const PANIC: i32 = 101;
+    /// An operator's `/restart` on a dedicated server: the world was saved, and the supervisor
+    /// (`horizon-server run`) starts the game again at once, not as a crash.
+    pub const RESTART: i32 = 75;
+    /// `/restart` was asked: the game ends with [`RESTART`].
+    pub static RESTART_ASKED: std::sync::atomic::AtomicBool =
+        std::sync::atomic::AtomicBool::new(false);
 }
 
 const EXIT_CODES: &[(i32, &str)] = &[
