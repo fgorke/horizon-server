@@ -14,6 +14,9 @@ use std::collections::HashMap;
 
 /// How often, in ticks, the statistics of the players online reach the plugins.
 const STATS_EVERY: u64 = 20;
+/// Messages kept for guests not placed yet, and how long each waits.
+const EARLY_PAYLOADS: usize = 256;
+const EARLY_PAYLOAD_WAIT: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// The motion of the players on the server.
 pub(super) fn motions(host: &LanHost) -> Vec<PlayerMotion> {
@@ -115,6 +118,19 @@ impl Game<'_> {
             return false;
         }
         let Some(me) = plugin_player(host, conn) else {
+            // A client that asks with its join, before the server placed it (Simple Voice Chat's
+            // request_secret): the message waits for it. Dropped, its voice chat never connected
+            // when joins were slow.
+            if host.hub.guest(conn).is_some() && self.plugins.early_payloads.len() < EARLY_PAYLOADS
+            {
+                self.plugins.early_payloads.push((
+                    conn,
+                    channel.to_owned(),
+                    data.to_vec(),
+                    std::time::Instant::now(),
+                ));
+                return true;
+            }
             return false;
         };
         self.set_plugin_snapshot(host);
@@ -126,7 +142,16 @@ impl Game<'_> {
     /// Between ticks: what reached the plugins' sockets. False when no plugin has one (the
     /// server then sleeps to the next tick).
     pub(in crate::game) fn pump_plugins(&mut self) -> bool {
-        if !self.plugins.running || !self.plugins.mods.wants_network() {
+        if !self.plugins.running {
+            return false;
+        }
+        if !self.plugins.early_payloads.is_empty()
+            && let Some(mut host) = self.lan.take()
+        {
+            self.replay_early_payloads(&mut host);
+            self.lan = Some(host);
+        }
+        if !self.plugins.mods.wants_network() {
             return false;
         }
         self.set_plugin_map_id();
@@ -137,6 +162,21 @@ impl Game<'_> {
         }
         self.run_plugin_console();
         true
+    }
+
+    /// The messages of guests that were not placed yet, to the plugins now that they are;
+    /// those of guests gone, or waiting too long, are dropped.
+    fn replay_early_payloads(&mut self, host: &mut LanHost) {
+        for (conn, channel, data, at) in std::mem::take(&mut self.plugins.early_payloads) {
+            if host.hub.guest(conn).is_none() || at.elapsed() > EARLY_PAYLOAD_WAIT {
+                continue;
+            }
+            if plugin_player(host, conn).is_some() {
+                self.plugin_payload(host, conn, &channel, &data);
+            } else {
+                self.plugins.early_payloads.push((conn, channel, data, at));
+            }
+        }
     }
 
     /// Where capability `statistics` reads: the world, `usercache.json` beside it and the

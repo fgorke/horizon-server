@@ -76,6 +76,10 @@ pub(super) struct Plugins {
     /// The guests a region keeps from damage now (`game/protection.rs`).
     #[cfg(feature = "plugins")]
     pub(super) shielded: std::collections::HashSet<u128>,
+    /// Plugin channel messages from guests not placed yet, for the plugins once they are:
+    /// (connection, channel, data, when it came).
+    #[cfg(feature = "plugins")]
+    early_payloads: Vec<(u32, String, Vec<u8>, std::time::Instant)>,
 }
 
 impl Game<'_> {

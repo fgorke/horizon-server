@@ -114,6 +114,7 @@ impl Voice {
             return;
         };
         self.clients.add(uuid, secret);
+        horizon_mod_sdk::info(&format!("{} connects to the voice chat", player.name));
         let id = &player.id;
         channels::send(id, "minecraft:register", &protocol::register_payload());
         let payload = protocol::secret_payload(&secret, self.port, uuid);
