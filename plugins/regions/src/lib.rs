@@ -6,6 +6,11 @@
 //! turned on `/region bypass`, aren't stopped. The regions are kept in `storage` key
 //! `regions`, one line each (see [`Region::line`]); the messages are [`MESSAGES`], worded in
 //! `data/messages`.
+//!
+//! The flag [`NO_EXIT`] keeps players in: whoever steps out of such a region is put back at once,
+//! without a word, at the region's spawn (`/region spawn <name>` sets it where the operator
+//! stands, looking where they look), else where they last stood inside. Operators with
+//! `/region bypass` on walk out.
 use horizon_mod_sdk::{
     messages::Messages,
     server::{Args, Argument, Player, ProtectedAction, Registration, ServerMod, players, world},
@@ -28,6 +33,14 @@ const FLAGS: [(&str, ProtectedAction); 7] = [
     ("damage", ProtectedAction::Damage),
     ("mobs", ProtectedAction::HurtMobs),
 ];
+/// The flag that keeps players inside the region.
+const NO_EXIT: &str = "noexit";
+
+/// A flag `/region flag` takes: a protection of [`FLAGS`], or [`NO_EXIT`].
+fn is_flag(name: &str) -> bool {
+    name == NO_EXIT || flag(name).is_some()
+}
+
 /// What a new region protects.
 const DEFAULT_FLAGS: [&str; 4] = ["break", "place", "use", "containers"];
 /// The messages and their defaults.
@@ -36,7 +49,7 @@ const MESSAGES: &[(&str, &str)] = &[
     ("not_operator", "You need to be an operator for that."),
     (
         "usage",
-        "/region pos1|pos2 · define <name> [full] · remove <name> · flag <name> <flag> <on|off> · member <name> add|remove <player> · info [name] · list · bypass",
+        "/region pos1|pos2 · define <name> [full] · remove <name> · flag <name> <flag> <on|off> · spawn <name> · member <name> add|remove <player> · info [name] · list · bypass",
     ),
     ("corner_set", "{corner} set: {x} {y} {z}"),
     (
@@ -54,6 +67,7 @@ const MESSAGES: &[(&str, &str)] = &[
     ("unknown_region", "There is no region {region}."),
     ("unknown_flag", "Flags: {flags}"),
     ("flag_set", "{region}: {flag} {state}"),
+    ("spawn_set", "Spawn of {region}: {x} {y} {z}"),
     ("member_added", "{player} is a member of {region}."),
     (
         "member_removed",
@@ -85,10 +99,12 @@ struct Region {
     flags: BTreeSet<String>,
     /// Members, by player id, with the name they had.
     members: BTreeMap<String, String>,
+    /// Where [`NO_EXIT`] puts players back: x, y, z, yaw, pitch.
+    spawn: Option<[f64; 5]>,
 }
 
 impl Region {
-    /// `<dimension> x1 y1 z1 x2 y2 z2 <flag,flag|-> <id=name,...|->`.
+    /// `<dimension> x1 y1 z1 x2 y2 z2 <flag,flag|-> <id=name,...|-> <x,y,z,yaw,pitch|->`.
     fn line(&self, name: &str) -> String {
         let [a, b] = [self.pos1, self.pos2];
         let list = |items: Vec<String>| {
@@ -98,8 +114,11 @@ impl Region {
                 items.join(",")
             }
         };
+        let spawn = self
+            .spawn
+            .map_or_else(|| "-".to_owned(), |s| s.map(|c| c.to_string()).join(","));
         format!(
-            "{name} {} {} {} {} {} {} {} {} {}",
+            "{name} {} {} {} {} {} {} {} {} {} {spawn}",
             self.dimension,
             a[0],
             a[1],
@@ -136,8 +155,17 @@ impl Region {
         };
         let flags = items(rest.get(6))
             .into_iter()
-            .filter(|f| flag(f).is_some())
+            .filter(|f| is_flag(f))
             .collect();
+        let spawn = rest.get(8).and_then(|s| {
+            let c: Vec<f64> = s
+                .split(',')
+                .map(|n| n.parse().ok())
+                .collect::<Option<_>>()?;
+            <[f64; 5]>::try_from(c)
+                .ok()
+                .filter(|c| c.iter().all(|n| n.is_finite()))
+        });
         let members = items(rest.get(7))
             .into_iter()
             .filter_map(|m| {
@@ -153,6 +181,7 @@ impl Region {
                 pos2: [x2, y2, z2],
                 flags,
                 members,
+                spawn,
             },
         ))
     }
@@ -186,6 +215,9 @@ struct Regions {
     bypass: BTreeSet<String>,
     /// Corners being set, by player id: (dimension, pos1, pos2).
     selections: BTreeMap<String, (String, Option<[i32; 3]>, Option<[i32; 3]>)>,
+    /// Players in a [`NO_EXIT`] region, by id: its name and where they last stood in it (x, y,
+    /// z, yaw, pitch).
+    inside: BTreeMap<String, (String, [f64; 5])>,
     messages: Messages,
 }
 
@@ -221,14 +253,14 @@ impl Regions {
     /// the flags and member words, and on or off.
     fn suggest(&self) {
         let actions = [
-            "define", "remove", "flag", "member", "info", "list", "bypass",
+            "define", "remove", "flag", "spawn", "member", "info", "list", "bypass",
         ]
         .map(str::to_owned);
         let names: Vec<String> = self.regions.keys().cloned().collect();
         let what: Vec<String> = FLAGS
             .iter()
             .map(|(n, _)| (*n).to_owned())
-            .chain(["add", "remove", "full"].map(str::to_owned))
+            .chain([NO_EXIT, "add", "remove", "full"].map(str::to_owned))
             .collect();
         let mut value: Vec<String> = ["on", "off"].map(str::to_owned).to_vec();
         value.extend(players::online().into_iter().map(|p| p.name));
@@ -265,6 +297,7 @@ impl Regions {
         let on: Vec<&str> = FLAGS
             .iter()
             .map(|(n, _)| *n)
+            .chain([NO_EXIT])
             .filter(|n| r.flags.contains(*n))
             .collect();
         if on.is_empty() {
@@ -319,12 +352,11 @@ impl Regions {
                 ok(self.messages.get("removed", &[("region", &name)]))
             }
             Some("flag") => {
-                let names: Vec<&str> = FLAGS.iter().map(|(n, _)| *n).collect();
+                let names: Vec<&str> = FLAGS.iter().map(|(n, _)| *n).chain([NO_EXIT]).collect();
                 let unknown = self
                     .messages
                     .get("unknown_flag", &[("flags", &names.join(", "))]);
-                let (Some(f), Some(state @ ("on" | "off"))) =
-                    (what.filter(|f| flag(f).is_some()), value)
+                let (Some(f), Some(state @ ("on" | "off"))) = (what.filter(|f| is_flag(f)), value)
                 else {
                     self.region(name)?;
                     return Err(unknown);
@@ -340,6 +372,16 @@ impl Regions {
                 let a: [(&str, &dyn std::fmt::Display); 3] =
                     [("region", &rname), ("flag", &f), ("state", &state)];
                 ok(self.messages.get("flag_set", &a))
+            }
+            Some("spawn") => {
+                let (yaw, pitch) = players::rotation(&p.id).unwrap_or((0.0, 0.0));
+                let (rname, r) = self.region(name)?;
+                r.spawn = Some([p.x, p.y, p.z, f64::from(yaw), f64::from(pitch)]);
+                self.save()?;
+                let [x, y, z] = block(p);
+                let a: [(&str, &dyn std::fmt::Display); 4] =
+                    [("region", &rname), ("x", &x), ("y", &y), ("z", &z)];
+                ok(self.messages.get("spawn_set", &a))
             }
             Some("member") => self.member(name, what, value),
             Some("info") => ok(self.info(p, name)?),
@@ -391,6 +433,7 @@ impl Regions {
             pos2,
             flags: DEFAULT_FLAGS.iter().map(|f| (*f).to_owned()).collect(),
             members: BTreeMap::new(),
+            spawn: None,
         };
         let flags = self.flags_text(&region);
         self.regions.insert(name.to_owned(), region);
@@ -474,7 +517,63 @@ impl Regions {
     }
 }
 
+impl Regions {
+    /// Each tick: whoever left a [`NO_EXIT`] region goes back, without a word.
+    fn keep_in(&mut self) {
+        if !self.regions.values().any(|r| r.flags.contains(NO_EXIT)) {
+            self.inside.clear();
+            return;
+        }
+        for p in players::online() {
+            if self.bypass.contains(&p.id) {
+                self.inside.remove(&p.id);
+                continue;
+            }
+            let at = block(&p);
+            let here = self
+                .regions
+                .iter()
+                .find(|(_, r)| r.flags.contains(NO_EXIT) && r.contains(&p.dimension, at))
+                .map(|(n, _)| n.clone());
+            if let Some(name) = here {
+                let (yaw, pitch) = players::rotation(&p.id).unwrap_or((0.0, 0.0));
+                let spot = [p.x, p.y, p.z, f64::from(yaw), f64::from(pitch)];
+                self.inside.insert(p.id.clone(), (name, spot));
+                continue;
+            }
+            let Some((name, last)) = self.inside.get(&p.id).cloned() else {
+                continue;
+            };
+            match self
+                .regions
+                .get(&name)
+                .filter(|r| r.flags.contains(NO_EXIT))
+            {
+                Some(r) => {
+                    let s = r.spawn.unwrap_or(last);
+                    players::teleport(
+                        &p.id,
+                        &r.dimension,
+                        s[0],
+                        s[1],
+                        s[2],
+                        s[3] as f32,
+                        s[4] as f32,
+                    );
+                }
+                None => {
+                    self.inside.remove(&p.id);
+                }
+            }
+        }
+    }
+}
+
 impl ServerMod for Regions {
+    fn tick(&mut self, _tick: u64) {
+        self.keep_in();
+    }
+
     fn init() -> Result<(Self, Registration), String> {
         let (regions, bypass) = storage::get(KEY)
             .map(|b| Self::load(&String::from_utf8_lossy(&b)))
@@ -489,11 +588,13 @@ impl ServerMod for Regions {
         };
         let hooks = Registration::new()
             .command_with("region", args())
-            .command_with("rg", args());
+            .command_with("rg", args())
+            .on_tick();
         let me = Regions {
             regions,
             bypass,
             selections: BTreeMap::new(),
+            inside: BTreeMap::new(),
             messages: Messages::load(MESSAGES),
         };
         me.protect()?;
@@ -528,6 +629,7 @@ mod tests {
             pos2: [-10, 320, 5],
             flags: ["break", "pvp"].map(String::from).into(),
             members: [("id-1".to_owned(), "Alex".to_owned())].into(),
+            spawn: Some([0.5, 64.0, -2.5, 90.0, 0.0]),
         };
         assert_eq!(
             Region::parse(&r.line("spawn")),
@@ -536,6 +638,7 @@ mod tests {
         let bare = Region {
             flags: BTreeSet::new(),
             members: BTreeMap::new(),
+            spawn: None,
             ..r
         };
         assert_eq!(Region::parse(&bare.line("a")), Some(("a".into(), bare)));
