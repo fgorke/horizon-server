@@ -42,6 +42,8 @@ const DATAGRAMS_PER_CALL: usize = 4096;
 const MAX_DATAGRAM: usize = 4096;
 /// Datagrams kept for the plugin between pumps; more are dropped.
 const UDP_INBOX: usize = 8192;
+/// Datagrams one `udp` hook call gets (see `deliver`).
+const UDP_BATCH: usize = 128;
 /// A request's head and body, the requests kept between pumps, connections served at once,
 /// how long one may wait for the plugin, and a response's size.
 const MAX_HEAD: usize = 8 << 10;
@@ -778,13 +780,21 @@ impl Mods {
             }
         }
     }
+    /// Hands `datagrams` to plugin `i`'s `udp` hook [`UDP_BATCH`] at a time, each call with its
+    /// own fuel: after a slow tick the inbox holds thousands, too many for one call's fuel.
     fn deliver(&mut self, i: usize, datagrams: &[Datagram]) {
-        self.call(i, FUEL_EVENT, |run| match &run.plugin {
-            Some(p) => p
-                .horizon_mods_plugin_events()
-                .call_udp(&mut run.store, datagrams),
-            None => Ok(()),
-        });
+        for batch in datagrams.chunks(UDP_BATCH) {
+            let delivered = self.call(i, FUEL_EVENT, |run| match &run.plugin {
+                Some(p) => p
+                    .horizon_mods_plugin_events()
+                    .call_udp(&mut run.store, batch),
+                None => Ok(()),
+            });
+            // The plugin stopped: the rest goes nowhere.
+            if delivered.is_none() {
+                return;
+            }
+        }
     }
     fn answer(&mut self, i: usize, request: &Request) -> Option<Response> {
         self.call(i, FUEL_EVENT, |run| match &run.plugin {
