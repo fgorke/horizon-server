@@ -27,3 +27,26 @@ expect.http-status = 404
 ticks = 3700
 http = "/api/stats"
 expect.http-status = 200
+
+# /stats: the page's address, here none written yet.
+[[step]]
+command = "stats"
+expect.feedback = "&7The page has no address yet: an operator writes it in &fplugins/stats/data/url&7."
+
+# Resetting takes an operator, and a second word.
+[[step]]
+command = "stats reset"
+expect.error = "Only operators may reset the statistics."
+
+[[step]]
+player = { x = 0.5, y = 64.0, z = 0.5, permission = 3 }
+command = "stats reset"
+expect.feedback = "&cThis clears every player's statistics and time away. &7To go ahead: &f/stats reset confirm"
+
+[[step]]
+command = "stats reset confirm"
+expect.feedback = "&7Every player's statistics start again from nothing."
+
+[[step]]
+command = "stats nonsense"
+expect.error = "/stats, or /stats reset confirm"

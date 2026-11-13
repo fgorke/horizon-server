@@ -297,11 +297,15 @@ mod run {
 
     /// Plugins' commands as a root of the commands report (`lan::commands`): a literal per
     /// command, then its arguments in a chain, each node runnable where only optional
-    /// arguments follow.
-    fn command_tree<'a>(commands: impl Iterator<Item = &'a ServerCommand>) -> Value {
+    /// arguments follow. A word argument with suggestions (`players.set-suggestions`) gets a
+    /// literal per word beside it, so the chat box offers them.
+    fn command_tree<'a>(
+        commands: impl Iterator<Item = &'a ServerCommand>,
+        suggestions: impl Fn(&str, &str) -> Vec<String>,
+    ) -> Value {
         let mut root = serde_json::Map::new();
         for c in commands {
-            let mut next: Option<(String, Value)> = None;
+            let mut next: Option<serde_json::Map<String, Value>> = None;
             for (i, a) in c.arguments.iter().enumerate().rev() {
                 let executable = c.arguments.get(i + 1).is_none_or(|b| b.optional);
                 let (parser, properties) = match a.kind {
@@ -331,15 +335,27 @@ mod run {
                     "properties": properties,
                     "executable": executable,
                 });
-                if let Some((name, child)) = next.take() {
-                    node["children"] = json!({ name: child });
+                let children = next.take();
+                if let Some(children) = &children {
+                    node["children"] = Value::Object(children.clone());
                 }
-                next = Some((a.name.clone(), node));
+                let mut here = serde_json::Map::new();
+                if matches!(a.kind, ArgumentKind::Word) {
+                    for word in suggestions(&c.name, &a.name) {
+                        let mut literal = json!({"type": "literal", "executable": executable});
+                        if let Some(children) = &children {
+                            literal["children"] = Value::Object(children.clone());
+                        }
+                        here.entry(word).or_insert(literal);
+                    }
+                }
+                here.insert(a.name.clone(), node);
+                next = Some(here);
             }
             let executable = c.arguments.first().is_none_or(|a| a.optional);
             let mut literal = json!({"type": "literal", "executable": executable});
-            if let Some((name, child)) = next {
-                literal["children"] = json!({ name: child });
+            if let Some(children) = next {
+                literal["children"] = Value::Object(children);
             }
             root.insert(c.name.clone(), literal);
         }
@@ -729,7 +745,10 @@ mod run {
             if host.hub.mod_commands_key() == Some(key) {
                 return;
             }
-            let tree = command_tree(self.plugins.mods.server_commands());
+            let mods = &self.plugins.mods;
+            let tree = command_tree(mods.server_commands(), |command, argument| {
+                mods.command_suggestions(command, argument).to_vec()
+            });
             host.hub.set_mod_commands(key, tree);
         }
 
@@ -941,6 +960,7 @@ mod run {
                         header,
                         footer,
                     } => Self::send_plugin_tab_list(host, &player, &header, &footer),
+                    Output::ResetStatistics { name } => self.reset_plugin_statistics(host, &name),
                     Output::NewMap {
                         id,
                         dimension,

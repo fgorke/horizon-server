@@ -1,0 +1,40 @@
+# The statuses of data/statuses (the defaults here) as teams, and a player picking one.
+
+[[step]]
+join = "Alex"
+command = "status"
+expect.feedback = "&7Statuses: &7[AFK]&r &7(afk)&8, &6[Building]&r &7(building)&8, &a[Farming]&r &7(farming)&8, &b[Exploring]&r &7(exploring) &8(/status <name>, /status off)"
+
+[[step]]
+command = "status AFK"
+expect.feedback = "&7Your status: &7[AFK]"
+expect.quiet = ["team join status_afk Alex"]
+
+[[step]]
+command = "status sleeping"
+expect.error = "There is no status sleeping: /status list shows them."
+
+[[step]]
+command = "status off"
+expect.feedback = "&7Your status is off."
+expect.quiet = ["team leave Alex"]
+
+# Reloading takes an operator; it makes the teams again.
+[[step]]
+command = "status reload"
+expect.error = "Only operators may reload the statuses."
+
+[[step]]
+player = { x = 0.5, y = 64.0, z = 0.5, permission = 2 }
+command = "status reload"
+expect.feedback = "&74 statuses read."
+expect.quiet = [
+    "team add status_afk",
+    "team modify status_afk prefix {\"extra\":[{\"color\":\"gray\",\"text\":\"[AFK]\"},{\"text\":\" \"}],\"text\":\"\"}",
+    "team add status_building",
+    "team modify status_building prefix {\"extra\":[{\"color\":\"gold\",\"text\":\"[Building]\"},{\"text\":\" \"}],\"text\":\"\"}",
+    "team add status_farming",
+    "team modify status_farming prefix {\"extra\":[{\"color\":\"green\",\"text\":\"[Farming]\"},{\"text\":\" \"}],\"text\":\"\"}",
+    "team add status_exploring",
+    "team modify status_exploring prefix {\"extra\":[{\"color\":\"aqua\",\"text\":\"[Exploring]\"},{\"text\":\" \"}],\"text\":\"\"}",
+]

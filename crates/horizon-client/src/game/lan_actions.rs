@@ -2829,8 +2829,6 @@ impl Game<'_> {
             S::CustomPayload(p) if p.channel == horizon_protocol::mod_net::CHANNEL => {
                 self.guest_native_net(host, conn, &p.data)
             }
-            // A plugin's channels (capability `channels`), such as Simple Voice Chat's.
-            S::CustomPayload(p) if self.plugin_payload(host, conn, &p.channel, &p.data) => {}
             S::CustomPayload(p) if p.channel == horizon_client::lod_net::CHANNEL => {
                 self.guest_far_terrain(host, conn, &p.data)
             }

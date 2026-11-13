@@ -688,6 +688,7 @@ Capability `players`, server mods only (manifest `api = "0.3"`, experimental): t
 | `permission` | `func(player: string) -> option<u8>` | A player's permission level, 0 to 4 (operators have `op-permission-level`, 4 by default); none when not online. |
 | `action-bar` | `func(player: string, text: string) -> bool` | A line above a player's hotbar (the action bar), with `§` colour codes and not after the mod's name; false when not online. Counts toward the 8 messages per call. |
 | `set-tab-list` | `func(player: string, header: string, footer: string) -> bool` | The tab list's header and footer for a player, markup, `\n` between lines, as far as 4096 characters each; empty takes one away. False when not online. Counts toward the 8 messages per call. |
+| `set-suggestions` | `func(command: string, argument: string, choices: list<string>)` | What players' chat box offers to complete the word argument `argument` of the plugin's command `command`: each a word of letters, digits and `_ - . +`, up to 64 characters, at most 256 (the others are left out). Players may still type another word; the plugin checks what it gets. The server sends players the commands again when they change. |
 
 ## `world`
 
@@ -804,6 +805,7 @@ Capability `statistics` (server plugins): what players' statistics say.
 | `names` | `func() -> list<tuple<string, string>>` | The names the server knew players by (`usercache.json`): UUID, name. |
 | `translations` | `func(language: string, prefixes: list<string>) -> option<list<tuple<string, string>>>` | The entries of the game's language file `language` (`en_us`) whose keys start with one of `prefixes` (up to 16); none when there's no such language. |
 | `world-name` | `func() -> string` | The world folder's name. |
+| `reset` | `func()` | Every player's statistics start again from nothing, after the call returns: the counters of the players online are emptied, and the saved files move aside to the world's `players/stats-reset-<seconds>/`. |
 
 ## `cinematic`
 

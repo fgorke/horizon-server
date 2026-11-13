@@ -52,6 +52,7 @@ members = [
     "plugins/regions",
     "plugins/spawn",
     "plugins/stats",
+    "plugins/status",
     "plugins/tablist",
     "plugins/voice",
     "crates/horizon-mods/tests/guest",

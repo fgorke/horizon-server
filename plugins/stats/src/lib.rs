@@ -4,8 +4,16 @@
 //! item, entity and statistic names of the language in `storage` key `lang` (`en_us`), and
 //! `/api/stats` the players. The page shows each player's time away from the keyboard too:
 //! once still for [`AFK_AFTER`] seconds, every second counts, kept in `storage` key `afk`.
+//!
+//! `/stats` tells a player the page's address (`storage` key `url`) as a link to click.
+//! `/stats reset confirm` (operators, level [`RESET_LEVEL`]) starts every player's statistics and
+//! time away again from nothing; the old statistics files are kept aside in the world.
 use horizon_mod_sdk::{
-    server::{Registration, Request, Response, ServerMod, network, players, statistics},
+    messages::Messages,
+    server::{
+        Args, Argument, Player, Registration, Request, Response, ServerMod, network, players,
+        statistics,
+    },
     storage,
 };
 use serde_json::{Value, json};
@@ -18,6 +26,26 @@ const AFK_AFTER: u64 = 180;
 /// How often, in seconds, the AFK times are saved.
 const SAVE_EVERY: u64 = 60;
 const AFK_KEY: &str = "afk";
+/// The permission level `/stats reset` needs.
+const RESET_LEVEL: u8 = 3;
+/// The messages and their defaults, worded in `data/messages`.
+const MESSAGES: &[(&str, &str)] = &[
+    ("link", "&7Every player's statistics: {url}"),
+    (
+        "no_url",
+        "&7The page has no address yet: an operator writes it in &fplugins/stats/data/url&7.",
+    ),
+    ("reset_denied", "Only operators may reset the statistics."),
+    (
+        "reset_ask",
+        "&cThis clears every player's statistics and time away. &7To go ahead: &f/stats reset confirm",
+    ),
+    (
+        "reset_done",
+        "&7Every player's statistics start again from nothing.",
+    ),
+    ("usage", "/stats, or /stats reset confirm"),
+];
 const NAME_KINDS: [&str; 4] = [
     "block.minecraft.",
     "item.minecraft.",
@@ -38,6 +66,17 @@ struct Stats {
     afk: BTreeMap<String, u64>,
     still: BTreeMap<String, Still>,
     seconds: u64,
+    messages: Messages,
+    /// The page's address for `/stats` (`storage` key `url`).
+    url: Option<String>,
+}
+
+/// The page's address as an operator wrote it: an http or https address, its spaces cut.
+fn page_url(text: &str) -> Option<String> {
+    let url = text.trim();
+    (url.starts_with("http://") || url.starts_with("https://"))
+        .then(|| url.to_owned())
+        .filter(|u| !u.contains(char::is_whitespace))
 }
 
 /// The seconds to add to a player's time away after one more second at `at` looking `look`:
@@ -135,13 +174,57 @@ impl ServerMod for Stats {
             .unwrap_or_default();
         network::http_listen(port)?;
         horizon_mod_sdk::info(&format!("Stats page at port {port}"));
+        let url = storage::get("url").and_then(|b| page_url(&String::from_utf8_lossy(&b)));
         let stats = Stats {
             language,
             afk,
             still: BTreeMap::new(),
             seconds: 0,
+            messages: Messages::load(MESSAGES),
+            url,
         };
-        Ok((stats, Registration::new().on_tick().on_joins()))
+        players::set_suggestions("stats", "action", &["reset".to_owned()]);
+        players::set_suggestions("stats", "confirm", &["confirm".to_owned()]);
+        let registration = Registration::new().on_tick().on_joins().command_with(
+            "stats",
+            [
+                Argument::word("action").optional(),
+                Argument::word("confirm").optional(),
+            ],
+        );
+        Ok((stats, registration))
+    }
+
+    fn command(
+        &mut self,
+        player: &Player,
+        _name: &str,
+        args: &Args,
+    ) -> Result<Option<String>, String> {
+        match args.string("action") {
+            None => Ok(Some(match &self.url {
+                Some(url) => {
+                    let args: [(&str, &dyn std::fmt::Display); 1] = [("url", url)];
+                    self.messages.get("link", &args)
+                }
+                None => self.messages.get("no_url", &[]),
+            })),
+            Some("reset") => {
+                if players::permission(&player.id).unwrap_or(0) < RESET_LEVEL {
+                    return Err(self.messages.get("reset_denied", &[]));
+                }
+                if args.string("confirm") != Some("confirm") {
+                    return Ok(Some(self.messages.get("reset_ask", &[])));
+                }
+                statistics::reset();
+                self.afk.clear();
+                self.still.clear();
+                self.save_afk();
+                horizon_mod_sdk::info(&format!("{} reset every player's statistics", player.name));
+                Ok(Some(self.messages.get("reset_done", &[])))
+            }
+            Some(_) => Err(self.messages.get("usage", &[])),
+        }
     }
 
     /// Once a second: who stands still.
@@ -228,5 +311,15 @@ mod tests {
             json!({"block.minecraft.stone": "Stone", "stat.minecraft.jump": "Jumps"})
         );
         assert!(is_language("de_de") && !is_language("../x"));
+    }
+
+    #[test]
+    fn the_page_address_is_a_web_link() {
+        assert_eq!(
+            page_url(" http://1.2.3.4:8100\n").as_deref(),
+            Some("http://1.2.3.4:8100")
+        );
+        assert_eq!(page_url("1.2.3.4:8100"), None);
+        assert_eq!(page_url("http://a b"), None);
     }
 }

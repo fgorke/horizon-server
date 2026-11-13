@@ -11,6 +11,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 horizon-mod-sdk = { path = "../../crates/horizon-mod-sdk" }
+serde_json = "1.0.151"
 
 [lints]
 workspace = true

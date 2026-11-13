@@ -299,6 +299,13 @@ impl Hub {
             native_chat_decorate(uuid, &name, &message.content, &mut decorated);
             message.decorate(decorated);
         }
+        // A web link in the line opens on a click: the line goes out decorated, unless a mod
+        // decorated it already.
+        if message.unsigned_content.is_none()
+            && let Some(linked) = Text::linkified(&message.content)
+        {
+            message.decorate(Some(linked));
+        }
         let bound = play::ChatTypeBound {
             chat_type: self.chat_type,
             name: self.player_display_name(uuid, &name),

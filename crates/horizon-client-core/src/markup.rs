@@ -3,7 +3,33 @@
 //! `<#40E0D0>`), `<gradient:#40E0D0:#00008B>…</gradient>` (two stops or more, one colour per
 //! character), `<font:minecraft:uniform>…</font>` and `<smallcaps>…</smallcaps>`. Anything
 //! else is text as written.
-use crate::text::{Span, Style, Text, legacy_format};
+use crate::text::{ClickEvent, Span, Style, Text, legacy_format};
+
+/// Where a web link in a line starts.
+const LINK_STARTS: [&str; 2] = ["https://", "http://"];
+
+/// The web link at the start of `s`, without the punctuation a sentence puts after it: none
+/// when `s` starts with none, or with only `https://`.
+fn link_at(s: &str) -> Option<&str> {
+    let start = LINK_STARTS.iter().find(|p| {
+        s.get(..p.len())
+            .is_some_and(|head| head.eq_ignore_ascii_case(p))
+    })?;
+    let end = s
+        .find(|c: char| c.is_whitespace() || matches!(c, '<' | '>' | '"' | '§'))
+        .unwrap_or(s.len());
+    let link = s[..end].trim_end_matches(['.', ',', ';', ':', '!', '?', ')', ']', '}', '\'']);
+    (link.len() > start.len()).then_some(link)
+}
+
+/// The style of a link's characters: `style`, underlined, opening `url` on a click.
+fn link_style(style: &Style, url: &str) -> Style {
+    Style {
+        underlined: Some(true),
+        click: Some(ClickEvent::OpenUrl(url.to_owned())),
+        ..style.clone()
+    }
+}
 
 /// `ᴀʙᴄ…`: the small capital of each lowercase letter (`x` has none).
 const SMALL_CAPS: [char; 26] = [
@@ -57,6 +83,14 @@ impl Text {
         };
         let mut rest = s;
         while let Some(c) = rest.chars().next() {
+            if let Some(link) = link_at(rest) {
+                let style = p.style.clone();
+                p.style = link_style(&style, link);
+                link.chars().for_each(|c| p.push(c));
+                p.style = style;
+                rest = &rest[link.len()..];
+                continue;
+            }
             let after = &rest[c.len_utf8()..];
             rest = p.code(c, after).unwrap_or_else(|| {
                 p.push(c);
@@ -65,7 +99,49 @@ impl Text {
         }
         p.finish()
     }
+
+    /// A player's chat line as written, its web links opening on a click (aqua, underlined);
+    /// none when it has no link. No markup is read: a player's `&` and `<` stay as typed.
+    pub fn linkified(s: &str) -> Option<Text> {
+        let mut spans: Vec<Span> = Vec::new();
+        let mut plain = String::new();
+        let mut rest = s;
+        let mut any = false;
+        while let Some(c) = rest.chars().next() {
+            if let Some(link) = link_at(rest) {
+                if !plain.is_empty() {
+                    spans.push(Span {
+                        text: std::mem::take(&mut plain),
+                        style: Style::default(),
+                    });
+                }
+                spans.push(Span {
+                    text: link.to_owned(),
+                    style: link_style(&Style::color(LINK_COLOR), link),
+                });
+                rest = &rest[link.len()..];
+                any = true;
+                continue;
+            }
+            plain.push(c);
+            rest = &rest[c.len_utf8()..];
+        }
+        if !plain.is_empty() {
+            spans.push(Span {
+                text: plain,
+                style: Style::default(),
+            });
+        }
+        any.then(|| {
+            let mut text = Text::default();
+            text.spans = spans;
+            text
+        })
+    }
 }
+
+/// A link's colour in a player's chat line: vanilla's aqua.
+const LINK_COLOR: u32 = 0x55FFFF;
 
 impl Parser<'_> {
     /// The markup starting at `c` (`after` follows it): what is left after it, or none when
@@ -258,6 +334,36 @@ mod tests {
         assert_eq!(t.plain(), "Wɪɴᴛᴇʀ x");
         assert_eq!(t.spans[0].style.font.as_deref(), Some("minecraft:uniform"));
         assert_eq!(t.spans[1].style.font, None);
+    }
+
+    #[test]
+    fn web_links_open_on_a_click() {
+        let t = Text::markup("&7See https://example.com/a?b=1&c=2. Thanks");
+        let link = t
+            .spans
+            .iter()
+            .find(|s| s.text.starts_with("https"))
+            .unwrap();
+        assert_eq!(link.text, "https://example.com/a?b=1&c=2");
+        assert_eq!(
+            link.style.click,
+            Some(ClickEvent::OpenUrl("https://example.com/a?b=1&c=2".into()))
+        );
+        assert_eq!(link.style.underlined, Some(true));
+        assert_eq!(t.plain(), "See https://example.com/a?b=1&c=2. Thanks");
+        assert!(
+            Text::markup("https:// alone").spans[0]
+                .style
+                .click
+                .is_none()
+        );
+
+        let chat = Text::linkified("look &a http://x.de/y) <b>").unwrap();
+        assert_eq!(chat.plain(), "look &a http://x.de/y) <b>");
+        assert_eq!(chat.spans[1].text, "http://x.de/y");
+        assert_eq!(chat.spans[1].style.color, Some(LINK_COLOR));
+        assert!(chat.spans[0].style.click.is_none());
+        assert!(Text::linkified("no link here").is_none());
     }
 
     #[test]

@@ -30,3 +30,9 @@ expect.tab-list = ["Alex: \n<gradient:#7DD3FC:#2563EB>&lServer</gradient>\n | \n
 [[step]]
 ticks = 96
 expect.tab-list = ["Alex: \n<gradient:#7DD3FC:#2563EB>&lServer</gradient>\n | \n&7Online: &f1\n"]
+
+# The deaths beside the names: a player's count when it changed, read every two seconds.
+[[step]]
+join = "Kim"
+ticks = 40
+expect.quiet = ["scoreboard players set Kim deaths 0"]

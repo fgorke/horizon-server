@@ -1,0 +1,8 @@
+id = "status"
+name = "Status"
+version = "0.1.0"
+description = "Statuses players pick with /status, from a list the server owner writes, shown before their name in the tab list and in chat."
+authors = ["fgorke"]
+api = "0.3"
+side = "server"
+capabilities = ["players", "command", "storage"]

@@ -32,11 +32,14 @@ impl Game<'_> {
             self.guest_channels(host, gi, &p.data, register);
         }
         // A plugin channel's message on a channel that isn't one of Horizon's own (`lan_guest_packet`'s
-        // match takes those) is for the mods, from a dead player too: vanilla's handleCustomPayload doesn't
-        // look at health.
+        // match takes those) is for the server plugins listening to it (capability `channels`, such as
+        // Simple Voice Chat's), else for the native mods, from a dead player too: vanilla's
+        // handleCustomPayload doesn't look at health.
         match packet {
             S::CustomPayload(p) if !horizon_channel(&p.channel) => {
-                self.guest_custom_payload(host, conn, p.channel, p.data);
+                if !self.plugin_payload(host, conn, &p.channel, &p.data) {
+                    self.guest_custom_payload(host, conn, p.channel, p.data);
+                }
                 None
             }
             packet => Some(packet),

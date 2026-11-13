@@ -685,6 +685,12 @@ interface players {
     /// lines, as far as 4096 characters each; empty takes one away. False
     /// when not online. Counts toward the 8 messages per call.
     set-tab-list: func(player: string, header: string, footer: string) -> bool;
+    /// What players' chat box offers to complete the word argument `argument`
+    /// of the plugin's command `command`: each a word of letters, digits and
+    /// `_ - . +`, up to 64 characters, at most 256 (the others are left out).
+    /// Players may still type another word; the plugin checks what it gets.
+    /// The server sends players the commands again when they change.
+    set-suggestions: func(command: string, argument: string, choices: list<string>);
 }
 
 /// Capability `world`, server mods only (manifest `api = "0.3"`,
@@ -832,6 +838,10 @@ interface statistics {
     translations: func(language: string, prefixes: list<string>) -> option<list<tuple<string, string>>>;
     /// The world folder's name.
     world-name: func() -> string;
+    /// Every player's statistics start again from nothing, after the call
+    /// returns: the counters of the players online are emptied, and the saved
+    /// files move aside to the world's `players/stats-reset-<seconds>/`.
+    reset: func();
 }
 
 /// Capability `cinematic` (server plugins): what one player alone sees, for

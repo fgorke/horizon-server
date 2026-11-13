@@ -130,6 +130,20 @@ const QUIET_PER_CALL: usize = 256;
 const QUIET_LINE_CHARS: usize = 1 << 20;
 /// The most characters of a tab list's header or footer.
 const TAB_LIST_CHARS: usize = 4096;
+/// `players.set-suggestions`: the words a list keeps, each word's characters, and the lists a
+/// plugin keeps.
+const SUGGESTIONS_MAX: usize = 256;
+const SUGGESTION_CHARS: usize = 64;
+const SUGGESTION_LISTS: usize = 64;
+
+/// A word brigadier reads as one literal: letters, digits and `_ - . +`.
+fn is_suggestion(word: &str) -> bool {
+    !word.is_empty()
+        && word.chars().count() <= SUGGESTION_CHARS
+        && word
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | '+'))
+}
 /// How far `game.raycast` sees, in blocks.
 pub const RAYCAST_MAX: f32 = 1024.0;
 const HUD_LINES: usize = 16;
@@ -265,6 +279,8 @@ pub enum Output {
         player: String,
         action: CinematicAction,
     },
+    /// `statistics.reset`: every player's statistics start again from nothing.
+    ResetStatistics { name: String },
     /// `players.set-tab-list`: the player's tab list header and footer, markup.
     TabList {
         player: String,
@@ -522,6 +538,11 @@ struct State {
     world: WorldSlot,
     /// Capabilities `channels`, `network` and `statistics`.
     io: plugin_io::Io,
+    /// `players.set-suggestions`: the words offered for a command's argument, by command and
+    /// argument name.
+    suggestions: std::collections::BTreeMap<(String, String), Vec<String>>,
+    /// They changed in this call: the players get the commands again.
+    suggestions_changed: bool,
 }
 
 /// The installed mods and the engine running them. `Mods::default()` is
@@ -763,6 +784,8 @@ impl Mods {
                 .build(),
             world,
             io,
+            suggestions: Default::default(),
+            suggestions_changed: false,
         };
         let mut store = Store::new(engine, state);
         store.limiter(|s| &mut s.limits);
@@ -925,6 +948,9 @@ impl Mods {
             std::mem::take(&mut data.ui.close),
         );
         self.out.append(&mut data.out);
+        if std::mem::take(&mut data.suggestions_changed) {
+            self.generation += 1;
+        }
         if open {
             self.out.push(Output::OpenScreen { owner: i });
         }
@@ -1051,6 +1077,21 @@ impl Mods {
             .iter()
             .filter_map(|e| e.run.as_ref()?.hooks.server())
             .flat_map(|r| r.commands.iter())
+    }
+    /// The words a running server mod offers for the argument `argument` of its command
+    /// `command` (`players.set-suggestions`).
+    pub fn command_suggestions(&self, command: &str, argument: &str) -> &[String] {
+        let key = (command.to_owned(), argument.to_owned());
+        self.entries
+            .iter()
+            .filter_map(|e| e.run.as_ref())
+            .filter(|r| {
+                r.hooks
+                    .server()
+                    .is_some_and(|s| s.commands.iter().any(|c| c.name == command))
+            })
+            .find_map(|r| r.store.data().suggestions.get(&key))
+            .map_or(&[], Vec::as_slice)
     }
     /// Runs `line` (without its slash), typed by `player`, if a server mod
     /// owns its command; its feedback is an [`Output::Reply`]. False when
@@ -1869,6 +1910,21 @@ impl players::Host for State {
                 player,
                 text: clip(text),
             })
+    }
+    fn set_suggestions(&mut self, command: String, argument: String, choices: Vec<String>) {
+        let choices: Vec<String> = choices
+            .into_iter()
+            .filter(|c| is_suggestion(c))
+            .take(SUGGESTIONS_MAX)
+            .collect();
+        let key = (command, argument);
+        if self.suggestions.get(&key) == Some(&choices)
+            || (!self.suggestions.contains_key(&key) && self.suggestions.len() >= SUGGESTION_LISTS)
+        {
+            return;
+        }
+        self.suggestions.insert(key, choices);
+        self.suggestions_changed = true;
     }
     fn set_tab_list(&mut self, player: String, header: String, footer: String) -> bool {
         self.snapshot.players.iter().any(|p| p.id == player)

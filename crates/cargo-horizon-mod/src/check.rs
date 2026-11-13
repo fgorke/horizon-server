@@ -265,6 +265,7 @@ fn play(path: &Path, report: &mut Report) -> Result<(), String> {
             Output::Broadcast { text, .. } => format!("broadcast: {text}"),
             Output::ActionBar { text, .. } => format!("action bar: {text}"),
             Output::TabList { header, footer, .. } => format!("tab list: {header} | {footer}"),
+            Output::ResetStatistics { .. } => "reset the statistics".to_string(),
             Output::NewMap { id, dimension, .. } => format!("new map {id} in {dimension}"),
             Output::PaintMap { id, .. } => format!("painted map {id}"),
             Output::Cinematic { action, .. } => format!("cinematic: {action:?}"),

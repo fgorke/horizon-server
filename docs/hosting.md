@@ -341,6 +341,10 @@ event with `reason`, `by` and `until`. `tempbanlist` lists the bans that end by 
 who banned, the time left, the end and the reason. Both are in operators' command tree (level 3 and above), so
 their clients complete them, as they do the [mute commands](chat-filter.md#muting-by-hand).
 
+A web address (`https://…` or `http://…`) in a player's chat line opens on a click: the server sends the
+line with the link aqua and underlined, as a decorated message (players' games mark it as changed by the
+server).
+
 To generate the world around spawn ahead of the players, Horizon has its own `pregen` command, off until
 `server.toml` has `horizon-pregen = true` under `[properties]`: `horizon-server cmd pregen start 2500`
 ([pregeneration](pregeneration.md)).

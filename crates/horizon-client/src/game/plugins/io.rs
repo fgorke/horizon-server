@@ -155,6 +155,43 @@ impl Game<'_> {
         });
     }
 
+    /// `statistics.reset`: every player's statistics start from nothing. The counters of the
+    /// players online are emptied, and the saved files move aside to
+    /// `players/stats-reset-<seconds>/`, so nothing is lost for good.
+    pub(super) fn reset_plugin_statistics(&mut self, host: &mut LanHost, name: &str) {
+        let conns: Vec<u32> = host.hub.guests.iter().map(|g| g.conn).collect();
+        for conn in conns {
+            if let Some(play) = host.play.get_mut(&conn) {
+                play.stats.values.clear();
+            }
+        }
+        self.stats.values.clear();
+        let players = self.world_root.join("players");
+        let dir = players.join("stats");
+        let seconds = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs());
+        let aside = players.join(format!("stats-reset-{seconds}"));
+        let moved = if dir.is_dir() {
+            std::fs::rename(&dir, &aside).and_then(|()| std::fs::create_dir_all(&dir))
+        } else {
+            Ok(())
+        };
+        match moved {
+            Ok(()) => super::super::dedicated::log(
+                "INFO",
+                &format!(
+                    "Plugin {name} reset every player's statistics (the old ones: {})",
+                    aside.display()
+                ),
+            ),
+            Err(e) => super::super::dedicated::log(
+                "WARN",
+                &format!("Plugin {name}: the saved statistics could not move aside: {e}"),
+            ),
+        }
+    }
+
     /// Once a second, while a plugin reads statistics: those of the players online.
     pub(super) fn feed_plugin_statistics(&mut self, host: &LanHost) {
         if !self.ticks.is_multiple_of(STATS_EVERY) || !self.plugins.mods.wants_statistics() {

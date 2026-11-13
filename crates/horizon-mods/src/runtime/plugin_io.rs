@@ -409,6 +409,16 @@ impl statistics::Host for State {
                 .collect(),
         )
     }
+    fn reset(&mut self) {
+        let name = self.name.clone();
+        if !self
+            .out
+            .iter()
+            .any(|o| matches!(o, Output::ResetStatistics { .. }))
+        {
+            self.out.push(Output::ResetStatistics { name });
+        }
+    }
     fn world_name(&mut self) -> String {
         let files = lock(&self.io.files);
         files
