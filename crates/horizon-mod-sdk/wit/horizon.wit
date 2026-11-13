@@ -689,7 +689,7 @@ interface players {
     /// of the plugin's command `command`: each a word of letters, digits and
     /// `_ - . +`, up to 64 characters, at most 256 (the others are left out).
     /// Players may still type another word; the plugin checks what it gets.
-    /// The server sends players the commands again when they change.
+    /// The chat box asks for them while a player types that argument.
     set-suggestions: func(command: string, argument: string, choices: list<string>);
 }
 

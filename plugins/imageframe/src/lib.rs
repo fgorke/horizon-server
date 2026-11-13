@@ -7,7 +7,7 @@
 use horizon_mod_sdk::{
     command,
     messages::Messages,
-    server::{Player, Registration, ServerMod, maps, players, world},
+    server::{Argument, Player, Registration, ServerMod, maps, players, world},
     storage,
 };
 use std::collections::{BTreeMap, VecDeque};
@@ -604,6 +604,19 @@ impl ImageFrame {
     }
 }
 
+impl ImageFrame {
+    /// What the chat box offers: the actions, and the images' names.
+    fn suggest(&self) {
+        let actions = [
+            "create", "get", "place", "list", "delete", "rename", "pause", "refresh",
+        ]
+        .map(str::to_owned);
+        players::set_suggestions("imageframe", "action", &actions);
+        let names: Vec<String> = self.images.iter().map(|i| i.name.clone()).collect();
+        players::set_suggestions("imageframe", "name", &names);
+    }
+}
+
 impl ServerMod for ImageFrame {
     fn init() -> Result<(Self, Registration), String> {
         let images: Vec<Image> = storage::get(KEY)
@@ -636,7 +649,16 @@ impl ServerMod for ImageFrame {
                 messages: Messages::load(MESSAGES),
                 tick: 0,
             },
-            Registration::new().command("imageframe").on_tick(),
+            Registration::new()
+                .command_with(
+                    "imageframe",
+                    [
+                        Argument::word("action").optional(),
+                        Argument::word("name").optional(),
+                        Argument::text("rest").optional(),
+                    ],
+                )
+                .on_tick(),
         ))
     }
 
@@ -666,6 +688,9 @@ impl ServerMod for ImageFrame {
 
     fn tick(&mut self, tick: u64) {
         self.tick = tick;
+        if tick.is_multiple_of(20) {
+            self.suggest();
+        }
         if !self.jobs.is_empty() {
             self.collect();
         }

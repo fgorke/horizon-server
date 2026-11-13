@@ -170,11 +170,100 @@ impl Run {
     }
 }
 
-/// A prefix's `&` codes as a text component, a space after it: a colour starts a fresh style, as
-/// vanilla's codes do; anything that isn't a code stays text.
+/// A `#RRGGBB` colour's red, green and blue.
+fn hex_rgb(hex: &str) -> Option<[u8; 3]> {
+    let hex = hex.strip_prefix('#')?;
+    if hex.len() != 6 || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
+        return None;
+    }
+    let byte = |i: usize| u8::from_str_radix(&hex[i..i + 2], 16).ok();
+    Some([byte(0)?, byte(2)?, byte(4)?])
+}
+
+/// The colour at `t` (0 to 1) along `stops`, as `&#RRGGBB`.
+fn blend(stops: &[[u8; 3]], t: f32) -> String {
+    let span = (stops.len() - 1) as f32;
+    let at = (t.clamp(0.0, 1.0) * span).min(span - f32::EPSILON).max(0.0);
+    let (i, f) = (at.floor() as usize, at.fract());
+    let (a, b) = (stops[i], stops[(i + 1).min(stops.len() - 1)]);
+    let mix = |k: usize| (f32::from(a[k]) + (f32::from(b[k]) - f32::from(a[k])) * f).round() as u8;
+    format!("&#{:02X}{:02X}{:02X}", mix(0), mix(1), mix(2))
+}
+
+/// The markup the server's messages take, as `&` codes: `<#RRGGBB>` a colour, and
+/// `<gradient:#a:#b...>text</gradient>` a colour per character (its `&l`-style codes kept on each).
+fn expand_tags(prefix: &str) -> String {
+    let mut out = String::new();
+    let mut rest = prefix;
+    while let Some(open) = rest.find('<') {
+        out.push_str(&rest[..open]);
+        let tag = &rest[open..];
+        let Some(close) = tag.find('>') else {
+            out.push_str(tag);
+            return out;
+        };
+        let inner = &tag[1..close];
+        if let Some(rgb) = hex_rgb(inner) {
+            out.push_str(&format!("&#{:02X}{:02X}{:02X}", rgb[0], rgb[1], rgb[2]));
+            rest = &tag[close + 1..];
+            continue;
+        }
+        let stops: Option<Vec<[u8; 3]>> = inner
+            .strip_prefix("gradient:")
+            .map(|s| s.split(':').map(hex_rgb).collect::<Option<Vec<_>>>())
+            .and_then(|s| s.filter(|v| v.len() >= 2));
+        let Some(stops) = stops else {
+            out.push('<');
+            rest = &tag[1..];
+            continue;
+        };
+        let body_and_more = &tag[close + 1..];
+        let end = body_and_more
+            .find("</gradient>")
+            .unwrap_or(body_and_more.len());
+        let body = &body_and_more[..end];
+        rest = body_and_more.get(end + "</gradient>".len()..).unwrap_or("");
+        let visible: Vec<char> = {
+            let mut v = Vec::new();
+            let mut it = body.chars();
+            while let Some(c) = it.next() {
+                if c == '&' {
+                    it.next();
+                } else {
+                    v.push(c);
+                }
+            }
+            v
+        };
+        let last = visible.len().saturating_sub(1).max(1) as f32;
+        let mut formats = String::new();
+        let mut it = body.chars();
+        let mut k = 0usize;
+        while let Some(c) = it.next() {
+            if c == '&' {
+                if let Some(code) = it.next() {
+                    formats.push('&');
+                    formats.push(code);
+                }
+                continue;
+            }
+            out.push_str(&blend(&stops, k as f32 / last));
+            out.push_str(&formats);
+            out.push(c);
+            k += 1;
+        }
+        out.push_str("&r");
+    }
+    out.push_str(rest);
+    out
+}
+
+/// A prefix's `&` codes (and the tags of [`expand_tags`]) as a text component, a space after it:
+/// a colour starts a fresh style, as vanilla's codes do; anything that isn't a code stays text.
 fn prefix_component(prefix: &str) -> Value {
+    let expanded = expand_tags(prefix);
     let mut runs: Vec<Run> = vec![Run::default()];
-    let mut chars = prefix.chars().peekable();
+    let mut chars = expanded.chars().peekable();
     while let Some(c) = chars.next() {
         let current = runs.last().cloned().unwrap_or_default();
         if c == '&' || c == '§' {
@@ -392,6 +481,21 @@ mod tests {
         );
         assert_eq!(skipped, ["off = &c[x]", "no equals", "afk = again"]);
         assert!(!is_name("has space") && !is_name("reload") && is_name("pvp-2"));
+    }
+
+    #[test]
+    fn gradients_colour_each_character() {
+        let c = prefix_component("<gradient:#FF0000:#0000FF>&lAB</gradient>");
+        assert_eq!(
+            c,
+            json!({"text": "", "extra": [
+                {"text": "A", "color": "#FF0000", "bold": true},
+                {"text": "B", "color": "#0000FF", "bold": true},
+                {"text": " "},
+            ]})
+        );
+        assert_eq!(expand_tags("<#00ff00>x"), "&#00FF00x");
+        assert_eq!(expand_tags("a < b"), "a < b");
     }
 
     #[test]

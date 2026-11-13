@@ -217,7 +217,31 @@ impl Regions {
         self.protect()
     }
 
+    /// What the chat box offers for `/region` and `/rg`: the actions, the regions' names,
+    /// the flags and member words, and on or off.
+    fn suggest(&self) {
+        let actions = [
+            "define", "remove", "flag", "member", "info", "list", "bypass",
+        ]
+        .map(str::to_owned);
+        let names: Vec<String> = self.regions.keys().cloned().collect();
+        let what: Vec<String> = FLAGS
+            .iter()
+            .map(|(n, _)| (*n).to_owned())
+            .chain(["add", "remove", "full"].map(str::to_owned))
+            .collect();
+        let mut value: Vec<String> = ["on", "off"].map(str::to_owned).to_vec();
+        value.extend(players::online().into_iter().map(|p| p.name));
+        for command in ["region", "rg"] {
+            players::set_suggestions(command, "action", &actions);
+            players::set_suggestions(command, "name", &names);
+            players::set_suggestions(command, "what", &what);
+            players::set_suggestions(command, "value", &value);
+        }
+    }
+
     fn protect(&self) -> Result<(), String> {
+        self.suggest();
         let regions: Vec<world::Region> = self
             .regions
             .iter()

@@ -162,6 +162,13 @@ impl Game<'_> {
     pub(super) fn plugin_swap_hands(&mut self, _host: &mut LanHost, _conn: u32) -> bool {
         false
     }
+    pub(super) fn plugin_completions(
+        &self,
+        _label: &str,
+        _arguments: &[String],
+    ) -> Option<Vec<String>> {
+        None
+    }
     pub(super) fn plugin_payload(
         &mut self,
         _host: &mut LanHost,
@@ -297,15 +304,12 @@ mod run {
 
     /// Plugins' commands as a root of the commands report (`lan::commands`): a literal per
     /// command, then its arguments in a chain, each node runnable where only optional
-    /// arguments follow. A word argument with suggestions (`players.set-suggestions`) gets a
-    /// literal per word beside it, so the chat box offers them.
-    fn command_tree<'a>(
-        commands: impl Iterator<Item = &'a ServerCommand>,
-        suggestions: impl Fn(&str, &str) -> Vec<String>,
-    ) -> Value {
+    /// arguments follow. A word argument asks the server what to offer
+    /// (`minecraft:ask_server`): the plugin's `players.set-suggestions` words.
+    fn command_tree<'a>(commands: impl Iterator<Item = &'a ServerCommand>) -> Value {
         let mut root = serde_json::Map::new();
         for c in commands {
-            let mut next: Option<serde_json::Map<String, Value>> = None;
+            let mut next: Option<(String, Value)> = None;
             for (i, a) in c.arguments.iter().enumerate().rev() {
                 let executable = c.arguments.get(i + 1).is_none_or(|b| b.optional);
                 let (parser, properties) = match a.kind {
@@ -335,27 +339,18 @@ mod run {
                     "properties": properties,
                     "executable": executable,
                 });
-                let children = next.take();
-                if let Some(children) = &children {
-                    node["children"] = Value::Object(children.clone());
-                }
-                let mut here = serde_json::Map::new();
                 if matches!(a.kind, ArgumentKind::Word) {
-                    for word in suggestions(&c.name, &a.name) {
-                        let mut literal = json!({"type": "literal", "executable": executable});
-                        if let Some(children) = &children {
-                            literal["children"] = Value::Object(children.clone());
-                        }
-                        here.entry(word).or_insert(literal);
-                    }
+                    node["suggestions"] = json!("horizon:plugin");
                 }
-                here.insert(a.name.clone(), node);
-                next = Some(here);
+                if let Some((name, child)) = next.take() {
+                    node["children"] = json!({ name: child });
+                }
+                next = Some((a.name.clone(), node));
             }
             let executable = c.arguments.first().is_none_or(|a| a.optional);
             let mut literal = json!({"type": "literal", "executable": executable});
-            if let Some(children) = next {
-                literal["children"] = Value::Object(children);
+            if let Some((name, child)) = next {
+                literal["children"] = json!({ name: child });
             }
             root.insert(c.name.clone(), literal);
         }
@@ -745,11 +740,38 @@ mod run {
             if host.hub.mod_commands_key() == Some(key) {
                 return;
             }
-            let mods = &self.plugins.mods;
-            let tree = command_tree(mods.server_commands(), |command, argument| {
-                mods.command_suggestions(command, argument).to_vec()
-            });
+            let tree = command_tree(self.plugins.mods.server_commands());
             host.hub.set_mod_commands(key, tree);
+        }
+
+        /// What the chat box offers for the word being typed in a plugin's command (`label`,
+        /// then the words after it, the last one being typed): the plugin's
+        /// `players.set-suggestions` words for that word argument. None when the command isn't a
+        /// plugin's or that argument isn't a word.
+        pub(in crate::game) fn plugin_completions(
+            &self,
+            label: &str,
+            arguments: &[String],
+        ) -> Option<Vec<String>> {
+            if !self.plugins.running {
+                return None;
+            }
+            let index = arguments.len().checked_sub(1)?;
+            let command = self
+                .plugins
+                .mods
+                .server_commands()
+                .find(|c| c.name == label)?;
+            let argument = command.arguments.get(index)?;
+            if !matches!(argument.kind, ArgumentKind::Word) {
+                return None;
+            }
+            Some(
+                self.plugins
+                    .mods
+                    .command_suggestions(label, &argument.name)
+                    .to_vec(),
+            )
         }
 
         /// `/line` typed by a connection's player: true when a plugin owns it, whatever the

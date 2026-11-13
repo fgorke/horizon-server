@@ -208,6 +208,8 @@ impl Elytra {
 
 impl ServerMod for Elytra {
     fn init() -> Result<(Self, Registration), String> {
+        let actions = ["pos1", "pos2", "off"].map(str::to_owned);
+        players::set_suggestions("spawnelytra", "action", &actions);
         let region = storage::get(KEY)
             .map(|b| Region::parse(&String::from_utf8_lossy(&b)))
             .unwrap_or_default();

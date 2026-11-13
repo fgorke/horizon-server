@@ -3925,6 +3925,15 @@ impl Game<'_> {
                 suggestions.extend(names.out);
             }
         }
+        // A plugin's command: the words it offers for the word being typed.
+        if let Some(typed) = arguments.last()
+            && let Some(words) = self.plugin_completions(label, &arguments)
+        {
+            (start, end) = (command.len() - typed.len(), command.len());
+            let mut offered = horizon_client::command::SuggestionsBuilder::new(command, start);
+            offered.suggest_matching(words.iter().map(String::as_str));
+            suggestions.extend(offered.out);
+        }
         self.native_tab_complete(
             player_uuid,
             &player_name,

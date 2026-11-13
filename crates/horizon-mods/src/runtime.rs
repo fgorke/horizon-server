@@ -541,8 +541,6 @@ struct State {
     /// `players.set-suggestions`: the words offered for a command's argument, by command and
     /// argument name.
     suggestions: std::collections::BTreeMap<(String, String), Vec<String>>,
-    /// They changed in this call: the players get the commands again.
-    suggestions_changed: bool,
 }
 
 /// The installed mods and the engine running them. `Mods::default()` is
@@ -785,7 +783,6 @@ impl Mods {
             world,
             io,
             suggestions: Default::default(),
-            suggestions_changed: false,
         };
         let mut store = Store::new(engine, state);
         store.limiter(|s| &mut s.limits);
@@ -948,9 +945,6 @@ impl Mods {
             std::mem::take(&mut data.ui.close),
         );
         self.out.append(&mut data.out);
-        if std::mem::take(&mut data.suggestions_changed) {
-            self.generation += 1;
-        }
         if open {
             self.out.push(Output::OpenScreen { owner: i });
         }
@@ -1924,7 +1918,6 @@ impl players::Host for State {
             return;
         }
         self.suggestions.insert(key, choices);
-        self.suggestions_changed = true;
     }
     fn set_tab_list(&mut self, player: String, header: String, footer: String) -> bool {
         self.snapshot.players.iter().any(|p| p.id == player)
