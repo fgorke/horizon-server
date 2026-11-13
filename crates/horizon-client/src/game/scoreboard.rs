@@ -630,12 +630,26 @@ impl Game<'_> {
             .iter()
             .filter_map(|m| Some((m.id, tame_owner(m)?)))
             .collect();
+        // A mob is on a team by its UUID's text. When no team lists a UUID (teams of player
+        // names only, as plugins make), only other players and pets can be on one: formatting
+        // every entity's UUID each call cost the trial spawners ~50 ms a tick.
+        let uuid_members = self
+            .score
+            .board
+            .teams
+            .iter()
+            .any(|t| t.players.iter().any(|n| is_uuid_text(n)));
         horizon_client::mobs::Teams {
             player: self.player_team(),
             mobs: self
                 .persist
                 .uuids
                 .keys()
+                .filter(|id| {
+                    uuid_members
+                        || tame_owners.contains_key(id)
+                        || self.remote_player_name(**id).is_some()
+                })
                 .filter_map(|id| {
                     let owner = || tame_owners.get(id).copied();
                     Some((*id, self.team_with_owner(*id, owner)?))
@@ -1257,3 +1271,12 @@ mod criterion_tests;
 mod empty_tag_tests;
 #[cfg(test)]
 mod guest_advancement_tests;
+
+/// Whether a team member's name is a UUID's text (`8-4-4-4-12` hex digits), as entities are listed.
+fn is_uuid_text(name: &str) -> bool {
+    name.len() == 36
+        && name.char_indices().all(|(i, c)| match i {
+            8 | 13 | 18 | 23 => c == '-',
+            _ => c.is_ascii_hexdigit(),
+        })
+}
