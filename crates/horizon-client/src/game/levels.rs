@@ -861,10 +861,16 @@ impl Game<'_> {
                 };
                 std::thread::sleep(wait);
             }
-        } else if now - *next > Duration::from_secs(2) {
-            let behind = now - *next;
-            *next = now;
-            return Some(behind);
+        } else {
+            // Behind, with no time to wait: the plugins' sockets are still looked at once a tick.
+            // Pumped only while waiting, an overloaded server never read them, and voice chat
+            // went silent whenever the server lagged.
+            self.pump_plugins();
+            if now - *next > Duration::from_secs(2) {
+                let behind = now - *next;
+                *next = now;
+                return Some(behind);
+            }
         }
         None
     }
