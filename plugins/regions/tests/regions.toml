@@ -43,7 +43,7 @@ expect.feedback = "spawn: place off"
 
 [[step]]
 command = "region flag spawn fly on"
-expect.error = "Flags: break, place, use, containers, pvp, damage, mobs, noexit"
+expect.error = "Flags: break, place, use, containers, pvp, damage, mobs, nospawn, noexit"
 
 [[step]]
 command = "region member spawn add Alex"

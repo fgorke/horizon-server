@@ -735,6 +735,9 @@ interface %world {
         damage,
         /// Hitting mobs and animals.
         hurt-mobs,
+        /// Mobs and animals spawning by themselves (natural spawning), for everyone: a
+        /// region's exempt players don't matter. Spawn eggs, spawners and commands still spawn.
+        mob-spawns,
     }
     record region {
         dimension: string,

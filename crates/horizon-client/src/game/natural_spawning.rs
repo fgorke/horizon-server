@@ -476,9 +476,14 @@ impl SpawnLevel for GameLevel<'_, '_> {
 }
 impl NaturalLevel for GameLevel<'_, '_> {
     fn spawn_hooks(&self) -> bool {
-        !horizon_client::mod_api::mods().is_empty()
+        !horizon_client::mod_api::mods().is_empty() || self.game.spawns_guarded()
     }
     fn potential_spawns(&self, category: Category, pos: [i32; 3], entries: &mut Vec<SpawnEntry>) {
+        // A plugin's region that denies mob spawns (`world.protected-action` `mob-spawns`).
+        if self.game.spawn_denied(self.game.dim.id(), pos) {
+            entries.clear();
+            return;
+        }
         let mut canceled = false;
         self.game.native_potential_spawns(
             self.game.dim.id(),

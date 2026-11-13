@@ -198,6 +198,21 @@ mod regions {
             true
         }
 
+        /// Whether any region denies mobs spawning by themselves (`mob-spawns`).
+        pub(in crate::game) fn spawns_guarded(&self) -> bool {
+            self.plugins
+                .regions
+                .iter()
+                .any(|(_, r)| r.deny.contains(&ProtectedAction::MobSpawns))
+        }
+
+        /// Whether a region denies mobs spawning by themselves at `pos` in `dimension`.
+        pub(in crate::game) fn spawn_denied(&self, dimension: &str, pos: [i32; 3]) -> bool {
+            self.plugins.regions.iter().any(|(_, r)| {
+                r.deny.contains(&ProtectedAction::MobSpawns) && contains(r, dimension, pos)
+            })
+        }
+
         /// Each tick: a survival or adventure guest standing in a region that denies damage
         /// takes none (`Abilities.invulnerable`, as in creative), and gets it back on leaving.
         pub(in crate::game) fn shield_guests(&mut self, host: &mut LanHost) {
@@ -228,6 +243,16 @@ mod regions {
                 }
             }
         }
+    }
+}
+
+#[cfg(not(feature = "plugins"))]
+impl Game<'_> {
+    pub(in crate::game) fn spawns_guarded(&self) -> bool {
+        false
+    }
+    pub(in crate::game) fn spawn_denied(&self, _dimension: &str, _pos: [i32; 3]) -> bool {
+        false
     }
 }
 

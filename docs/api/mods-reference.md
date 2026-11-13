@@ -718,6 +718,7 @@ What a protected region keeps players from doing.
 | `pvp` | Hitting other players, where either one stands. |
 | `damage` | Survival and adventure players taking damage of any kind. |
 | `hurt-mobs` | Hitting mobs and animals. |
+| `mob-spawns` | Mobs and animals spawning by themselves (natural spawning), for everyone: a region's exempt players don't matter. Spawn eggs, spawners and commands still spawn. |
 
 ### record `region`
 
