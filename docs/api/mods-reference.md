@@ -760,6 +760,7 @@ What the server calls in a server mod (manifest `api = "0.3"`, experimental). On
 | `glide` | `func(player: string) -> bool` | Starts a glide without an elytra for an airborne player, after this call returns: it wears nothing, and the player takes no fall damage until it ends (on landing, or when the player stops gliding). False when not online. |
 | `allow-double-jump` | `func(player: string, allow: bool) -> bool` | Lets a survival or adventure player double-jump (their game shows flight allowed): each double jump reaches the `double-jump` hook instead of flying. False when not online. |
 | `push` | `func(player: string, x: f64, y: f64, z: f64) -> bool` | Sets a player's velocity, in blocks per tick. False when not online or a number isn't finite. Up to 8 per call. |
+| `spare-fall` | `func(player: string) -> bool` | Spares an airborne player any fall damage until they next land (on the ground, not in water), glide or not. False when not online. |
 
 ## `channels`
 

@@ -1018,6 +1018,7 @@ mod run {
                             .extend(lines.into_iter().map(|l| (l, true)));
                     }
                     o @ (Output::Glide { .. }
+                    | Output::SpareFall { .. }
                     | Output::AllowDoubleJump { .. }
                     | Output::Push { .. }
                     | Output::Payload { .. }) => super::io::apply(host, o),

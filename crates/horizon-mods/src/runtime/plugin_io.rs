@@ -201,6 +201,13 @@ impl movement::Host for State {
         self.out.push(Output::Glide { player });
         true
     }
+    fn spare_fall(&mut self, player: String) -> bool {
+        if !self.online(&player) {
+            return false;
+        }
+        self.out.push(Output::SpareFall { player });
+        true
+    }
     fn allow_double_jump(&mut self, player: String, allow: bool) -> bool {
         if !self.online(&player) {
             return false;

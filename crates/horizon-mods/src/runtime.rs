@@ -306,6 +306,8 @@ pub enum Output {
     Glide { player: String },
     /// `movement.allow-double-jump`.
     AllowDoubleJump { player: String, allow: bool },
+    /// `movement.spare-fall`: no fall damage for this player until they land.
+    SpareFall { player: String },
     /// `movement.push`: the player's new velocity, in blocks per tick.
     Push { player: String, velocity: [f64; 3] },
     /// `channels.send`: a payload to a player.

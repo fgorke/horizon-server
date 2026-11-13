@@ -162,6 +162,8 @@ pub struct Guest {
     pub plugin_may_fly: bool,
     pub plugin_jump: bool,
     pub plugin_glide: bool,
+    /// `movement.spare-fall`: no fall damage until it next lands.
+    pub plugin_no_fall: bool,
     pub sleeping: bool,
     /// `LivingEntity.DATA_LIVING_ENTITY_FLAGS`: 1 while using an item, 2 if
     /// it is in the off hand.
@@ -508,6 +510,7 @@ impl Guest {
             plugin_may_fly: false,
             plugin_jump: false,
             plugin_glide: false,
+            plugin_no_fall: false,
             sleeping: false,
             living_flags: 0,
             stuck: (0, 0),

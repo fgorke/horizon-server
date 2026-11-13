@@ -5126,6 +5126,8 @@ impl Game<'_> {
         let at = g.position;
         let (sneaking, sleeping) = (g.sneaking, g.sleeping);
         let riding = g.vehicle.is_some();
+        // A plugin's spare-fall: the moves up to the landing hurt nothing.
+        let no_fall = g.plugin_no_fall;
         if g.motion
             .as_ref()
             .is_some_and(|m| m.auto_spin_attack_ticks > 0)
@@ -5197,6 +5199,9 @@ impl Game<'_> {
                     w.set_on_ground_with_movement(on_ground, false, movement)?;
                     let pos = w.legacy_on_position()?;
                     let state = w.block_state(pos)?;
+                    if no_fall {
+                        w.player.fall_distance = 0.0;
+                    }
                     w.check_fall_damage(moved[1], on_ground, state, pos)?;
                     w.check_movement_statistics(movement)
                 })();
@@ -5309,6 +5314,13 @@ impl Game<'_> {
         let Some((events, marked)) = events else {
             return;
         };
+        // The spare-fall ends with the landing that it spared.
+        if let Some(g) = host.hub.guest_mut(conn)
+            && g.plugin_no_fall
+            && (g.on_ground || g.creative() || g.spectator())
+        {
+            g.plugin_no_fall = false;
+        }
         if let Some((at, velocity)) = soul {
             super::lan_particles::send_soul_particle(host, at, velocity);
         }

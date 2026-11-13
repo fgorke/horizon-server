@@ -2,7 +2,8 @@
 //! `/spawnelytra pos1|pos2`, a survival or adventure player who falls off (more than [`FALL`]
 //! blocks) or double-jumps glides without an elytra, boosts once along their look with the
 //! swap-hands key (F) and lands without fall damage; the glide goes on past the region until they
-//! land. The region is kept in `storage` key `region`: a line `dimension <id>`, then `pos1 x y z`
+//! land. Anyone airborne in the region takes no fall damage until they next land, even when the
+//! glide doesn't start. The region is kept in `storage` key `region`: a line `dimension <id>`, then `pos1 x y z`
 //! and `pos2 x y z` for the corners set. Its messages are [`MESSAGES`], worded in
 //! `data/messages`.
 use horizon_mod_sdk::{
@@ -98,6 +99,8 @@ struct Glider {
     boosted: bool,
     /// Double jumps are allowed, as last told.
     may_jump: bool,
+    /// Their fall is spared until they land (`movement::spare_fall`).
+    spared: bool,
 }
 
 struct Elytra {
@@ -186,6 +189,12 @@ impl Elytra {
         let near = survival && self.region.contains(&p.dimension, [p.x, p.y, p.z]);
         let g = self.gliders.entry(p.id.clone()).or_default();
         let jumped = std::mem::take(&mut g.jumped);
+        // Airborne in the region: no fall damage until the next landing, glide or not.
+        if m.on_ground || !survival {
+            g.spared = false;
+        } else if near && !m.riding && !g.spared && movement::spare_fall(&p.id) {
+            g.spared = true;
+        }
         let started = (jumped || m.fall_distance > FALL)
             && near
             && !m.on_ground

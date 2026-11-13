@@ -270,6 +270,7 @@ fn play(path: &Path, report: &mut Report) -> Result<(), String> {
             Output::PaintMap { id, .. } => format!("painted map {id}"),
             Output::Cinematic { action, .. } => format!("cinematic: {action:?}"),
             Output::Glide { .. } => "started a glide".to_string(),
+            Output::SpareFall { .. } => "spared a fall".to_string(),
             Output::AllowDoubleJump { allow, .. } => format!("double jump allowed: {allow}"),
             Output::Push {
                 velocity: [x, y, z],

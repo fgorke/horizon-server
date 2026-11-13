@@ -45,6 +45,7 @@ fn plugin_player(host: &LanHost, conn: u32) -> Option<ServerPlayer> {
 pub(super) fn apply(host: &mut LanHost, output: Output) {
     let player = match &output {
         Output::Glide { player }
+        | Output::SpareFall { player }
         | Output::AllowDoubleJump { player, .. }
         | Output::Push { player, .. }
         | Output::Payload { player, .. } => player.clone(),
@@ -63,6 +64,11 @@ pub(super) fn apply(host: &mut LanHost, output: Output) {
             if !g.on_ground && g.vehicle.is_none() {
                 g.plugin_glide = true;
                 g.fall_flying = true;
+            }
+        }
+        Output::SpareFall { .. } => {
+            if !g.on_ground {
+                g.plugin_no_fall = true;
             }
         }
         Output::AllowDoubleJump { allow, .. } => {

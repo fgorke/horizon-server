@@ -791,6 +791,9 @@ interface movement {
     /// Sets a player's velocity, in blocks per tick. False when not online or
     /// a number isn't finite. Up to 8 per call.
     push: func(player: string, x: f64, y: f64, z: f64) -> bool;
+    /// Spares an airborne player any fall damage until they next land (on the ground, not in
+    /// water), glide or not. False when not online.
+    spare-fall: func(player: string) -> bool;
 }
 
 /// Capability `channels` (server plugins): plugin messages (custom
