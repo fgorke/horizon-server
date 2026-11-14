@@ -543,10 +543,14 @@ impl Game<'_> {
             }
             // `player.move(SELF, (0, 1.1999999, 0))` when on the ground: the lift
             // stops at a ceiling.
+            // A guest's own client lifts itself and sends the move: lifting the server's copy
+            // here would read as a teleport after the turn, sent back to the client, which then
+            // loses the boost (vanilla's ServerPlayer just moves).
+            let guest = self.lan_acting_uuid.is_some();
             let lift = self
                 .player
                 .as_ref()
-                .filter(|p| p.ground.on_ground)
+                .filter(|p| p.ground.on_ground && !guest)
                 .map(|p| p.bounds());
             if let Some(bounds) = lift {
                 let mut scene = SceneCollisions {
