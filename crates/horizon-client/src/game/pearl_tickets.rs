@@ -131,17 +131,25 @@ impl Game<'_> {
             );
             seen.entry(uuid).or_default().insert(chunk);
         }
-        // The chunks of this level: a loaded one holds what was seen in it, an unloaded one
-        // keeps what it held.
-        let chunks = &self.world.chunks;
+        // The chunks of this level: one whose entities tick holds what was seen in it; any other
+        // keeps what it held (a chunk going away saves and drops its entities first, and the
+        // pearl is still there, saved with them).
+        let ticking = self.entity_ticking_area();
+        let live: HashSet<(i32, i32)> = self
+            .pearls
+            .chunks
+            .values()
+            .flatten()
+            .filter(|&&(d, x, z)| d == dim && ticking(x * 16 + 8, z * 16 + 8))
+            .map(|&(_, x, z)| (x, z))
+            .collect();
+        drop(ticking);
         let pearls = &mut self.pearls;
         for (uuid, spots) in pearls.chunks.iter_mut() {
             let mine = seen.get(uuid);
             let before = spots.len();
             spots.retain(|&(d, x, z)| {
-                d != dim
-                    || !chunks.contains_key(&(x, z))
-                    || mine.is_some_and(|m| m.contains(&(x, z)))
+                d != dim || !live.contains(&(x, z)) || mine.is_some_and(|m| m.contains(&(x, z)))
             });
             pearls.dirty |= spots.len() != before;
         }
