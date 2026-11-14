@@ -313,17 +313,6 @@ pub(super) fn guest_within_entity_range(
     let range = if g.creative() { 5.0 } else { 3.0 } + buffer;
     d[0] * d[0] + d[1] * d[1] + d[2] * d[2] < range * range
 }
-fn direction(face: i32) -> [i32; 3] {
-    match face {
-        0 => [0, -1, 0],
-        1 => [0, 1, 0],
-        2 => [0, 0, -1],
-        3 => [0, 0, 1],
-        4 => [-1, 0, 0],
-        _ => [1, 0, 0],
-    }
-}
-
 /// The windows a guest has open besides their inventory: the block or mod
 /// container, the crafting table, a station, a lectern, a merchant, a mount.
 fn guest_open_windows(host: &LanHost, conn: u32) -> Vec<i32> {
@@ -2139,7 +2128,7 @@ impl Game<'_> {
                     {
                         return;
                     }
-                    let face = direction(i32::from(a.direction));
+                    let face = super::hit::direction(i32::from(a.direction));
                     // Native mods, once the dig may start: a canceled click
                     // attacks, digs and breaks nothing (the ack puts the
                     // block back on the client).
@@ -2409,16 +2398,7 @@ impl Game<'_> {
                     self.lan_log_event(horizon_client::lan::hub::HostEvent::Warn(line));
                     return;
                 }
-                let face = direction(p.face);
-                let hit = Hit {
-                    pos: p.pos,
-                    face,
-                    point: [
-                        f64::from(p.pos[0]) + f64::from(p.cursor[0]),
-                        f64::from(p.pos[1]) + f64::from(p.cursor[1]),
-                        f64::from(p.pos[2]) + f64::from(p.cursor[2]),
-                    ],
-                };
+                let hit = Hit::from_use_item_on(&p);
                 let hand = if p.hand == 1 { Hand::Off } else { Hand::Main };
                 // handleUseItemOn: above or below the world nothing is used and
                 // the player is told the limit (the blocks are not resent);
@@ -2493,10 +2473,7 @@ impl Game<'_> {
                     self.build_limit_message(host, conn, true, max_y);
                 }
                 // The client predicted a result: correct it with what really is.
-                for pos in [
-                    p.pos,
-                    [p.pos[0] + face[0], p.pos[1] + face[1], p.pos[2] + face[2]],
-                ] {
+                for pos in [p.pos, hit.beside()] {
                     let state = self.world.block(pos[0], pos[1], pos[2]).0 as i32;
                     host.hub
                         .send_to(conn, &C::BlockUpdate(play::BlockUpdate { pos, state }));
@@ -4309,6 +4286,7 @@ impl Game<'_> {
                                 f64::from(pos[1]) + 0.5,
                                 f64::from(pos[2]) + 0.5,
                             ],
+                            inside: false,
                         });
                     }
                     let _ = g.tick_mining();
