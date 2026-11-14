@@ -9,11 +9,11 @@
 //! pearls are kept in their own player file, so those load again as soon as they join.
 use super::{Dim, Game};
 use horizon_client::lan::guest::Guest;
-use horizon_client::lan::playerdata::uuid_ints;
+use horizon_client::lan::playerdata::{ints_uuid, uuid_ints};
 use horizon_client::mobs::Who;
 use horizon_client::projectiles::ProjectileKind;
 use horizon_world::nbt::Tag;
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 /// The owner of the chunk tickets the pearls hold (`native_chunk_ticket`).
 const OWNER: &str = "horizon:ender_pearl";
@@ -31,6 +31,8 @@ pub(super) struct PearlTickets {
     held: HashSet<Spot>,
     /// The online players whose player file was read.
     read: HashSet<[i32; 4]>,
+    /// Each level's player pearls as last seen: owner and position, by entity id.
+    last: HashMap<&'static str, HashMap<u32, ([i32; 4], [f64; 3])>>,
 }
 
 fn level_id(id: &str) -> &'static str {
@@ -94,56 +96,15 @@ impl Game<'_> {
         })
     }
 
-    /// The pearls of the level in place that wait for their owner: thrown by a player who is
-    /// away, on a server. They don't tick until the owner is back.
-    pub(super) fn pearls_waiting(&self) -> HashSet<u32> {
+    /// Before the projectiles of the level in place tick, on a server: each pearl's owner by
+    /// UUID (a pearl a chunk just loaded has none yet), and the pearls that wait for their
+    /// owner, thrown by a player who is away. Those don't tick until the owner is back.
+    pub(super) fn pearls_before_tick(&mut self) -> HashSet<u32> {
         if self.options.dedicated.is_none() || self.lan.is_none() {
             return HashSet::new();
         }
         let online = self.pearl_owners_online();
-        self.creatures
-            .projectiles
-            .iter()
-            .filter(|p| matches!(p.kind, ProjectileKind::EnderPearl))
-            .filter(|p| {
-                p.owner_uuid
-                    .is_some_and(|u| !online.iter().any(|o| o.0 == u))
-            })
-            .map(|p| p.id)
-            .collect()
-    }
-
-    /// A leaving (or saved) player's pearl chunks into their player file.
-    pub(super) fn pearl_chunks_into(&self, guest: &mut Guest) {
-        let spots = self.pearls.chunks.get(&uuid_ints(guest.uuid));
-        save_spots(&mut guest.saved, spots);
-    }
-
-    /// Once a tick for the level in place, after its projectiles: each pearl's owner by UUID,
-    /// the chunks of every player's pearls, and a chunk ticket on each of an online owner's.
-    pub(super) fn tick_ender_pearls(&mut self) {
-        if self.options.dedicated.is_none() {
-            return;
-        }
-        let Some(host) = self.lan.as_ref() else {
-            return;
-        };
-        let online = self.pearl_owners_online();
-        // A joining player's pearl chunks, from their player file.
-        let pearls = &mut self.pearls;
-        pearls.read.retain(|u| online.iter().any(|o| o.0 == *u));
-        for g in host.hub.guests.iter().filter(|g| g.placed) {
-            let uuid = uuid_ints(g.uuid);
-            if pearls.read.insert(uuid) {
-                let saved = saved_spots(g.saved.as_ref());
-                if !saved.is_empty() {
-                    pearls.chunks.entry(uuid).or_default().extend(saved);
-                }
-            }
-        }
-        let dim = self.dim.id();
-        // Each pearl's owner: the online guest of its UUID, or nobody while they're away.
-        let mut seen: BTreeMap<[i32; 4], BTreeSet<(i32, i32)>> = BTreeMap::new();
+        let mut waiting = HashSet::new();
         for p in self.creatures.projectiles.iter_mut() {
             if !matches!(p.kind, ProjectileKind::EnderPearl) {
                 continue;
@@ -166,18 +127,80 @@ impl Game<'_> {
                     if p.guest.take().is_some() && p.owner == Some(Who::Player) {
                         p.owner = None;
                     }
+                    waiting.insert(p.id);
                 }
             }
+        }
+        waiting
+    }
+
+    /// A leaving (or saved) player's pearl chunks into their player file.
+    pub(super) fn pearl_chunks_into(&self, guest: &mut Guest) {
+        let spots = self.pearls.chunks.get(&uuid_ints(guest.uuid));
+        if let Some(spots) = spots {
+            let message = format!("{}'s ender pearls saved in {spots:?}", guest.name);
+            super::dedicated::log("INFO", &message);
+        }
+        save_spots(&mut guest.saved, spots);
+    }
+
+    /// Once a tick for the level in place, after its projectiles: each pearl's owner by UUID,
+    /// the chunks of every player's pearls, and a chunk ticket on each of an online owner's.
+    pub(super) fn tick_ender_pearls(&mut self) {
+        if self.options.dedicated.is_none() {
+            return;
+        }
+        let Some(host) = self.lan.as_ref() else {
+            return;
+        };
+        let online = self.pearl_owners_online();
+        // A joining player's pearl chunks, from their player file.
+        let pearls = &mut self.pearls;
+        pearls.read.retain(|u| online.iter().any(|o| o.0 == *u));
+        for g in host.hub.guests.iter().filter(|g| g.placed) {
+            let uuid = uuid_ints(g.uuid);
+            if pearls.read.insert(uuid) {
+                let saved = saved_spots(g.saved.as_ref());
+                if !saved.is_empty() {
+                    let message = format!("{}'s ender pearls hold {saved:?}", g.name);
+                    super::dedicated::log("INFO", &message);
+                    pearls.chunks.entry(uuid).or_default().extend(saved);
+                }
+            }
+        }
+        let dim = self.dim.id();
+        // The chunks of each owner's pearls in this level (owners were claimed before the tick).
+        let mut seen: BTreeMap<[i32; 4], BTreeSet<(i32, i32)>> = BTreeMap::new();
+        let mut now: HashMap<u32, ([i32; 4], [f64; 3])> = HashMap::new();
+        for p in &self.creatures.projectiles {
+            let (ProjectileKind::EnderPearl, Some(uuid)) = (&p.kind, p.owner_uuid) else {
+                continue;
+            };
             let chunk = (
                 (p.position.x.floor() as i32) >> 4,
                 (p.position.z.floor() as i32) >> 4,
             );
             seen.entry(uuid).or_default().insert(chunk);
+            now.insert(p.id, (uuid, p.position.components()));
+        }
+        // A player's pearl that left the level: logged, to tell an unloaded chunk from a
+        // discarded pearl.
+        let before = self.pearls.last.insert(dim, now).unwrap_or_default();
+        let now = &self.pearls.last[dim];
+        let ticking = self.entity_ticking_area();
+        for (id, (uuid, [x, y, z])) in before {
+            if !now.contains_key(&id) {
+                let loaded = ticking(x.floor() as i32, z.floor() as i32);
+                let how = if loaded { "is gone" } else { "unloaded" };
+                let owner = horizon_protocol::crypto::uuid_string(ints_uuid(uuid));
+                let message =
+                    format!("Ender pearl {id} of {owner} {how} at {x:.2} {y:.2} {z:.2} in {dim}");
+                super::dedicated::log("INFO", &message);
+            }
         }
         // The chunks of this level: one whose entities tick holds what was seen in it; any other
         // keeps what it held (a chunk going away saves and drops its entities first, and the
         // pearl is still there, saved with them).
-        let ticking = self.entity_ticking_area();
         let live: HashSet<(i32, i32)> = self
             .pearls
             .chunks

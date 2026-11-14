@@ -4305,7 +4305,7 @@ impl Game<'_> {
             return self.flush_wind_bursts();
         }
         // A pearl whose owner is away waits where it is (pearl_tickets.rs).
-        let waiting = self.pearls_waiting();
+        let waiting = self.pearls_before_tick();
         let mut projectiles = std::mem::take(&mut self.creatures.projectiles);
         let ticking = self.entity_ticking_area();
         let mut hits = Vec::new();
@@ -4645,6 +4645,14 @@ impl Game<'_> {
             if let Some(victim) = self.projectile_pvp_victim(&p, hit) {
                 self.projectile_hits_player(&p, hit, victim)?;
                 continue;
+            }
+            if matches!(p.kind, ProjectileKind::EnderPearl) && self.options.dedicated.is_some() {
+                let [x, y, z] = p.position.components();
+                let message = format!(
+                    "Ender pearl {} hit {hit:?} at {x:.2} {y:.2} {z:.2} (owner {:?}, guest {:?})",
+                    p.id, p.owner_uuid, p.guest
+                );
+                super::dedicated::log("INFO", &message);
             }
             // A guest's projectile lands as theirs: a pearl takes them, what
             // it hurts answers to them. One hitting the host (`Who::Player`
