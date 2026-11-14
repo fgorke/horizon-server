@@ -364,6 +364,7 @@ mod paintings;
 mod pandas;
 mod particle_culling;
 mod passengers;
+mod pearl_tickets;
 mod perf_link;
 mod perf_remote;
 mod persist;
@@ -2796,6 +2797,8 @@ struct Game<'a> {
     /// The owners of each chunk a native mod's ticket holds, by level
     /// (`native_force_chunk`); `streaming.mod_forced` is the level's chunks.
     mod_chunk_tickets: HashMap<Dim, HashMap<(i32, i32), std::collections::BTreeSet<String>>>,
+    /// Thrown ender pearls' owners and chunk tickets (game/pearl_tickets.rs).
+    pearls: pearl_tickets::PearlTickets,
     /// Where item entities are, while the block entities tick (hoppers).
     item_columns: Option<machines::ItemColumns>,
     /// Item columns for the players' pickups (`tick_guests`) and hopper carts
@@ -11776,6 +11779,7 @@ impl<'a> Game<'a> {
             mod_screen: None,
             mod_container_viewers: HashMap::new(),
             mod_chunk_tickets: HashMap::new(),
+            pearls: Default::default(),
             item_columns: None,
             pickup_columns: None,
             pass_mobs: None,

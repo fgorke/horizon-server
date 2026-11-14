@@ -1419,6 +1419,8 @@ impl Game<'_> {
         laps.lap("creature_events");
         self.ordered_before(super::ordered_tick::Batch::Projectiles)?;
         self.tick_projectiles()?;
+        // Thrown pearls hold their chunks while their owner is online.
+        self.tick_ender_pearls();
         self.tick_fangs();
         laps.lap("creature_projectiles");
         self.tick_allays();

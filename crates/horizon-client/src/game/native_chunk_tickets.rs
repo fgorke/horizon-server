@@ -120,7 +120,13 @@ impl Game<'_> {
 
     /// Hold or release `owner`'s ticket on `chunk` of `dim`'s level, and
     /// hand the level's held chunks to its streaming if it is open.
-    fn native_chunk_ticket(&mut self, dim: Dim, owner: &str, chunk: [i32; 2], hold: bool) -> bool {
+    pub(super) fn native_chunk_ticket(
+        &mut self,
+        dim: Dim,
+        owner: &str,
+        chunk: [i32; 2],
+        hold: bool,
+    ) -> bool {
         let namespaced = owner
             .split_once(':')
             .is_some_and(|(ns, path)| !ns.is_empty() && !path.is_empty());
