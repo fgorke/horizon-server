@@ -4296,8 +4296,19 @@ impl Hub {
             if packets > 5 {
                 packets = 1;
             }
+            // A Riptide boost is the client's own: the release that grants it reaches the game's
+            // tick after this move, so the server copy doesn't have the boost's velocity yet. A
+            // guest holding a Riptide trident, or spinning, isn't sent back for its speed.
+            let riptide = |s: Option<&ItemStack>| {
+                s.is_some_and(|s| s.enchantment_level("minecraft:riptide") > 0)
+            };
+            let riptiding = riptide(g.inventory.get(g.selected).and_then(Option::as_ref))
+                || riptide(g.offhand.as_ref())
+                || g.motion
+                    .as_ref()
+                    .is_some_and(|m| m.auto_spin_attack_ticks > 0);
             // shouldCheckPlayerMovement (never the single-player owner).
-            if !owner && check && (!g.fall_flying || elytra_check) {
+            if !owner && check && !riptiding && (!g.fall_flying || elytra_check) {
                 let limit = if g.fall_flying { 300.0 } else { 100.0 };
                 // `movedDist - expectedDist` (getDeltaMovement): the velocity
                 // the server last simulated for the guest is expected

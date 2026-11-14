@@ -517,7 +517,9 @@ impl Game<'_> {
             usize::try_from(slot),
         ) {
             c.set_slot_state(slot, enabled);
-            self.world.modified.insert((pos.0 >> 4, pos.2 >> 4));
+            // CrafterBlockEntity.setSlotState ends with setChanged: comparators read the
+            // disabled slots as filled ones.
+            self.container_changed(pos);
         }
     }
 
