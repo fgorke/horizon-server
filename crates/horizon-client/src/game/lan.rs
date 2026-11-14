@@ -1565,6 +1565,7 @@ impl Game<'_> {
         guest: &mut horizon_client::lan::guest::Guest,
     ) {
         self.guest_attachments_into(guest);
+        self.pearl_chunks_into(guest);
         // A player a proxy moved to another server (`player-release moved`) is saved
         // there now, not here.
         if guest.placed && !guest.released {

@@ -4304,6 +4304,8 @@ impl Game<'_> {
             self.flush_lan_explosions();
             return self.flush_wind_bursts();
         }
+        // A pearl whose owner is away waits where it is (pearl_tickets.rs).
+        let waiting = self.pearls_waiting();
         let mut projectiles = std::mem::take(&mut self.creatures.projectiles);
         let ticking = self.entity_ticking_area();
         let mut hits = Vec::new();
@@ -4385,7 +4387,9 @@ impl Game<'_> {
                 // ServerLevel.tick: losing an entity-ticking ticket must not
                 // advance projectile flags or motion while its chunk unloads.
                 let at = projectiles[i].position;
-                if !ticking(at.x.floor() as i32, at.z.floor() as i32) {
+                if !ticking(at.x.floor() as i32, at.z.floor() as i32)
+                    || waiting.contains(&projectiles[i].id)
+                {
                     projectiles[i].previous = at;
                     continue;
                 }

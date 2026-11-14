@@ -2,20 +2,23 @@
 //! `ThrownEnderpearl.tick` and `ServerPlayer.registerAndUpdateEnderPearlTicket`), so a stasis
 //! chamber keeps its chunk, and the farms beside it, running. A pearl finds its owner again by
 //! UUID: after a restart or a rejoin its chunk is loaded before the owner's connection exists.
-//! Where each player's pearls are is kept in the world's `horizon-ender-pearls.txt`, so the
-//! chunks load again as soon as the owner joins, in any dimension.
+//!
+//! Vanilla takes a leaving player's pearls out of the world and puts them back when they join
+//! (`ServerPlayer.enderPearls`, saved as `ender_pearls`). Here a pearl whose owner is away stays
+//! where it is but doesn't tick, so nothing can hit or discard it, and the chunks of the owner's
+//! pearls are kept in their own player file, so those load again as soon as they join.
 use super::{Dim, Game};
+use horizon_client::lan::guest::Guest;
 use horizon_client::lan::playerdata::uuid_ints;
 use horizon_client::mobs::Who;
 use horizon_client::projectiles::ProjectileKind;
+use horizon_world::nbt::Tag;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 /// The owner of the chunk tickets the pearls hold (`native_chunk_ticket`).
 const OWNER: &str = "horizon:ender_pearl";
-/// The file, in the world's folder.
-const FILE: &str = "horizon-ender-pearls.txt";
-/// Ticks between writes of a changed file.
-const SAVE_EVERY: u32 = 100;
+/// The player file's list of the chunks their pearls are in.
+const SAVED_KEY: &str = "horizon:ender_pearl_chunks";
 
 /// A chunk of a level: the level's id, then the chunk's x and z.
 type Spot = (&'static str, i32, i32);
@@ -26,51 +29,94 @@ pub(super) struct PearlTickets {
     chunks: BTreeMap<[i32; 4], BTreeSet<Spot>>,
     /// The chunks a ticket holds now.
     held: HashSet<Spot>,
-    read: bool,
-    dirty: bool,
-    since_save: u32,
+    /// The online players whose player file was read.
+    read: HashSet<[i32; 4]>,
 }
 
 fn level_id(id: &str) -> &'static str {
     Dim::from_id(id).id()
 }
 
-impl PearlTickets {
-    fn parse(text: &str) -> BTreeMap<[i32; 4], BTreeSet<Spot>> {
-        let mut out: BTreeMap<[i32; 4], BTreeSet<Spot>> = BTreeMap::new();
-        for line in text.lines() {
-            let w: Vec<&str> = line.split_whitespace().collect();
-            let [a, b, c, d, dim, x, z] = w[..] else {
-                continue;
+/// The chunks a player file lists.
+fn saved_spots(saved: Option<&Tag>) -> BTreeSet<Spot> {
+    let Some(Tag::List(list)) = saved.and_then(|t| t.get(SAVED_KEY)) else {
+        return BTreeSet::new();
+    };
+    list.iter()
+        .filter_map(|t| {
+            let Some(Tag::String(dim)) = t.get("dimension") else {
+                return None;
             };
-            let n = |s: &str| s.parse::<i32>().ok();
-            let (Some(a), Some(b), Some(c), Some(d), Some(x), Some(z)) =
-                (n(a), n(b), n(c), n(d), n(x), n(z))
-            else {
-                continue;
+            let (Some(Tag::Int(x)), Some(Tag::Int(z))) = (t.get("x"), t.get("z")) else {
+                return None;
             };
-            out.entry([a, b, c, d])
-                .or_default()
-                .insert((level_id(dim), x, z));
-        }
-        out
-    }
+            Some((level_id(&dim.to_string_lossy()), *x, *z))
+        })
+        .collect()
+}
 
-    fn text(&self) -> String {
-        let mut out = String::new();
-        for ([a, b, c, d], spots) in &self.chunks {
-            for (dim, x, z) in spots {
-                out += &format!("{a} {b} {c} {d} {dim} {x} {z}\n");
-            }
+/// `spots` into a player file's compound; none removes the list.
+fn save_spots(saved: &mut Option<Tag>, spots: Option<&BTreeSet<Spot>>) {
+    let tag = saved.get_or_insert_with(|| Tag::Compound(Default::default()));
+    let Tag::Compound(map) = tag else {
+        return;
+    };
+    match spots.filter(|s| !s.is_empty()) {
+        Some(spots) => {
+            let list = spots
+                .iter()
+                .map(|&(dim, x, z)| {
+                    Tag::compound([
+                        ("dimension", Tag::String(dim.into())),
+                        ("x", Tag::Int(x)),
+                        ("z", Tag::Int(z)),
+                    ])
+                })
+                .collect();
+            map.insert(SAVED_KEY.into(), Tag::List(list));
         }
-        out
+        None => {
+            map.remove(&SAVED_KEY.into());
+        }
     }
 }
 
 impl Game<'_> {
-    /// The world's folder: the level's save is `dimensions/minecraft/<name>` in it.
-    fn pearl_file(&self) -> Option<std::path::PathBuf> {
-        self.save.root.ancestors().nth(3).map(|w| w.join(FILE))
+    /// The UUIDs and connections of the players in the game.
+    fn pearl_owners_online(&self) -> Vec<([i32; 4], u32)> {
+        self.lan.as_ref().map_or_else(Vec::new, |host| {
+            host.hub
+                .guests
+                .iter()
+                .filter(|g| g.placed)
+                .map(|g| (uuid_ints(g.uuid), g.conn))
+                .collect()
+        })
+    }
+
+    /// The pearls of the level in place that wait for their owner: thrown by a player who is
+    /// away, on a server. They don't tick until the owner is back.
+    pub(super) fn pearls_waiting(&self) -> HashSet<u32> {
+        if self.options.dedicated.is_none() || self.lan.is_none() {
+            return HashSet::new();
+        }
+        let online = self.pearl_owners_online();
+        self.creatures
+            .projectiles
+            .iter()
+            .filter(|p| matches!(p.kind, ProjectileKind::EnderPearl))
+            .filter(|p| {
+                p.owner_uuid
+                    .is_some_and(|u| !online.iter().any(|o| o.0 == u))
+            })
+            .map(|p| p.id)
+            .collect()
+    }
+
+    /// A leaving (or saved) player's pearl chunks into their player file.
+    pub(super) fn pearl_chunks_into(&self, guest: &mut Guest) {
+        let spots = self.pearls.chunks.get(&uuid_ints(guest.uuid));
+        save_spots(&mut guest.saved, spots);
     }
 
     /// Once a tick for the level in place, after its projectiles: each pearl's owner by UUID,
@@ -82,20 +128,17 @@ impl Game<'_> {
         let Some(host) = self.lan.as_ref() else {
             return;
         };
-        let online: Vec<([i32; 4], u32)> = host
-            .hub
-            .guests
-            .iter()
-            .filter(|g| g.placed)
-            .map(|g| (uuid_ints(g.uuid), g.conn))
-            .collect();
-        if !self.pearls.read {
-            self.pearls.read = true;
-            if let Some(text) = self
-                .pearl_file()
-                .and_then(|f| std::fs::read_to_string(f).ok())
-            {
-                self.pearls.chunks = PearlTickets::parse(&text);
+        let online = self.pearl_owners_online();
+        // A joining player's pearl chunks, from their player file.
+        let pearls = &mut self.pearls;
+        pearls.read.retain(|u| online.iter().any(|o| o.0 == *u));
+        for g in host.hub.guests.iter().filter(|g| g.placed) {
+            let uuid = uuid_ints(g.uuid);
+            if pearls.read.insert(uuid) {
+                let saved = saved_spots(g.saved.as_ref());
+                if !saved.is_empty() {
+                    pearls.chunks.entry(uuid).or_default().extend(saved);
+                }
             }
         }
         let dim = self.dim.id();
@@ -147,17 +190,13 @@ impl Game<'_> {
         let pearls = &mut self.pearls;
         for (uuid, spots) in pearls.chunks.iter_mut() {
             let mine = seen.get(uuid);
-            let before = spots.len();
             spots.retain(|&(d, x, z)| {
                 d != dim || !live.contains(&(x, z)) || mine.is_some_and(|m| m.contains(&(x, z)))
             });
-            pearls.dirty |= spots.len() != before;
         }
         for (uuid, found) in seen {
             let spots = pearls.chunks.entry(uuid).or_default();
-            for (x, z) in found {
-                pearls.dirty |= spots.insert((dim, x, z));
-            }
+            spots.extend(found.into_iter().map(|(x, z)| (dim, x, z)));
         }
         pearls.chunks.retain(|_, s| !s.is_empty());
         // A ticket on each chunk of an online owner's pearls.
@@ -176,16 +215,6 @@ impl Game<'_> {
         for (d, x, z) in new {
             self.native_chunk_ticket(Dim::from_id(d), OWNER, [x, z], true);
         }
-        self.pearls.since_save += 1;
-        if self.pearls.dirty && self.pearls.since_save >= SAVE_EVERY {
-            self.pearls.since_save = 0;
-            self.pearls.dirty = false;
-            if let Some(file) = self.pearl_file()
-                && let Err(e) = std::fs::write(&file, self.pearls.text())
-            {
-                log::warn!("Horizon: could not save {}: {e}", file.display());
-            }
-        }
     }
 }
 
@@ -194,17 +223,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_file_keeps_each_owners_chunks() {
-        let mut t = PearlTickets::default();
-        t.chunks
-            .entry([1, 2, 3, -4])
-            .or_default()
-            .insert(("minecraft:the_nether", -3, 7));
-        t.chunks
-            .entry([1, 2, 3, -4])
-            .or_default()
-            .insert(("minecraft:overworld", 0, 0));
-        assert_eq!(PearlTickets::parse(&t.text()), t.chunks);
-        assert!(PearlTickets::parse("garbage\n1 2 3\n").is_empty());
+    fn the_player_file_keeps_their_pearl_chunks() {
+        let mut spots = BTreeSet::new();
+        spots.insert(("minecraft:the_nether", -3, 7));
+        spots.insert(("minecraft:overworld", 0, 0));
+        let mut saved = Some(Tag::compound([("Health", Tag::Float(0))]));
+        save_spots(&mut saved, Some(&spots));
+        assert_eq!(saved_spots(saved.as_ref()), spots);
+        assert!(saved.as_ref().unwrap().get("Health").is_some());
+        save_spots(&mut saved, None);
+        assert!(saved.as_ref().unwrap().get(SAVED_KEY).is_none());
+        assert!(saved_spots(None).is_empty());
     }
 }
