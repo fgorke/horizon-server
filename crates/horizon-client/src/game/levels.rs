@@ -143,9 +143,26 @@ pub(super) struct Levels {
     /// The levels whose open the mods heard (`native_level_load`), each to
     /// be told closed once.
     heard_open: Vec<Dim>,
+    /// `max-chained-neighbor-updates` of a dedicated server, for the levels it opens;
+    /// `None` is the default every other server runs with.
+    max_chained_neighbor_updates: Option<i32>,
 }
 
 impl Levels {
+    /// Sets the neighbour update chain limit of the levels made from now on.
+    pub(super) fn set_max_chained_neighbor_updates(&mut self, max: i32) {
+        self.max_chained_neighbor_updates = Some(max);
+    }
+
+    /// The block ticks of a new level, with the server's neighbour update chain limit.
+    pub(super) fn new_ticks(&self, random_tick_seed: i32) -> Ticks {
+        let mut ticks = Ticks::new(random_tick_seed);
+        if let Some(max) = self.max_chained_neighbor_updates {
+            ticks.set_max_chained_neighbor_updates(max);
+        }
+        ticks
+    }
+
     /// The chunks of each level not in place (capability `world` lends them to plugins
     /// for a call).
     #[cfg_attr(not(feature = "plugins"), allow(dead_code))]
@@ -280,7 +297,7 @@ impl Game<'_> {
             streaming,
             locator,
             save,
-            block_ticks: Ticks::new(self.level.seed as i32),
+            block_ticks: self.levels.new_ticks(self.level.seed as i32),
             tick_chunks: Default::default(),
             tickets,
             random_tick_sections: Default::default(),
