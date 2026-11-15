@@ -46,6 +46,7 @@
         },
         "updates": {"keep": 1},
         "world": {
+          "clump_experience": false,
           "difficulty": "easy",
           "game_mode": "survival",
           "hardcore": false,

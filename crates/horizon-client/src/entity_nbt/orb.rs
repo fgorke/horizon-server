@@ -3,6 +3,9 @@ use super::{
     Base, ExperienceOrb, Tag, flag, float, int_value, motion, number, position, put, rotation,
 };
 
+/// The whole value of a clumped orb whose value doesn't fit `Value`'s short.
+const CLUMPED_VALUE: &str = "horizon:clumped_value";
+
 /// `ExperienceOrb`: Health, Age, Value, Count.
 pub fn orb_to_nbt(o: &ExperienceOrb, uuid: [i32; 4]) -> Tag {
     let base = Base {
@@ -19,10 +22,14 @@ pub fn orb_to_nbt(o: &ExperienceOrb, uuid: [i32; 4]) -> Tag {
         ("Health", Tag::Short(o.health as i16)),
         ("Air", Tag::Short(o.air as i16)),
         ("Age", Tag::Short(o.age.min(i16::MAX as u32) as i16)),
-        ("Value", Tag::Short(o.value as i16)),
+        ("Value", Tag::Short(o.value.min(i32::from(i16::MAX)) as i16)),
         ("Count", Tag::Int(o.count.min(i32::MAX as u32) as i32)),
     ] {
         put(&mut tag, key, value);
+    }
+    // A clumped orb's value past a short's reach (`world.clump_experience`).
+    if o.value > i32::from(i16::MAX) {
+        put(&mut tag, CLUMPED_VALUE, Tag::Int(o.value));
     }
     // Entity.saveWithoutId writes NoGravity only when set.
     if o.no_gravity {
@@ -46,7 +53,10 @@ pub fn orbs_from_nbt(tag: &Tag) -> Vec<ExperienceOrb> {
         previous: position,
         velocity: motion(tag),
         // `getShortOr("Value", 0)`, unclamped.
-        value: tag.get("Value").and_then(int_value).unwrap_or(0) as i16 as i32,
+        value: match tag.get(CLUMPED_VALUE).and_then(int_value) {
+            Some(value) => value,
+            None => tag.get("Value").and_then(int_value).unwrap_or(0) as i16 as i32,
+        },
         age: number(tag.get("Age")).unwrap_or(0).max(0) as u32,
         on_ground: flag(tag, "OnGround"),
         count,
@@ -58,4 +68,23 @@ pub fn orbs_from_nbt(tag: &Tag) -> Vec<ExperienceOrb> {
         following: None,
     };
     vec![orb]
+}
+
+#[cfg(test)]
+mod clump_tests {
+    use super::*;
+    use crate::entities::ExperienceOrb;
+    use horizon_core::geometry::Vec3;
+
+    #[test]
+    fn a_clumped_orb_holds_every_point_through_the_save() {
+        let mut orb = ExperienceOrb::new(1, Vec3::new(0.5, 64.0, 0.5), Vec3::new(0.0, 0.0, 0.0), 7);
+        orb.count = 3;
+        assert_eq!(orb.total(), 21);
+        orb.clump(40_000);
+        assert_eq!((orb.value, orb.count), (40_021, 1));
+        let loaded = orbs_from_nbt(&orb_to_nbt(&orb, [0; 4]));
+        assert_eq!(loaded[0].value, 40_021);
+        assert_eq!(loaded[0].total(), 40_021);
+    }
 }

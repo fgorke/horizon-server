@@ -104,6 +104,7 @@ Horizon server settings (docs/server.md). The server writes them into server.pro
 | `difficulty` | `"easy"` | `difficulty` | peaceful, easy, normal or hard |
 | `hardcore` | `false` | `hardcore` | one life: a player who dies becomes a spectator |
 | `mob_cap_percent` | `100` | `horizon-mob-cap-percent` | natural spawning's mob caps, in percent of vanilla's (200: twice the mobs) |
+| `clump_experience` | `false` | `horizon-clump-experience` | true: experience orbs of any value merge into one, taken whole at once (Clumps) |
 
 ### `[properties]`
 

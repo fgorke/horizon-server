@@ -368,13 +368,15 @@ impl Game<'_> {
         let area = Aabb::new(centre.subtract(half), centre.add_vector(half));
         // A server's orbs are its own; a LAN or server guest only shows them.
         let mut target = None;
+        let clumping = ExperienceOrb::clumping();
         if self.remote.is_none() {
             for i in 0..self.orbs.len() {
                 let o = &self.orbs[i];
                 if !o.bounds().intersects(area) {
                     continue;
                 }
-                let vanilla = o.can_merge(merge_id as u32, value as i32);
+                // Clumps: any orb takes it in.
+                let vanilla = clumping || o.can_merge(merge_id as u32, value as i32);
                 let (id, orb_value) = (o.id, o.points());
                 if self.orb_merges(id, orb_value, 0, value, vanilla) {
                     target = Some(i);
@@ -383,7 +385,11 @@ impl Game<'_> {
             }
         }
         if let Some(i) = target {
-            self.orbs[i].count += 1;
+            if clumping {
+                self.orbs[i].clump(value);
+            } else {
+                self.orbs[i].count += 1;
+            }
             self.orbs[i].age = 0;
             true
         } else {
@@ -430,6 +436,7 @@ impl Game<'_> {
             return;
         }
         let area = self.orbs[i].bounds().inflate(Vec3::new(0.5, 0.5, 0.5));
+        let clumping = ExperienceOrb::clumping();
         let mut absorbed = Vec::new();
         for j in 0..self.orbs.len() {
             if j == i || !self.orbs[j].bounds().intersects(area) {
@@ -438,7 +445,8 @@ impl Game<'_> {
             let (vanilla, into, into_value, from, from_value, count, age) = {
                 let (a, b) = (&self.orbs[i], &self.orbs[j]);
                 (
-                    b.can_merge(a.id, a.value),
+                    // Clumps: any orb but itself.
+                    clumping || b.can_merge(a.id, a.value),
                     a.id,
                     a.points(),
                     b.id,
@@ -450,7 +458,12 @@ impl Game<'_> {
             if !self.orb_merges(into, into_value, from, from_value, vanilla) {
                 continue;
             }
-            self.orbs[i].count = self.orbs[i].count.saturating_add(count);
+            if clumping {
+                let more = self.orbs[j].total();
+                self.orbs[i].clump(more);
+            } else {
+                self.orbs[i].count = self.orbs[i].count.saturating_add(count);
+            }
             self.orbs[i].age = self.orbs[i].age.min(age);
             absorbed.push(j);
         }

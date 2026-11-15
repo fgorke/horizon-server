@@ -694,6 +694,8 @@ const LEGACY_PRESET_NAMES: [(&str, horizon_client::save::WorldPreset); 2] = [
 const FAR_PROPERTY: &str = "horizon-max-view-distance";
 /// server.properties' line for `server.toml`'s `mob_cap_percent` (horizon-server writes it).
 const MOB_CAP_PROPERTY: &str = "horizon-mob-cap-percent";
+/// server.properties' line for `server.toml`'s `clump_experience` (horizon-server writes it).
+const CLUMP_PROPERTY: &str = "horizon-clump-experience";
 /// A tick slower than this, in milliseconds, enters the slow ring (five ticks' worth, a stall players feel) unless `HORIZON_SPIKES` names another.
 pub(super) const SLOW_TICK_MS: f32 = 250.0;
 /// `MinecraftServer.OVERLOADED_WARNING_INTERVAL_NANOS` plus 100 ticks: the
@@ -1327,6 +1329,18 @@ impl Game<'_> {
             .unwrap_or(100)
             .clamp(0, 1000);
         horizon_client::mobs::spawn_selection::set_cap_percent(mob_cap);
+        // server.toml's `clump_experience`: the Clumps mod's orbs.
+        let clump = props
+            .raw
+            .get(CLUMP_PROPERTY)
+            .is_some_and(|v| v.trim() == "true");
+        horizon_client::entities::ExperienceOrb::set_clumping(clump);
+        if clump {
+            log(
+                "INFO",
+                "Experience orbs clump: any merge into one, taken whole (clump_experience)",
+            );
+        }
         if mob_cap != 100 {
             log(
                 "INFO",

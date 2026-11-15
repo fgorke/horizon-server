@@ -5906,7 +5906,9 @@ impl Game<'_> {
             play.xp_delay -= 1;
             self.native_player_exp_cooldown_change(player, &name, play.xp_delay);
         }
-        if unable || play.xp_delay > 0 {
+        // Clumps: no pickup delay, and a whole orb at once.
+        let clumping = horizon_client::entities::ExperienceOrb::clumping();
+        if unable || (play.xp_delay > 0 && !clumping) {
             return;
         }
         // Player.aiStep: standing, the pickup area is the guest's box
@@ -5987,13 +5989,15 @@ impl Game<'_> {
             self.orbs[index].value = orb.value;
             self.orbs[index].count = orb.count;
         }
-        if orb.count <= 1 {
+        let clumped = clumping.then(|| orb.total());
+        if orb.count <= 1 || clumping {
             self.remove_orb(index);
         } else {
             self.orbs[index].count -= 1;
         }
-        host.play.entry(conn).or_default().xp_delay = 2;
-        self.native_player_exp_cooldown_change(player, &name, 2);
+        let delay = if clumping { 0 } else { 2 };
+        host.play.entry(conn).or_default().xp_delay = delay;
+        self.native_player_exp_cooldown_change(player, &name, delay);
         host.hub.take_item(orb.id as i32, id, 1, at);
         // ClientPacketListener.handleTakeItemEntity's sound, at the orb.
         let pitch = (self.world.random.next_float() - self.world.random.next_float()) * 0.35 + 0.9;
@@ -6004,7 +6008,7 @@ impl Game<'_> {
             0.1,
             pitch,
         );
-        let value = orb.points();
+        let value = clumped.unwrap_or_else(|| orb.points());
         self.as_guest(host, conn, |game| {
             let rest = game.mending(value);
             if rest > 0 {

@@ -1259,6 +1259,9 @@ pub fn merge_with_neighbours(
 pub const ORB_QUAD: [[f32; 2]; 4] = [[-0.5, -0.25], [0.5, -0.25], [0.5, 0.75], [-0.5, 0.75]];
 /// `poseStack.scale(0.3F, 0.3F, 0.3F)`.
 pub const ORB_QUAD_SCALE: f32 = 0.3;
+/// [`ExperienceOrb::clumping`].
+static CLUMPING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 /// ExperienceOrb: gravity 0.03, homing towards the player within 8 blocks.
 #[derive(Clone, Debug)]
 pub struct ExperienceOrb {
@@ -1389,6 +1392,25 @@ impl ExperienceOrb {
     /// remainder, so an orb of value 0 or below gives none. Mods see this too.
     pub fn points(&self) -> u32 {
         self.value.max(0) as u32
+    }
+    /// All the experience the orb holds: its value once for each orb merged into it.
+    pub fn total(&self) -> u32 {
+        self.points().saturating_mul(self.count.max(1))
+    }
+    /// Clumps' merge: the orb holds `more` points besides its own, as one orb.
+    pub fn clump(&mut self, more: u32) {
+        let total = self.total().saturating_add(more);
+        self.value = total.min(i32::MAX as u32) as i32;
+        self.count = 1;
+    }
+    /// Whether orbs clump (`server.toml`'s `world.clump_experience`, after the Clumps mod): orbs of
+    /// any value merge into one, and a player takes a whole orb at once, with no pickup delay.
+    pub fn clumping() -> bool {
+        CLUMPING.load(std::sync::atomic::Ordering::Relaxed)
+    }
+    /// Turns [`Self::clumping`] on or off.
+    pub fn set_clumping(on: bool) {
+        CLUMPING.store(on, std::sync::atomic::Ordering::Relaxed);
     }
     /// ExperienceOrb.getExperienceValue: the largest orb size not above `value`.
     pub fn split(value: u32) -> u32 {
