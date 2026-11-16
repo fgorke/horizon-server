@@ -3076,6 +3076,7 @@ mod long_line_tests {
             pos: [3, 100, 3],
             face: [0, 0, 1],
             point: [3.5, 100.5, 4.0],
+            inside: false,
         };
         assert!(game.place_item_frame(&hit, &made));
         assert!(game.item_frames.last().unwrap().invisible);

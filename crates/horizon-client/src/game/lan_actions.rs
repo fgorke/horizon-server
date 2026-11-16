@@ -2417,7 +2417,7 @@ impl Game<'_> {
                 }
                 if self.under_spawn_protection(host, gi, p.pos) {
                     self.spawn_protection_message(host, conn, p.pos);
-                } else if self.guarded_use(host, gi, p.pos, face) {
+                } else if self.guarded_use(host, gi, p.pos, hit.face) {
                     // A protected region: nothing used or placed, as under spawn protection.
                 } else if self
                     .border
