@@ -1,0 +1,41 @@
+# /heads opens the categories; a category lists its heads, a click gives one, the arrows turn pages.
+
+[[step]]
+join = "Alex"
+expect.commands = ["heads", "hdb"]
+
+[[step]]
+command = "heads"
+expect.menus = ["Alex: open 6 §8Köpfe: 24"]
+
+# The first category, Buchstaben: 45 heads and the bottom row.
+[[step]]
+menu-click = 11
+expect.menus = ["Alex: open 6 §8Buchstaben §7(8188): 54"]
+
+[[step]]
+menu-click = 0
+expect.action-bar = ["Alex: §aErhalten: §fOak Wood A"]
+
+[[step]]
+menu-click = 53
+expect.menus = ["Alex: set 54"]
+
+[[step]]
+menu-click = 48
+expect.menus = ["Alex: open 6 §8Köpfe: 24"]
+
+[[step]]
+command = "heads melon"
+expect.menus = ["Alex: open 6 §8Suche: melon §7(349): 54"]
+
+[[step]]
+command = "heads zzzqqqxxx"
+expect.error = "Keine Köpfe für „zzzqqqxxx“ gefunden."
+
+[[step]]
+command = "heads spieler Notch"
+expect.action-bar = ["Alex: §aErhalten: §fKopf von Notch"]
+
+[[step]]
+menu-close = true

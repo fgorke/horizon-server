@@ -45,6 +45,7 @@ members = [
     "crates/horizon-mod-sdk",
     "crates/horizon-mods",
     "plugins/elytra",
+    "plugins/heads",
     "plugins/edit",
     "plugins/imageframe",
     "plugins/intro",

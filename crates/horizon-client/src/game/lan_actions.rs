@@ -100,6 +100,8 @@ pub(super) struct GuestPlay {
     pub(super) station: Option<super::lan_stations::GuestStation>,
     /// The mount inventory the guest has open (game/lan_mount_menu.rs).
     pub(super) mount_window: Option<super::lan_mount_menu::GuestMount>,
+    /// A server plugin's chest screen the guest has open (game/lan_plugin_menu.rs).
+    pub(super) plugin_menu: Option<super::lan_plugin_menu::GuestPluginMenu>,
     /// The lectern the guest reads (game/lan_stations.rs).
     pub(super) lectern: Option<super::lan_stations::GuestLectern>,
     /// The menu the mods last heard this guest open (`tick_player_menus`).
@@ -1706,6 +1708,7 @@ impl Game<'_> {
         }
         self.lan_station_closed(host, conn, None);
         self.lan_mount_closed(host, conn, None);
+        self.lan_plugin_menu_closed(host, conn, None);
         if removal == MenuRemoval::Live {
             self.guest_carried_back(host, gi);
         }
@@ -2657,6 +2660,8 @@ impl Game<'_> {
                     });
                 }
             }
+            // A plugin's chest screen: nothing in it moves.
+            S::ContainerClick(p) if self.lan_plugin_menu_click(host, conn, &p) => {}
             // AbstractContainerMenu.quickMoveStack of a mod container: the mods first.
             S::ContainerClick(p) if self.lan_mod_quick_move(host, conn, &p) => {}
             S::ContainerClick(p) if self.lan_merchant_click(host, conn, &p) => {}
@@ -2726,7 +2731,8 @@ impl Game<'_> {
             S::ContainerClose(p)
                 if self.lan_crafting_closed(host, conn, Some(p.container))
                     || self.lan_station_closed(host, conn, Some(p.container))
-                    || self.lan_mount_closed(host, conn, Some(p.container)) =>
+                    || self.lan_mount_closed(host, conn, Some(p.container))
+                    || self.lan_plugin_menu_closed(host, conn, Some(p.container)) =>
             {
                 self.guest_carried_back(host, gi);
             }

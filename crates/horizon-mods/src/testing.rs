@@ -8,8 +8,8 @@
 //! test written in TOML, `tests/<name>.toml` in the mod's folder: steps, each
 //! saying what happens and what the mod must have shown by then.
 use crate::{
-    BlockPos, Clock, Corner, Datagram, GameMode, Mods, Output, Panel, Player, PlayerLook,
-    PlayerMotion, Request, ServerPlayer, Snapshot, Status,
+    BlockPos, Clock, Corner, Datagram, GameMode, MenuInput, Mods, Output, Panel, Player,
+    PlayerLook, PlayerMotion, Request, ServerPlayer, Snapshot, Status,
 };
 use serde::Deserialize;
 use std::{
@@ -38,6 +38,8 @@ pub struct TestGame {
     /// changed; every other block, and the other dimensions, are air. Every
     /// biome is the dimension's plainest: plains, nether wastes, the end.
     pub world: std::collections::BTreeMap<(i32, i32, i32), String>,
+    /// Each player's open plugin menu (capability `menus`): player id, menu id.
+    pub menus: Vec<(String, u32)>,
 }
 
 /// The world a script's mod reads: [`TestGame::world`], copied for a step.
@@ -127,6 +129,7 @@ impl TestGame {
             names: Vec::new(),
             tick: 0,
             world: Default::default(),
+            menus: Vec::new(),
         };
         copy_mod(hmod, &copy)?;
         game.start()?;
@@ -278,6 +281,16 @@ impl TestGame {
     pub fn double_jump(&mut self, player: &ServerPlayer) {
         self.snapshot();
         self.mods.double_jump(player);
+    }
+    /// A click of `player` in one of the mod's menus.
+    pub fn menu_click(&mut self, player: &ServerPlayer, click: MenuInput) {
+        self.snapshot();
+        self.mods.menu_click(player, click);
+    }
+    /// One of the mod's menus closed for `player`.
+    pub fn menu_closed(&mut self, player: &ServerPlayer, menu: u32) {
+        self.snapshot();
+        self.mods.menu_closed(player, menu);
     }
     /// A payload from `player`: false when the mod doesn't listen to its channel.
     pub fn payload(&mut self, player: &ServerPlayer, channel: &str, data: &[u8]) -> bool {
@@ -495,6 +508,13 @@ pub struct Step {
     #[serde(default)]
     udp: Vec<DatagramSet>,
     http: Option<String>,
+    /// Server plugins (capability `menus`), after `http`: the player clicks this slot of their
+    /// open menu (the left button; with shift when `menu-shift`), or closes it.
+    menu_click: Option<i32>,
+    #[serde(default)]
+    menu_shift: bool,
+    #[serde(default)]
+    menu_close: bool,
     /// Blocks of the Overworld before the rest of the step (capability
     /// `world`); every other block is air.
     #[serde(default)]
@@ -529,6 +549,9 @@ pub struct Expect {
     cinematic: Option<Vec<String>>,
     /// Server mods: every `players.action-bar` as `"Name: text"`, in order.
     action_bar: Option<Vec<String>>,
+    /// Server plugins (capability `menus`): every `open` as `"Name: open <rows> <title>: <n>"`,
+    /// `set-items` as `"Name: set <n>"` (n the slots not empty) and `close` as `"Name: close"`.
+    menus: Option<Vec<String>>,
     /// Server mods: every `players.teleport` as `"Name: dimension x y z"`, in
     /// order; the player is moved there for the next steps.
     teleported: Option<Vec<String>>,
@@ -718,7 +741,9 @@ impl Step {
             || self.place.is_some()
             || self.swap_hands
             || self.double_jump
-            || self.payload.is_some();
+            || self.payload.is_some()
+            || self.menu_click.is_some()
+            || self.menu_close;
         let actor = if server && acts {
             Some(actor(game)?)
         } else {
@@ -802,6 +827,28 @@ impl Step {
             }
             None => None,
         };
+        if let Some(p) = &who {
+            let open = game
+                .menus
+                .iter()
+                .find(|(id, _)| *id == p.id)
+                .map(|(_, m)| *m);
+            if let Some(slot) = self.menu_click {
+                let menu = open.ok_or("the player has no menu of the mod open")?;
+                let click = MenuInput {
+                    menu,
+                    slot,
+                    button: 0,
+                    shift: self.menu_shift,
+                };
+                game.menu_click(p, click);
+            }
+            if self.menu_close {
+                let menu = open.ok_or("the player has no menu of the mod open")?;
+                game.menus.retain(|(id, _)| *id != p.id);
+                game.menu_closed(p, menu);
+            }
+        }
         if let Some(name) = &self.leave
             && !game.leave(name)
         {
@@ -848,6 +895,32 @@ impl Step {
                     (l.yaw, l.pitch) = (*yaw, *pitch);
                 }
             }
+        }
+        let mut menus = Vec::new();
+        for o in &out {
+            let Output::Menu { player, action } = o else {
+                continue;
+            };
+            use crate::MenuAction as A;
+            let filled = |items: &[String]| items.iter().filter(|s| !s.is_empty()).count();
+            let who = name(&game.players, player);
+            menus.push(match action {
+                A::Open {
+                    id,
+                    rows,
+                    title,
+                    items,
+                } => {
+                    game.menus.retain(|(p, _)| p != player);
+                    game.menus.push((player.clone(), *id));
+                    format!("{who}: open {rows} {title}: {}", filled(items))
+                }
+                A::Set { items, .. } => format!("{who}: set {}", filled(items)),
+                A::Close { id } => {
+                    game.menus.retain(|(p, m)| !(p == player && m == id));
+                    format!("{who}: close")
+                }
+            });
         }
         let tab_list: Vec<String> = out
             .iter()
@@ -1035,6 +1108,9 @@ impl Step {
         }
         if let Some(want) = &e.action_bar {
             same("action-bar", want, &action_bar)?;
+        }
+        if let Some(want) = &e.menus {
+            same("menus", want, &menus)?;
         }
         if let Some(want) = &e.teleported {
             same("teleported", want, &teleported)?;

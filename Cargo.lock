@@ -2256,6 +2256,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "horizon-plugin-heads"
+version = "0.1.0"
+dependencies = [
+ "horizon-mod-sdk",
+]
+
+[[package]]
 name = "horizon-plugin-imageframe"
 version = "0.1.0"
 dependencies = [

@@ -117,9 +117,11 @@ pub enum Capability {
     Maps,
     /// What one player alone sees: blocks, entities, the camera (server plugins).
     Cinematic,
+    /// Chest screens the plugin fills, whose clicks it hears (server plugins).
+    Menus,
 }
 impl Capability {
-    pub const ALL: [Capability; 18] = [
+    pub const ALL: [Capability; 19] = [
         Capability::GameRead,
         Capability::Chat,
         Capability::Hud,
@@ -138,6 +140,7 @@ impl Capability {
         Capability::Statistics,
         Capability::Maps,
         Capability::Cinematic,
+        Capability::Menus,
     ];
     /// Whether a server mod may have it: the others act on a local player.
     pub fn on_server(self) -> bool {
@@ -152,6 +155,7 @@ impl Capability {
                 | Capability::Statistics
                 | Capability::Maps
                 | Capability::Cinematic
+                | Capability::Menus
         )
     }
     /// The WIT interface it grants, in `horizon:mods`.
@@ -175,6 +179,7 @@ impl Capability {
             Capability::Statistics => "statistics",
             Capability::Maps => "maps",
             Capability::Cinematic => "cinematic",
+            Capability::Menus => "menus",
         }
     }
     /// May change in any release: a mod uses it only with
@@ -218,6 +223,7 @@ impl Capability {
             Capability::Cinematic => {
                 "show players blocks and figures only they see, move their camera and hide the other players from them"
             }
+            Capability::Menus => "open chest screens for players and hear their clicks in them",
         }
     }
     /// The capability a component import needs, `Ok(None)` for one every
@@ -265,6 +271,7 @@ impl fmt::Display for Capability {
             Capability::Statistics => "statistics",
             Capability::Maps => "maps",
             Capability::Cinematic => "cinematic",
+            Capability::Menus => "menus",
         };
         f.write_str(name)
     }

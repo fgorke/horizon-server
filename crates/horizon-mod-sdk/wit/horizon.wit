@@ -930,6 +930,26 @@ interface maps {
     paint: func(id: s32, picture: list<u8>) -> result<_, string>;
 }
 
+/// Capability `menus` (server plugins): chest screens a plugin fills. Players take nothing out
+/// of one and put nothing in: each click reaches the plugin's `menu-click` hook at the end of the
+/// tick, and closing it `menu-closed`. Vanilla packets: players need no mod. Everything is sent
+/// after the call returns.
+interface menus {
+    /// Opens a chest screen of `rows` rows of 9 (1 to 6) for `player`, titled `title` (markup),
+    /// in place of the screen they had open. `items` are its slots row by row from the top
+    /// left, each in vanilla's item syntax as `/give` reads it
+    /// (`minecraft:player_head[profile={name:"Steve"},item_name="Steve"]`), "" for an empty
+    /// slot; one that doesn't parse stays empty (and is logged). The menu's id; an error for
+    /// another number of rows, more items than slots, an item over 8192 characters, a title
+    /// over 256, 64 menu calls in this call already or a player not on.
+    open: func(player: string, rows: u8, title: string, items: list<string>) -> result<u32, string>;
+    /// The open menu's slots in place of the ones it showed, as `open` takes them: false when
+    /// `menu` isn't one of the plugin's open menus or an item breaks `open`'s rules.
+    set-items: func(player: string, menu: u32, items: list<string>) -> bool;
+    /// Closes one of the plugin's menus as if the player had: the plugin hears `menu-closed`.
+    close: func(player: string, menu: u32) -> bool;
+}
+
 /// More of the server's calls into a plugin, beside `server-events`: a
 /// plugin built before them doesn't export these and simply hears none.
 interface plugin-events {
@@ -968,6 +988,23 @@ interface plugin-events {
     udp: func(datagrams: list<datagram>);
     /// A request to the plugin's HTTP server.
     http: func(request: request) -> response;
+    /// A click in one of the plugin's menus (capability `menus`).
+    record menu-input {
+        /// The menu, as `menus.open` gave it.
+        menu: u32,
+        /// The slot: the menu's own from 0, row by row, then the player's inventory (27) and
+        /// hotbar (9) after them; -999 outside the screen.
+        slot: s32,
+        /// 0 the left button, 1 the right, 2 the middle; for a hotbar key, the key (0 to 8).
+        button: u8,
+        /// With shift held (a quick move).
+        shift: bool,
+    }
+    /// A click in one of the plugin's menus: nothing in it moved.
+    menu-click: func(player: player, click: menu-input);
+    /// One of the plugin's menus closed: the player closed it, another screen took its place
+    /// (another `menus.open` as well) or the plugin closed it.
+    menu-closed: func(player: player, menu: u32);
 }
 
 interface server-events {
@@ -1088,6 +1125,7 @@ world horizon-server-mod {
     import statistics;
     import maps;
     import cinematic;
+    import menus;
     export server-events;
     export plugin-events;
 }
@@ -1112,6 +1150,7 @@ world plugin-host {
     import statistics;
     import maps;
     import cinematic;
+    import menus;
     export plugin-events;
 }
 

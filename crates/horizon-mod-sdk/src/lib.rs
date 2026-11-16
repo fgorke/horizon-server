@@ -200,7 +200,7 @@ pub mod server {
     pub use crate::command;
 
     pub use exports::horizon::mods::plugin_events::{
-        Datagram, Guest as __PluginGuest, Request, Response,
+        Datagram, Guest as __PluginGuest, MenuInput, Request, Response,
     };
     pub use exports::horizon::mods::server_events::{
         Argument, ArgumentKind, ArgumentValue, BlockPos, Guest as __Guest, Registration,
@@ -210,6 +210,8 @@ pub mod server {
     pub use horizon::mods::cinematic;
     /// API level 13: capability `maps`, pictures on maps from images on the web.
     pub use horizon::mods::maps;
+    /// API level 17: capability `menus`, chest screens the plugin fills.
+    pub use horizon::mods::menus;
     pub use horizon::mods::players::{self, GameMode, Player};
     pub use horizon::mods::world::{self, BlockChange, ProtectedAction, Region};
     /// API level 10: capabilities `movement`, `channels`, `network` and `statistics`, and
@@ -279,6 +281,10 @@ pub mod server {
         fn http(&mut self, _request: &Request) -> Response {
             Response::not_found()
         }
+        /// A click in one of the plugin's menus ([`menus::open`]): nothing in it moved.
+        fn menu_click(&mut self, _player: &Player, _click: &MenuInput) {}
+        /// One of the plugin's menus closed.
+        fn menu_closed(&mut self, _player: &Player, _menu: u32) {}
     }
 
     impl Registration {
@@ -512,6 +518,12 @@ macro_rules! export_server_mod {
                     );
                     with(|m| out = m.http(&request));
                     out
+                }
+                fn menu_click(player: Player, click: $crate::server::MenuInput) {
+                    with(|m| m.menu_click(&player, &click))
+                }
+                fn menu_closed(player: Player, menu: u32) {
+                    with(|m| m.menu_closed(&player, menu))
                 }
             }
             #[cfg(target_arch = "wasm32")]

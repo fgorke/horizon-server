@@ -29,9 +29,9 @@ mod bindings {
     });
 }
 pub(super) use bindings::PluginHost;
-pub use bindings::exports::horizon::mods::plugin_events::{Datagram, Request, Response};
+pub use bindings::exports::horizon::mods::plugin_events::{Datagram, MenuInput, Request, Response};
 use bindings::horizon::mods::{channels, movement, network, random, statistics};
-pub(super) use bindings::horizon::mods::{cinematic, maps};
+pub(super) use bindings::horizon::mods::{cinematic, maps, menus};
 
 /// `channels.listen` prefixes per plugin, and `channels.send` payloads per call and their size.
 const LISTENS: usize = 16;
@@ -99,6 +99,9 @@ pub(super) struct Io {
     /// Capability `cinematic`'s entity calls and blocks in this call.
     pub(super) cinematic_calls: usize,
     pub(super) cinematic_blocks: usize,
+    /// Capability `menus`: the plugin's open menus (player, rows) by id, and this call's calls.
+    pub(super) menus: HashMap<u32, (String, u8)>,
+    pub(super) menu_calls: usize,
     /// This call's `channels.send` payloads, `udp-send` datagrams and `push`es.
     payloads: usize,
     datagrams: usize,
@@ -133,6 +136,7 @@ impl Io {
         self.images.new_call();
         self.cinematic_calls = 0;
         self.cinematic_blocks = 0;
+        self.menu_calls = 0;
     }
     fn hears(&self, channel: &str) -> bool {
         self.listens.iter().any(|p| channel.starts_with(p.as_str()))
@@ -652,6 +656,7 @@ pub(super) fn add_to_linker(
     random::add_to_linker::<State, HasSelf<State>>(linker, |s| s)?;
     maps::add_to_linker::<State, HasSelf<State>>(linker, |s| s)?;
     cinematic::add_to_linker::<State, HasSelf<State>>(linker, |s| s)?;
+    menus::add_to_linker::<State, HasSelf<State>>(linker, |s| s)?;
     statistics::add_to_linker::<State, HasSelf<State>>(linker, |s| s)
 }
 
@@ -755,6 +760,29 @@ impl Mods {
             |r| r.moves,
             |p, s| p.horizon_mods_plugin_events().call_double_jump(s, player),
             |()| false,
+        );
+    }
+    /// A click in a plugin's menu, to the plugin that opened it (capability `menus`).
+    pub fn menu_click(&mut self, player: &ServerPlayer, click: MenuInput) {
+        self.each_plugin(
+            |r| r.store.data().io.menus.contains_key(&click.menu),
+            |p, s| {
+                p.horizon_mods_plugin_events()
+                    .call_menu_click(s, player, click)
+            },
+            |()| true,
+        );
+    }
+    /// A plugin's menu closed: the plugin that opened it hears it, and it is no longer its.
+    pub fn menu_closed(&mut self, player: &ServerPlayer, menu: u32) {
+        self.each_plugin(
+            |r| r.store.data().io.menus.contains_key(&menu),
+            |p, s| {
+                s.data_mut().io.menus.remove(&menu);
+                p.horizon_mods_plugin_events()
+                    .call_menu_closed(s, player, menu)
+            },
+            |()| true,
         );
     }
 

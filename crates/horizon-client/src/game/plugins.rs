@@ -16,6 +16,8 @@ use horizon_world::registry::BlockStateId;
 mod cinematic;
 #[cfg(feature = "plugins")]
 mod io;
+#[cfg(feature = "plugins")]
+mod menus;
 
 /// How often, between ticks, the server looks at the plugins' sockets.
 pub(super) const PUMP_EVERY: std::time::Duration = std::time::Duration::from_millis(5);
@@ -39,6 +41,16 @@ enum Event {
     },
     /// A double jump a plugin allowed (capability `movement`).
     DoubleJump(Who),
+    /// A click in a plugin's menu (capability `menus`).
+    MenuClick {
+        who: Who,
+        menu: u32,
+        slot: i32,
+        button: u8,
+        shift: bool,
+    },
+    /// A plugin's menu closed.
+    MenuClosed(Who, u32),
 }
 
 /// The plugins and what is queued for them.
@@ -124,6 +136,35 @@ impl Game<'_> {
             if self.plugins.running {
                 self.plugins.events.push(Event::DoubleJump(Who::Conn(conn)));
             }
+        }
+    }
+
+    /// A click of guest `conn` in plugin menu `menu`, for the plugins at the tick's end.
+    pub(super) fn plugin_menu_click(
+        &mut self,
+        conn: u32,
+        menu: u32,
+        slot: i32,
+        button: u8,
+        shift: bool,
+    ) {
+        if self.plugins.running {
+            self.plugins.events.push(Event::MenuClick {
+                who: Who::Conn(conn),
+                menu,
+                slot,
+                button,
+                shift,
+            });
+        }
+    }
+
+    /// Plugin menu `menu` of guest `conn` closed.
+    pub(super) fn plugin_menu_closed(&mut self, conn: u32, menu: u32) {
+        if self.plugins.running {
+            self.plugins
+                .events
+                .push(Event::MenuClosed(Who::Conn(conn), menu));
         }
     }
 
@@ -726,6 +767,28 @@ mod run {
                             self.plugins.mods.double_jump(&p);
                         }
                     }
+                    Event::MenuClick {
+                        who: w,
+                        menu,
+                        slot,
+                        button,
+                        shift,
+                    } => {
+                        if let Some(p) = who(&w) {
+                            let click = horizon_mods::MenuInput {
+                                menu,
+                                slot,
+                                button,
+                                shift,
+                            };
+                            self.plugins.mods.menu_click(&p, click);
+                        }
+                    }
+                    Event::MenuClosed(w, menu) => {
+                        if let Some(p) = who(&w) {
+                            self.plugins.mods.menu_closed(&p, menu);
+                        }
+                    }
                 }
             }
             self.plugins.mods.server_tick(self.ticks);
@@ -996,6 +1059,9 @@ mod run {
                     Output::PaintMap { id, colors } => self.plugin_paint_map(id, &colors),
                     Output::Cinematic { player, action } => {
                         self.apply_plugin_cinematic(host, &player, action);
+                    }
+                    Output::Menu { player, action } => {
+                        self.apply_plugin_menu(host, &player, action);
                     }
                     Output::ActionBar { player, text, .. } => {
                         Self::tell_plugin_player(host, &player, &Text::markup(&text), true);

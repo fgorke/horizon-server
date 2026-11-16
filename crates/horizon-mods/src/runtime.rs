@@ -104,11 +104,13 @@ pub use recipes_bindings::horizon::mods::recipes::{
 use recipes_bindings::{RecipesHost, horizon::mods::browser, horizon::mods::recipes};
 mod cinematic;
 pub use cinematic::CinematicAction;
+mod menus;
+pub use menus::MenuAction;
 mod images;
 pub use images::MAP_COLORS;
 mod plugin_io;
 use plugin_io::PluginHost;
-pub use plugin_io::{Datagram, PlayerMotion, Request, Response, ServerFiles};
+pub use plugin_io::{Datagram, MenuInput, PlayerMotion, Request, Response, ServerFiles};
 
 /// A mod's linear memory cap.
 const MEMORY: usize = 64 << 20;
@@ -279,6 +281,8 @@ pub enum Output {
         player: String,
         action: CinematicAction,
     },
+    /// Capability `menus`: a chest screen of the player with this id.
+    Menu { player: String, action: MenuAction },
     /// `statistics.reset`: every player's statistics start again from nothing.
     ResetStatistics { name: String },
     /// `players.set-tab-list`: the player's tab list header and footer, markup.

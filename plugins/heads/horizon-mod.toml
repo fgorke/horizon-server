@@ -1,0 +1,8 @@
+id = "heads"
+name = "Heads"
+version = "0.1.0"
+description = "A head database after HeadDB: /heads opens over 100 000 heads by category, /heads <words> searches them, a click gives one."
+authors = ["fgorke"]
+api = "0.3"
+side = "server"
+capabilities = ["players", "command", "menus"]

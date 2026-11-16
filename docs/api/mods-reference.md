@@ -25,6 +25,7 @@ The contract between Horizon and its mods: the WIT package `horizon:mods@0.1.0`,
 | `statistics` | [`statistics`](#statistics) | read players' statistics and the names the server knew them by |
 | `maps` | [`maps`](#maps) | fetch images from the web and show them on maps |
 | `cinematic` | [`cinematic`](#cinematic) | show players blocks and figures only they see, move their camera and hide the other players from them |
+| `menus` | [`menus`](#menus) | open chest screens for players and hear their clicks in them |
 
 ## World `horizon-mod`
 
@@ -37,7 +38,7 @@ A client mod: runs in the player's game.
 
 A server mod (manifest `side = "server"`, `api = "0.3"`, experimental): runs where the world is simulated, on the dedicated server, a LAN host and single player's own server.
 
-- Imports (what the game offers): `log`, `storage`, `players`, `world`, `command`, `movement`, `channels`, `network`, `random`, `statistics`, `maps`, `cinematic`
+- Imports (what the game offers): `log`, `storage`, `players`, `world`, `command`, `movement`, `channels`, `network`, `random`, `statistics`, `maps`, `cinematic`, `menus`
 - Exports (what the mod provides): `server-events`, `plugin-events`
 
 ## World `server-host`
@@ -49,7 +50,7 @@ The game's side of the server plugins' imports and hooks since API level 10: a s
 
 ## World `plugin-host`
 
-- Imports (what the game offers): `movement`, `channels`, `network`, `random`, `statistics`, `maps`, `cinematic`, `players`
+- Imports (what the game offers): `movement`, `channels`, `network`, `random`, `statistics`, `maps`, `cinematic`, `menus`, `players`
 - Exports (what the mod provides): `plugin-events`
 
 ## World `horizon-ui-mod`
@@ -688,7 +689,7 @@ Capability `players`, server mods only (manifest `api = "0.3"`, experimental): t
 | `permission` | `func(player: string) -> option<u8>` | A player's permission level, 0 to 4 (operators have `op-permission-level`, 4 by default); none when not online. |
 | `action-bar` | `func(player: string, text: string) -> bool` | A line above a player's hotbar (the action bar), with `§` colour codes and not after the mod's name; false when not online. Counts toward the 8 messages per call. |
 | `set-tab-list` | `func(player: string, header: string, footer: string) -> bool` | The tab list's header and footer for a player, markup, `\n` between lines, as far as 4096 characters each; empty takes one away. False when not online. Counts toward the 8 messages per call. |
-| `set-suggestions` | `func(command: string, argument: string, choices: list<string>)` | What players' chat box offers to complete the word argument `argument` of the plugin's command `command`: each a word of letters, digits and `_ - . +`, up to 64 characters, at most 256 (the others are left out). Players may still type another word; the plugin checks what it gets. The server sends players the commands again when they change. |
+| `set-suggestions` | `func(command: string, argument: string, choices: list<string>)` | What players' chat box offers to complete the word argument `argument` of the plugin's command `command`: each a word of letters, digits and `_ - . +`, up to 64 characters, at most 256 (the others are left out). Players may still type another word; the plugin checks what it gets. The chat box asks for them while a player types that argument. |
 
 ## `world`
 
@@ -859,6 +860,18 @@ One frame of a fetched image: a picture per map, row by row from the top left, a
 | `create` | `func(dimension: string, picture: list<u8>) -> result<s32, string>` | A new locked map of `dimension` showing `picture`, made after this call returns and saved with the world: its id, for `filled_map[map_id=<id>]`. At most 64 per call. |
 | `paint` | `func(id: s32, picture: list<u8>) -> result<_, string>` | Replaces the picture of map `id` after this call returns, for everyone carrying it or seeing it framed; an id the world has no map for is skipped. At most 256 per call. |
 
+## `menus`
+
+Access: capability `menus`.
+
+Capability `menus` (server plugins): chest screens a plugin fills. Players take nothing out of one and put nothing in: each click reaches the plugin's `menu-click` hook at the end of the tick, and closing it `menu-closed`. Vanilla packets: players need no mod. Everything is sent after the call returns.
+
+| Function | Signature | What it does |
+| --- | --- | --- |
+| `open` | `func(player: string, rows: u8, title: string, items: list<string>) -> result<u32, string>` | Opens a chest screen of `rows` rows of 9 (1 to 6) for `player`, titled `title` (markup), in place of the screen they had open. `items` are its slots row by row from the top left, each in vanilla's item syntax as `/give` reads it (`minecraft:player_head[profile={name:"Steve"},item_name="Steve"]`), "" for an empty slot; one that doesn't parse stays empty (and is logged). The menu's id; an error for another number of rows, more items than slots, an item over 8192 characters, a title over 256, 64 menu calls in this call already or a player not on. |
+| `set-items` | `func(player: string, menu: u32, items: list<string>) -> bool` | The open menu's slots in place of the ones it showed, as `open` takes them: false when `menu` isn't one of the plugin's open menus or an item breaks `open`'s rules. |
+| `close` | `func(player: string, menu: u32) -> bool` | Closes one of the plugin's menus as if the player had: the plugin hears `menu-closed`. |
+
 ## `plugin-events`
 
 Access: exported by the mod: the game calls it.
@@ -893,6 +906,17 @@ More of the server's calls into a plugin, beside `server-events`: a plugin built
 | `max-age` | `u32` | Seconds a browser may keep it (`Cache-Control: max-age`); 0 for `no-store`. |
 | `body` | `list<u8>` | Up to 16 MiB. |
 
+### record `menu-input`
+
+A click in one of the plugin's menus (capability `menus`).
+
+| Field | Type | |
+| --- | --- | --- |
+| `menu` | `u32` | The menu, as `menus.open` gave it. |
+| `slot` | `s32` | The slot: the menu's own from 0, row by row, then the player's inventory (27) and hotbar (9) after them; -999 outside the screen. |
+| `button` | `u8` | 0 the left button, 1 the right, 2 the middle; for a hotbar key, the key (0 to 8). |
+| `shift` | `bool` | With shift held (a quick move). |
+
 | Function | Signature | What it does |
 | --- | --- | --- |
 | `swap-hands` | `func(player: player) -> bool` | The swap-hands key (F) of a player (capability `movement`): true takes it, and the hands don't swap. |
@@ -900,6 +924,8 @@ More of the server's calls into a plugin, beside `server-events`: a plugin built
 | `payload` | `func(player: player, channel: string, data: list<u8>)` | A payload from a player on a channel the plugin listens to. |
 | `udp` | `func(datagrams: list<datagram>)` | The datagrams that reached the plugin's socket since the last call. |
 | `http` | `func(request: request) -> response` | A request to the plugin's HTTP server. |
+| `menu-click` | `func(player: player, click: menu-input)` | A click in one of the plugin's menus: nothing in it moved. |
+| `menu-closed` | `func(player: player, menu: u32)` | One of the plugin's menus closed: the player closed it, another screen took its place (another `menus.open` as well) or the plugin closed it. |
 
 ## `server-events`
 
