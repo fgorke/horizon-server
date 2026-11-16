@@ -1697,8 +1697,11 @@ impl Projectile {
         // it touches now, and their currents push it.
         self.touching_water = w.in_water(self.bounds());
         self.velocity = w.pushed_by_currents(self.bounds(), self.velocity);
+        // ThrowableProjectile has no lifetime: a pearl in a stasis chamber waits for its owner
+        // for as long as its chunk ticks (a snowball or a potion stays as long, too).
         let alive = self.position.y >= w.below_world_y()
-            && self.age < if self.is_fireball() { 1200 } else { 6000 };
+            && (self.is_throwable_projectile()
+                || self.age < if self.is_fireball() { 1200 } else { 6000 });
         (alive, Hit::None)
     }
     /// AbstractArrow.onHitEntity damage: ceil(speed * base) plus crit bonus.
@@ -1831,6 +1834,16 @@ mod tests {
         p.age = 5;
         p.touching_water = true;
         p
+    }
+    #[test]
+    fn a_pearl_in_a_bubble_column_never_ages_out() {
+        let mut p = resting_pearl();
+        p.age = 100_000;
+        let column = Column {
+            drag: false,
+            surface: false,
+        };
+        assert!(p.tick(&column).0, "a stasis pearl lives on past 6000 ticks");
     }
     #[test]
     fn a_pearl_in_a_bubble_column_is_pushed_after_it_moves() {
