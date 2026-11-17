@@ -122,6 +122,10 @@ impl ServerMod for Paster {
         Ok((paster, Registration::new().on_joins()))
     }
 
+    fn player_joined(&mut self, player: &Player) {
+        channels::send(&player.id, protocol::SERVUX_HELLO, &[]);
+    }
+
     fn player_left(&mut self, player: &Player) {
         self.long.remove(&player.id);
         self.told.remove(&player.id);

@@ -310,7 +310,9 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             Some(None) => return None,
             _ => {}
         }
+        // Litematica's Easy Place may ask for the state itself (`accurate_placement`).
         self.placement_at(block, 0, ctx)
+            .and_then(|state| self.accurate_placement(state, ctx))
     }
 
     fn placement_at(

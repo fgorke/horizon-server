@@ -4236,3 +4236,46 @@ fn a_shulker_lid_updates_the_shapes_and_redstone_of_its_neighbours() {
         );
     }
 }
+
+#[test]
+fn accurate_placement_v3_sets_the_asked_state() {
+    use super::accurate_placement::with_value;
+    let mut w = world!();
+    w.floor(0, 8, "stone");
+    let at = |x| BlockPos::new(x, 0, 0);
+    let above = |x| BlockPos::new(x, 1, 0);
+    // Looking north at the floor, as vanilla would turn everything north.
+    // Stairs: facing east (5 << 1), half top (index 0 at bit 4), shape straight.
+    with_value(Some(5 << 1), || {
+        w.place("oak_stairs", at(0), Direction::Up, 180.0, 30.0, 0.0)
+    });
+    assert_eq!(
+        w.name(above(0)),
+        "oak_stairs[facing=east,half=top,shape=straight,waterlogged=false]"
+    );
+    // Observer facing down (0): what vanilla never gives looking north.
+    with_value(Some(0), || {
+        w.place("observer", at(2), Direction::Up, 180.0, 30.0, 0.0)
+    });
+    assert_eq!(w.prop(above(2), "facing"), "down");
+    // Door: facing south (3 << 1), hinge right (bit 4), closed; its own `half` is not one.
+    with_value(Some(3 << 1 | 1 << 4), || {
+        w.place("oak_door", at(4), Direction::Up, 180.0, 30.0, 0.0)
+    });
+    assert_eq!(w.prop(above(4), "facing"), "south");
+    assert_eq!(w.prop(above(4), "hinge"), "right");
+    assert_eq!(w.prop(above(4), "half"), "lower");
+    assert_eq!(w.prop(BlockPos::new(4, 2, 0), "half"), "upper");
+    // Slab: top on the floor's top (index 0 after the unused bit); never a double one.
+    with_value(Some(0), || {
+        w.place("stone_slab", at(6), Direction::Up, 180.0, 30.0, 0.0)
+    });
+    assert_eq!(w.prop(above(6), "type"), "top");
+    with_value(Some(2 << 1), || {
+        w.place("stone_slab", at(7), Direction::Up, 180.0, 30.0, 0.0)
+    });
+    assert_eq!(w.prop(above(7), "type"), "bottom");
+    // Without a value, vanilla's choice.
+    w.place("observer", at(1), Direction::Up, 180.0, 30.0, 0.0);
+    assert_ne!(w.prop(above(1), "facing"), "down");
+}

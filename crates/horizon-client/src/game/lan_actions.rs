@@ -2374,8 +2374,13 @@ impl Game<'_> {
                 self.native_player_attack_cooldown_reset(player, &name);
                 self.native_player_arm_swing(player, &name, "mainhand");
             }
-            S::UseItemOn(p) => {
+            S::UseItemOn(mut p) => {
                 host.hub.ack(conn, p.sequence);
+                // Litematica's accurate placement protocol: Easy Place's x carries the state it
+                // wants placed, two blocks and more past the block; the rest is the click's x.
+                let (x, accurate) =
+                    horizon_world::level::accurate_placement::split_cursor_x(p.cursor[0]);
+                p.cursor[0] = x;
                 // handleUseItemOn: within reach, then the hit point within
                 // a block of the block's centre (logged when it isn't).
                 if !host.hub.guests[gi].may_reach_block(p.pos) {
@@ -2440,7 +2445,11 @@ impl Game<'_> {
                         // InteractionResult.consumesAction: a FAIL (`use_failed`,
                         // as BlockItem.place's failed placement) does not count,
                         // even though the click ended on it.
-                        let consumed = matches!(g.use_item(), Ok(Some(_))) && !g.use_failed;
+                        let used =
+                            horizon_world::level::accurate_placement::with_value(accurate, || {
+                                g.use_item()
+                            });
+                        let consumed = matches!(used, Ok(Some(_))) && !g.use_failed;
                         // handleUseItemOn: a consuming useItemOn triggers
                         // ANY_BLOCK_USE with the hand's stack as it now is.
                         if consumed {

@@ -275,6 +275,13 @@ impl StateTable {
         let ints = slot.values.iter().filter_map(|v| v.int);
         Some((ints.clone().min()?, ints.max()?))
     }
+    /// A block's property keys with their names, in table order.
+    pub fn property_keys(&self, block: BlockId) -> impl Iterator<Item = (PropKey, &str)> {
+        self.info(block)
+            .slots
+            .iter()
+            .map(|slot| (slot.key, self.key_names[slot.key.0 as usize].as_str()))
+    }
     pub fn values(&self, block: BlockId, key: PropKey) -> impl Iterator<Item = &PropValue> {
         self.info(block)
             .slots

@@ -1,10 +1,10 @@
-# The mod says hi and hears what the server takes; operators' lines run in their dimension, at
+# Litematica hears a servux: hello on joining (accurate placement v3). The mod says hi and hears what the server takes; operators' lines run in their dimension, at
 # their place. Nobody else's do, and nothing but /setblock and /summon.
 
 [[step]]
 join = "Alex"
 payload = { channel = "litematica-server-paster:network_v2", data = "000a08000b6d6f645f76657273696f6e0005302e312e3000" }
-expect.payloads = ["Alex: litematica-server-paster:network_v2 000a08000b6d6f645f76657273696f6e0005302e312e3000", "Alex: litematica-server-paster:network_v2 010a0b000369647300000005000000000000000100000002000000030000000400"]
+expect.payloads = ["Alex: servux:accurate_placement ", "Alex: litematica-server-paster:network_v2 000a08000b6d6f645f76657273696f6e0005302e312e3000", "Alex: litematica-server-paster:network_v2 010a0b000369647300000005000000000000000100000002000000030000000400"]
 
 [[step]]
 player = { x = 0.5, y = 64.0, z = 0.5, permission = 0 }

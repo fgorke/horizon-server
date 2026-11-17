@@ -4,6 +4,10 @@
 //! pair may lie across two segments.
 
 pub const CHANNEL: &str = "litematica-server-paster:network_v2";
+/// Sent to each player who joins: any `servux:` payload makes Litematica use its accurate
+/// placement protocol v3 (Easy Place turns blocks as the schematic has them), which the server
+/// reads. No mod registers this channel, so clients drop it unread.
+pub const SERVUX_HELLO: &str = "servux:accurate_placement";
 
 const TAG_END: u8 = 0;
 const TAG_STRING: u8 = 8;
