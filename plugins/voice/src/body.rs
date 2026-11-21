@@ -10,6 +10,8 @@ use std::collections::VecDeque;
 
 /// Picks the body among all entities (the plugin removes others with the tag on start).
 pub const SELECT: &str = "@e[type=minecraft:mannequin,tag=schorsch,limit=1]";
+/// The body's skin (a pig head and a suit): Mojang's texture, as a profile's `textures` value.
+const SKIN: &str = "eyJ0ZXh0dXJlcyI6eyJTS0lOIjp7InVybCI6Imh0dHA6Ly90ZXh0dXJlcy5taW5lY3JhZnQubmV0L3RleHR1cmUvOWNmZWE2Njc3ZTdhY2Q3MGVhZjczZTJlNDNkNDAzNWMxZDFhZTNlM2JlNzZlZWQ5YWIzMDk3MTg2Y2E5YTZlNyJ9fX0=";
 const KILL: &str = "kill @e[type=minecraft:mannequin,tag=schorsch]";
 /// The animal the body rides (tagged when it gets on).
 const MOUNT: &str = "@e[tag=schorsch_mount,limit=1]";
@@ -303,7 +305,7 @@ impl Body {
         };
         let summon = format!(
             "execute in {} run summon minecraft:mannequin {:.2} {:.2} {:.2} \
-             {{profile:\"Schorsch\",CustomName:\"Schorsch\",CustomNameVisible:1b,\
+             {{profile:{{name:\"Schorsch\",properties:[{{name:\"textures\",value:\"{SKIN}\"}}]}},CustomName:\"Schorsch\",CustomNameVisible:1b,\
              hide_description:1b,immovable:1b,Invulnerable:1b,Tags:[\"schorsch\"],\
              Rotation:[{:.1}f,0f]}}",
             body.dimension, at[0], at[1], at[2], facing
@@ -624,6 +626,11 @@ mod tests {
             made[1]
         );
         assert!(made[1].contains("Tags:[\"schorsch\"]"));
+        assert!(
+            made[1].contains("properties:[{name:\"textures\",value:\"eyJ0"),
+            "{}",
+            made[1]
+        );
         // Alex walks west past the step: the body follows, a block up and down again.
         let mut heights = vec![];
         for tick in 0..200 {
