@@ -11,6 +11,7 @@ use horizon_mod_sdk::{
     messages::Messages,
     server::{
         Datagram, GameMode, Player, Registration, ServerMod, channels, network, players, random,
+        world,
     },
     storage,
 };
@@ -18,6 +19,7 @@ use horizon_mod_sdk::{
 mod aes;
 mod bridge;
 mod protocol;
+mod view;
 
 use protocol::{Clients, PlayerState};
 
@@ -48,6 +50,8 @@ struct Voice {
     port: u16,
     messages: Messages,
     bot: bridge::Bot,
+    /// What a player sees, while its rays are cast (a few hundred a tick).
+    view: Option<view::View>,
 }
 
 impl Voice {
@@ -158,6 +162,7 @@ impl ServerMod for Voice {
             port,
             messages: Messages::load(MESSAGES),
             bot: bridge::Bot::new(storage::get("bridge_token")),
+            view: None,
         };
         if !voice.bot.enabled() {
             horizon_mod_sdk::info("voice: no bridge_token, no bot");
@@ -179,6 +184,7 @@ impl ServerMod for Voice {
             send_all(protocol::keep_alives(&mut self.clients, &mut iv));
         }
         self.bot_tick(tick);
+        self.view_tick();
     }
 
     /// A player left: out of the voice chat, and gone from the others' lists.
@@ -317,6 +323,7 @@ impl Voice {
                 self.bot.tell_status();
             }
             bridge::Message::Leave => self.bot_leave(),
+            bridge::Message::View(name) => self.start_view(&name),
             bridge::Message::ActionBar(name, text) => {
                 if let Some(p) = players::online().into_iter().find(|p| p.name == name) {
                     players::action_bar(&p.id, &text);
@@ -344,6 +351,36 @@ impl Voice {
             for (speaker, opus) in heard {
                 self.bot.tell_heard(speaker, &opus);
             }
+        }
+    }
+
+    /// A view from the player's eyes, cast over the next ticks; one at a time.
+    fn start_view(&mut self, name: &str) {
+        let player = players::online().into_iter().find(|p| p.name == name);
+        let Some((p, (yaw, pitch))) = player.and_then(|p| {
+            let rotation = players::rotation(&p.id)?;
+            Some((p, rotation))
+        }) else {
+            self.bot.tell_no_view();
+            return;
+        };
+        if self.view.is_none() {
+            self.view = Some(view::View::new(&p.dimension, [p.x, p.y, p.z], yaw, pitch));
+        }
+    }
+
+    fn view_tick(&mut self) {
+        let Some(v) = self.view.as_mut() else {
+            return;
+        };
+        let dimension = v.dimension().to_owned();
+        v.cast(view::RAYS_PER_TICK, &mut |[x, y, z]| {
+            world::get_block(&dimension, x, y, z)
+        });
+        if v.done()
+            && let Some(v) = self.view.take()
+        {
+            self.bot.tell_view(&v);
         }
     }
 

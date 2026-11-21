@@ -5,7 +5,9 @@
 //! status), `02` + a player's UUID (join that player's group), `03` (leave), `04` + sequence
 //! (i64) + an Opus frame (the bot's voice, 48 kHz mono, 20 ms), `05` + a player's name, a
 //! NUL and a line for their action bar (what the bot does; no console command, so no
-//! operator sees a command's feedback).
+//! operator sees a command's feedback), `06` + a player's name (what they see: the plugin
+//! answers `83` w h palette-size, `86` index + block state per palette entry, `84` offset +
+//! 6 bytes per pixel (block u16, face, u, v, distance) and `85` + 1 or 0 at the end).
 //!
 //! Plugin to program: `FE 81` + the speaker's UUID + an Opus frame (what the group says), and
 //! `FE 82` + 1 or 0 (in a group or not).
@@ -13,7 +15,7 @@ use crate::protocol::{PlayerState, Writer};
 use horizon_mod_sdk::server::network;
 
 pub const BOT_UUID: u128 = 0xc1a0_de00_0000_4000_8000_0000_c1a0_de01;
-pub const BOT_NAME: &str = "Claude";
+pub const BOT_NAME: &str = "Schorsch";
 const MAGIC: u8 = 0xFE;
 /// Ticks without a hello after which the program counts as gone (10 s).
 const SILENT_TICKS: u64 = 200;
@@ -24,6 +26,7 @@ pub enum Message {
     Leave,
     Audio(i64, Vec<u8>),
     ActionBar(String, String),
+    View(String),
 }
 
 /// Whether a datagram is meant for the bridge: from this machine, with the bridge's magic byte.
@@ -113,6 +116,13 @@ impl Bot {
                 }
                 Message::ActionBar(name, text)
             }
+            6 => {
+                let name = String::from_utf8(body.get(1..)?.to_vec()).ok()?;
+                if name.is_empty() || name.len() > 16 {
+                    return None;
+                }
+                Message::View(name)
+            }
             _ => return None,
         };
         self.program = Some(from.to_owned());
@@ -132,6 +142,34 @@ impl Bot {
 
     pub fn tell_status(&self) {
         self.send(0x82, &[u8::from(self.group.is_some())]);
+    }
+
+    /// A finished view: its size, palette and pixels, then the end.
+    pub fn tell_view(&self, view: &crate::view::View) {
+        let mut head = Vec::new();
+        head.extend_from_slice(&crate::view::WIDTH.to_be_bytes());
+        head.extend_from_slice(&crate::view::HEIGHT.to_be_bytes());
+        head.extend_from_slice(&(view.palette.len() as u16).to_be_bytes());
+        self.send(0x83, &head);
+        for (i, state) in view.palette.iter().enumerate() {
+            let mut body = (i as u16).to_be_bytes().to_vec();
+            body.extend_from_slice(state.as_bytes());
+            self.send(0x86, &body);
+        }
+        for (n, chunk) in view.pixels.chunks(600).enumerate() {
+            let mut body = ((n * 600) as u32).to_be_bytes().to_vec();
+            for p in chunk {
+                body.extend_from_slice(&p.block.to_be_bytes());
+                body.extend_from_slice(&[p.face, p.u, p.v, p.distance]);
+            }
+            self.send(0x84, &body);
+        }
+        self.send(0x85, &[1]);
+    }
+
+    /// No view: the player is not online.
+    pub fn tell_no_view(&self) {
+        self.send(0x85, &[0]);
     }
 
     pub fn tell_heard(&self, speaker: u128, opus: &[u8]) {

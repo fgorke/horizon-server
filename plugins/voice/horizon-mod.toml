@@ -5,4 +5,4 @@ description = "A server for the Simple Voice Chat mod: players hear the players 
 authors = ["fgorke"]
 api = "0.3"
 side = "server"
-capabilities = ["players", "channels", "network", "storage"]
+capabilities = ["players", "channels", "network", "storage", "world"]
