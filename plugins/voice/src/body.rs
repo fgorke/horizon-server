@@ -18,6 +18,8 @@ const MOUNT: &str = "@e[tag=schorsch_mount,limit=1]";
 const UNTAG_MOUNT: &str = "tag @e[tag=schorsch_mount] remove schorsch_mount";
 const RIDE_WALK: f64 = 0.4; // blocks a tick on an animal
 const RIDE_REACH: u32 = 8;
+const RISE: f64 = 0.42; // blocks a tick up while jumping
+const FALL: f64 = 0.6; // blocks a tick down while falling
 const WALK: f64 = 0.22; // blocks a tick: a player's walking speed
 const NEAR: f64 = 2.5; // how close it walks up to whom it follows
 const CATCH_UP: f64 = 24.0; // farther than this: it appears next to them
@@ -250,21 +252,39 @@ fn yaw_to(a: [f64; 3], b: [f64; 3]) -> f32 {
 
 /// Where feet can stand near `y` at x/z: solid below, room for body and head; the same height
 /// first, then a step up, then down to four blocks.
-fn ground(at: [f64; 3], world: &mut impl FnMut([i32; 3]) -> Option<String>) -> Option<f64> {
+fn ground(
+    at: [f64; 3],
+    riding: bool,
+    world: &mut impl FnMut([i32; 3]) -> Option<String>,
+) -> Option<f64> {
     let (x, z) = (at[0].floor() as i32, at[2].floor() as i32);
     let feet = (at[1] + 0.01).floor() as i32;
     let free = |s: Option<String>| s.is_some_and(|s| passable(&s));
-    for dy in [0, 1, -1, -2, -3, -4] {
+    // On an animal it jumps two blocks, and needs room for the animal and itself on top.
+    let steps: &[i32] = if riding {
+        &[0, 1, 2, -1, -2, -3, -4]
+    } else {
+        &[0, 1, -1, -2, -3, -4]
+    };
+    let room = if riding { 3 } else { 2 };
+    for dy in steps {
         let y = feet + dy;
         let below = world([x, y - 1, z]);
-        if below.as_deref().is_some_and(|s| !passable(s))
-            && free(world([x, y, z]))
-            && free(world([x, y + 1, z]))
-        {
-            return Some(f64::from(y));
+        let feet_cell = world([x, y, z]);
+        let swims = below.as_deref().is_some_and(water) && !feet_cell.as_deref().is_some_and(water);
+        // Never fully under water: it swims on top instead.
+        let stands = below.as_deref().is_some_and(|s| !passable(s))
+            && !world([x, y + 1, z]).as_deref().is_some_and(water);
+        if (stands || swims) && free(feet_cell) && (1..room).all(|h| free(world([x, y + h, z]))) {
+            // In water it floats, half in it.
+            return Some(f64::from(y) - if swims { 0.5 } else { 0.0 });
         }
     }
     None
+}
+
+fn water(state: &str) -> bool {
+    state.starts_with("minecraft:water") || state.starts_with("minecraft:bubble_column")
 }
 
 fn tp(dimension: &str, at: [f64; 3], yaw: f32) -> String {
@@ -286,7 +306,7 @@ impl Body {
             player.at[1],
             player.at[2] + yaw.cos() * 2.0,
         ];
-        let at = match ground(front, world) {
+        let at = match ground(front, false, world) {
             Some(y) => [front[0], y, front[2]],
             None => player.at,
         };
@@ -419,7 +439,8 @@ impl Body {
         out: &mut Out,
     ) {
         let side = [player.at[0] + 1.0, player.at[1], player.at[2] + 1.0];
-        self.at = ground(side, world).map_or(player.at, |y| [side[0], y, side[2]]);
+        self.at =
+            ground(side, self.riding.is_some(), world).map_or(player.at, |y| [side[0], y, side[2]]);
         self.dimension = player.dimension.clone();
         self.yaw = yaw_to(self.at, player.at);
         self.stuck = 0;
@@ -449,8 +470,20 @@ impl Body {
             self.at[1],
             self.at[2] + (target[2] - self.at[2]) * k,
         ];
-        match ground(next, world) {
+        match ground(next, self.riding.is_some(), world) {
+            // A block or two up: rise first (a jump), then go on.
+            Some(y) if y - self.at[1] > 0.6 => {
+                self.at[1] += RISE;
+                self.moved = true;
+                true
+            }
             Some(y) => {
+                // Down falls a little each tick, as gravity would.
+                let y = if y < self.at[1] {
+                    (self.at[1] - FALL).max(y)
+                } else {
+                    y
+                };
                 self.at = [next[0], y, next[2]];
                 self.moved = true;
                 true
@@ -712,6 +745,44 @@ mod tests {
         let out = body.tick(2, &[alex(-8.5, 0.5)], &mut flat);
         assert!(out.commands[0].starts_with("ride @e[type=minecraft:mannequin"));
         assert_eq!(body.doing(), "folgt Alex");
+    }
+
+    /// A lake from x 3 on (water at y 61-63 over stone), a low roof at x -4 (y 66), else `flat`.
+    fn lake(at: [i32; 3]) -> Option<String> {
+        if at[0] >= 3 && (61..=63).contains(&at[1]) {
+            return Some("minecraft:water[level=0]".to_owned());
+        }
+        if at[0] == -4 && at[1] == 66 {
+            return Some("minecraft:stone".to_owned());
+        }
+        if at[0] == -3 && at[1] == 64 {
+            return Some("minecraft:air".to_owned());
+        }
+        flat(at)
+    }
+
+    #[test]
+    fn it_swims_on_water_and_a_rider_stops_under_a_low_roof() {
+        let (mut body, _) = Body::new(&alex(0.5, 0.5), &mut lake);
+        body.order(Order::Walk(4, 0));
+        for tick in 0..60 {
+            body.tick(tick, &[], &mut lake);
+        }
+        assert!(body.at[0] > 4.0, "{:?}", body.at);
+        assert_eq!(body.at[1], 63.5);
+        let (mut rider, _) = Body::new(&alex(0.5, 0.5), &mut lake);
+        rider.order(Order::Ride("minecraft:horse".into()));
+        rider.order(Order::Walk(-8, 0));
+        for tick in 0..80 {
+            rider.tick(tick, &[], &mut lake);
+        }
+        assert!(rider.at[0] > -4.0, "rode under the roof: {:?}", rider.at);
+        let (mut walker, _) = Body::new(&alex(0.5, 0.5), &mut lake);
+        walker.order(Order::Walk(-8, 0));
+        for tick in 0..80 {
+            walker.tick(tick, &[], &mut lake);
+        }
+        assert!(walker.at[0] < -4.0, "on foot it fits: {:?}", walker.at);
     }
 
     #[test]
