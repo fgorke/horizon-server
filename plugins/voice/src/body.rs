@@ -1,7 +1,8 @@
 //! The bot's body: a mannequin named after it that everyone sees. The plugin moves it a step a
 //! tick with `/tp` (over the ground, a block up or down at most, around nothing: it waits when
 //! a wall is in the way and catches up by teleport), lets it hit with `/damage` and `/swing`,
-//! and places blocks for it with the world capability, only where there is air or plants.
+//! and places blocks for it with the world capability, only into air (nothing is replaced),
+//! and what it builds gives nothing when broken ([`crate::built`]).
 //!
 //! Everything it does comes from the bot's program as fixed orders (`Order`): no command line
 //! from outside is ever run, and names and block states are checked first.
@@ -10,6 +11,11 @@ use std::collections::VecDeque;
 /// Picks the body among all entities (the plugin removes others with the tag on start).
 pub const SELECT: &str = "@e[type=minecraft:mannequin,tag=schorsch,limit=1]";
 const KILL: &str = "kill @e[type=minecraft:mannequin,tag=schorsch]";
+/// The animal the body rides (tagged when it gets on).
+const MOUNT: &str = "@e[tag=schorsch_mount,limit=1]";
+const UNTAG_MOUNT: &str = "tag @e[tag=schorsch_mount] remove schorsch_mount";
+const RIDE_WALK: f64 = 0.4; // blocks a tick on an animal
+const RIDE_REACH: u32 = 8;
 const WALK: f64 = 0.22; // blocks a tick: a player's walking speed
 const NEAR: f64 = 2.5; // how close it walks up to whom it follows
 const CATCH_UP: f64 = 24.0; // farther than this: it appears next to them
@@ -65,6 +71,11 @@ pub enum Order {
     AttackMob(String),
     /// Blocks relative to its feet: east, up, south, and the block state.
     Build(Vec<([i8; 3], String)>),
+    /// Take away everything the body ever built (the plugin does it, the body needn't exist).
+    Clear,
+    /// Get on the nearest animal of this kind (`horse`, `pig`, ...) within 8 blocks.
+    Ride(String),
+    Dismount,
 }
 
 /// A player the body may follow or hit.
@@ -101,6 +112,10 @@ pub struct Body {
     builds: VecDeque<([i32; 3], String)>,
     holding: &'static str,
     moved: bool,
+    /// The kind of animal it rides; it moves that then (the body sits on it).
+    riding: Option<String>,
+    /// Commands an order asked for, sent with the next tick's.
+    queued: Vec<String>,
 }
 
 /// Air, plants and other things one walks through (and that a build may replace).
@@ -167,6 +182,14 @@ pub fn passable(state: &str) -> bool {
     ]
     .iter()
     .any(|end| name.ends_with(end))
+}
+
+/// Air only: the body builds nowhere else, so it never replaces anything.
+pub fn empty(state: &str) -> bool {
+    matches!(
+        state.split('[').next().unwrap_or(state),
+        "minecraft:air" | "minecraft:cave_air" | "minecraft:void_air"
+    )
 }
 
 /// A block state the body may place: `name` or `name[key=value,...]`, no forbidden block.
@@ -275,6 +298,8 @@ impl Body {
             builds: VecDeque::new(),
             holding: "air",
             moved: false,
+            riding: None,
+            queued: Vec::new(),
         };
         let summon = format!(
             "execute in {} run summon minecraft:mannequin {:.2} {:.2} {:.2} \
@@ -291,8 +316,33 @@ impl Body {
         KILL.to_owned()
     }
 
+    /// Puts the body where it is now: itself, or the animal it rides (which carries it). When
+    /// the animal is gone (killed, or it never got on), the body itself goes.
+    fn place(&self) -> Vec<String> {
+        if self.riding.is_none() {
+            return vec![tp(&self.dimension, self.at, self.yaw)];
+        }
+        let [x, y, z] = self.at;
+        let (d, yaw) = (&self.dimension, self.yaw);
+        vec![
+            format!("execute in {d} as {MOUNT} run tp @s {x:.2} {y:.2} {z:.2} {yaw:.1} 0"),
+            format!(
+                "execute in {d} unless entity {MOUNT} run tp {SELECT} {x:.2} {y:.2} {z:.2} {yaw:.1} 0"
+            ),
+        ]
+    }
+
     /// What the body does now, for the program to tell Claude.
     pub fn doing(&self) -> String {
+        let riding = self
+            .riding
+            .as_deref()
+            .map(|k| format!(", reitet auf {}", k.trim_start_matches("minecraft:")))
+            .unwrap_or_default();
+        self.doing_on_foot() + &riding
+    }
+
+    fn doing_on_foot(&self) -> String {
         match &self.goal {
             Goal::Stay if !self.builds.is_empty() => "baut".to_owned(),
             Goal::Stay => "steht".to_owned(),
@@ -338,7 +388,23 @@ impl Body {
                 );
                 self.goal = Goal::Stay;
             }
-            Order::Come(_) | Order::Remove => return false,
+            Order::Ride(kind) => {
+                self.queued.extend([
+                    UNTAG_MOUNT.to_owned(),
+                    format!(
+                        "execute as {SELECT} at @s run ride @s mount \
+                         @e[type={kind},distance=..{RIDE_REACH},sort=nearest,limit=1]"
+                    ),
+                    format!("execute as {SELECT} on vehicle run tag @s add schorsch_mount"),
+                ]);
+                self.riding = Some(kind);
+            }
+            Order::Dismount => {
+                self.queued
+                    .extend([format!("ride {SELECT} dismount"), UNTAG_MOUNT.to_owned()]);
+                self.riding = None;
+            }
+            Order::Come(_) | Order::Remove | Order::Clear => return false,
         }
         true
     }
@@ -370,7 +436,12 @@ impl Body {
         if left <= 0.0 {
             return true;
         }
-        let k = WALK.min(left) / distance(self.at, target);
+        let walk = if self.riding.is_some() {
+            RIDE_WALK
+        } else {
+            WALK
+        };
+        let k = walk.min(left) / distance(self.at, target);
         let next = [
             self.at[0] + (target[0] - self.at[0]) * k,
             self.at[1],
@@ -401,7 +472,10 @@ impl Body {
         players: &[Seen],
         world: &mut impl FnMut([i32; 3]) -> Option<String>,
     ) -> Out {
-        let mut out = Out::default();
+        let mut out = Out {
+            commands: std::mem::take(&mut self.queued),
+            ..Out::default()
+        };
         let before = (self.at, self.yaw);
         self.moved = false;
         let find = |name: &str| players.iter().find(|p| p.name == name);
@@ -477,8 +551,10 @@ impl Body {
         }
         self.build(world, &mut out);
         let turned = (self.yaw - before.1).abs() > 2.0;
-        if !matches!(self.goal, Goal::Mob(..)) && (self.at != before.0 || turned) {
-            out.commands.push(tp(&self.dimension, self.at, self.yaw));
+        // On an animal, once a second too: it would walk off with the body otherwise.
+        let hold = self.riding.is_some() && tick.is_multiple_of(20);
+        if !matches!(self.goal, Goal::Mob(..)) && (self.at != before.0 || turned || hold) {
+            out.commands.extend(self.place());
         }
         out
     }
@@ -490,7 +566,7 @@ impl Body {
             let Some((at, state)) = self.builds.pop_front() else {
                 return;
             };
-            if !world(at).is_some_and(|s| passable(&s)) {
+            if !world(at).is_some_and(|s| empty(&s)) {
                 continue; // something is there already: never replaced
             }
             if placed == 0 {
@@ -611,6 +687,27 @@ mod tests {
     }
 
     #[test]
+    fn riding_moves_the_animal_and_the_body_when_the_animal_is_gone() {
+        let (mut body, _) = Body::new(&alex(0.5, 0.5), &mut flat);
+        body.order(Order::Ride("minecraft:horse".into()));
+        let out = body.tick(1, &[alex(-8.5, 0.5)], &mut flat);
+        assert!(out.commands[1].contains("ride @s mount @e[type=minecraft:horse,distance=..8"));
+        assert!(
+            out.commands
+                .iter()
+                .any(|c| c.contains("as @e[tag=schorsch_mount,limit=1] run tp @s"))
+        );
+        assert!(out.commands.iter().any(|c| c.contains(
+            "unless entity @e[tag=schorsch_mount,limit=1] run tp @e[type=minecraft:mannequin"
+        )));
+        assert_eq!(body.doing(), "folgt Alex, reitet auf horse");
+        body.order(Order::Dismount);
+        let out = body.tick(2, &[alex(-8.5, 0.5)], &mut flat);
+        assert!(out.commands[0].starts_with("ride @e[type=minecraft:mannequin"));
+        assert_eq!(body.doing(), "folgt Alex");
+    }
+
+    #[test]
     fn states_names_and_kinds_are_checked() {
         assert_eq!(
             allowed_state("oak_stairs[facing=east,half=top]").as_deref(),
@@ -618,6 +715,10 @@ mod tests {
         );
         assert_eq!(allowed_state("minecraft:tnt"), None);
         assert_eq!(allowed_state("lava"), None);
+        assert!(allowed_state("oak_planks").is_some());
+        assert!(allowed_state("diamond_block").is_some());
+        assert!(!empty("minecraft:short_grass") && !empty("minecraft:water[level=0]"));
+        assert!(empty("minecraft:air"));
         assert_eq!(allowed_state("stone{x:1}"), None);
         assert_eq!(allowed_state("stone] run kill @a"), None);
         assert_eq!(allowed_state("other:stone"), None);

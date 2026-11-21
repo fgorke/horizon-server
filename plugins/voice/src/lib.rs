@@ -10,8 +10,8 @@
 use horizon_mod_sdk::{
     messages::Messages,
     server::{
-        Datagram, GameMode, Player, Registration, ServerMod, channels, command, network, players,
-        random, world,
+        BlockPos, Datagram, GameMode, Player, Registration, ServerMod, channels, command, network,
+        players, random, world,
     },
     storage,
 };
@@ -19,6 +19,7 @@ use horizon_mod_sdk::{
 mod aes;
 mod body;
 mod bridge;
+mod built;
 mod protocol;
 mod view;
 
@@ -57,6 +58,12 @@ struct Voice {
     body: Option<body::Body>,
     /// Whether bodies left from before a restart were taken away.
     swept: bool,
+    /// The blocks the body placed: broken, they give nothing.
+    built: built::Built,
+    /// Spots broken last tick whose drops are taken away again (some come a tick late).
+    sweeps: Vec<(String, [i32; 3])>,
+    /// While taking away what the body built: blocks gone, and ones in unloaded chunks.
+    clearing: Option<(u32, Vec<(u8, [i32; 3])>)>,
 }
 
 impl Voice {
@@ -170,11 +177,14 @@ impl ServerMod for Voice {
             view: None,
             body: None,
             swept: false,
+            built: built::Built::load(storage::get("built")),
+            sweeps: Vec::new(),
+            clearing: None,
         };
         if !voice.bot.enabled() {
             horizon_mod_sdk::info("voice: no bridge_token, no bot");
         }
-        Ok((voice, Registration::new().on_tick().on_joins()))
+        Ok((voice, Registration::new().on_tick().on_joins().on_blocks()))
     }
 
     /// Where each player is, for the relay, and the keep-alives once a second.
@@ -193,6 +203,24 @@ impl ServerMod for Voice {
         self.bot_tick(tick);
         self.view_tick();
         self.body_tick(tick);
+    }
+
+    /// A block the bot built is broken: whatever it dropped goes, now and next tick.
+    fn block_broken(&mut self, player: &Player, pos: BlockPos, _state: &str) {
+        let at = [pos.x, pos.y, pos.z];
+        if let Some(d) = built::dimension(&player.dimension)
+            && self.built.take(d, at)
+        {
+            command::run_quiet(&built::sweep(&player.dimension, at));
+            self.sweeps.push((player.dimension.clone(), at));
+        }
+    }
+
+    /// A player's own block where the bot's was (gone without a break): theirs now.
+    fn block_placed(&mut self, player: &Player, pos: BlockPos, _state: &str) {
+        if let Some(d) = built::dimension(&player.dimension) {
+            self.built.take(d, [pos.x, pos.y, pos.z]);
+        }
     }
 
     /// A player left: out of the voice chat, and gone from the others' lists.
@@ -429,6 +457,11 @@ impl Voice {
                     self.body = Some(b);
                 }
             }
+            body::Order::Clear => {
+                if self.clearing.is_none() {
+                    self.clearing = Some((0, Vec::new()));
+                }
+            }
             body::Order::Remove => {
                 command::run_quiet(&[body::Body::remove_all()]);
                 self.body = None;
@@ -451,6 +484,13 @@ impl Voice {
             command::run_quiet(&[body::Body::remove_all()]);
             self.body = None;
         }
+        self.clear_tick();
+        for (dimension, at) in std::mem::take(&mut self.sweeps) {
+            command::run_quiet(&built::sweep(&dimension, at));
+        }
+        if tick.is_multiple_of(100) {
+            self.built.save();
+        }
         let Some(b) = self.body.as_mut() else {
             return;
         };
@@ -461,7 +501,11 @@ impl Voice {
         if !out.commands.is_empty() {
             command::run_quiet(&out.commands);
         }
-        if !out.blocks.is_empty() {
+        let known = built::dimension(&b.dimension);
+        if let Some(d) = known.filter(|_| !out.blocks.is_empty()) {
+            for (at, _) in &out.blocks {
+                self.built.add(d, *at);
+            }
             let changes: Vec<world::BlockChange> = out
                 .blocks
                 .into_iter()
@@ -473,6 +517,54 @@ impl Voice {
         }
         if tick.is_multiple_of(20) {
             self.bot.tell_body(self.body.as_ref());
+        }
+    }
+
+    /// Takes away up to `CLEAR_PER_TICK` of the body's blocks a tick; ones in chunks nobody
+    /// has loaded are kept for later.
+    fn clear_tick(&mut self) {
+        const CLEAR_PER_TICK: usize = 1000;
+        let Some((removed, waiting)) = self.clearing.as_mut() else {
+            return;
+        };
+        let spots = self.built.drain(CLEAR_PER_TICK);
+        let done = spots.is_empty();
+        for (d, dimension) in built::DIMENSIONS.iter().enumerate() {
+            let changes: Vec<world::BlockChange> = spots
+                .iter()
+                .filter(|(sd, _)| usize::from(*sd) == d)
+                .filter_map(
+                    |(sd, [x, y, z])| match world::get_block(dimension, *x, *y, *z) {
+                        None => {
+                            waiting.push((*sd, [*x, *y, *z]));
+                            None
+                        }
+                        Some(s) if body::empty(&s) => None,
+                        Some(_) => Some(world::BlockChange {
+                            x: *x,
+                            y: *y,
+                            z: *z,
+                            state: "minecraft:air".to_owned(),
+                        }),
+                    },
+                )
+                .collect();
+            if changes.is_empty() {
+                continue;
+            }
+            *removed += changes.len() as u32;
+            if let Err(err) = world::set_blocks(dimension, &changes) {
+                horizon_mod_sdk::info(&format!(
+                    "voice: couldn't take the bot's blocks away: {err}"
+                ));
+            }
+        }
+        if done && let Some((removed, waiting)) = self.clearing.take() {
+            for (d, at) in &waiting {
+                self.built.add(*d, *at);
+            }
+            self.built.save();
+            self.bot.tell_cleared(removed, waiting.len() as u32);
         }
     }
 

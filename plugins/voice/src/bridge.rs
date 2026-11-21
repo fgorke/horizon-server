@@ -12,7 +12,8 @@
 //! 04 stay, 05 walk + east i16 + south i16, 06 hit player + name, 07 hit mob + kind, 08 build +
 //! per block east/up/south as i8 and a length-prefixed (u8) block state). The plugin tells
 //! where the body is once a second: `87` + dimension, NUL, x y z (f64), what it does; `87`
-//! alone when there is none.
+//! alone when there is none; `0A` + kind rides the nearest such animal, `0B` gets off; `09` takes away all the body built (`88` + how many blocks
+//! went, u32, and how many wait in chunks nobody has loaded, u32, when done).
 //!
 //! Plugin to program: `FE 81` + the speaker's UUID + an Opus frame (what the group says), and
 //! `FE 82` + 1 or 0 (in a group or not).
@@ -52,6 +53,9 @@ fn body_order(data: &[u8]) -> Option<crate::body::Order> {
         ),
         6 => Order::AttackPlayer(name()?),
         7 => Order::AttackMob(mob_kind(&text()?)?),
+        9 => Order::Clear,
+        10 => Order::Ride(mob_kind(&text()?)?),
+        11 => Order::Dismount,
         8 => {
             let mut blocks = Vec::new();
             let mut rest = data.get(1..)?;
@@ -221,6 +225,13 @@ impl Bot {
             out.extend_from_slice(b.doing().as_bytes());
         }
         self.send(0x87, &out);
+    }
+
+    /// Taking away what the body built is done.
+    pub fn tell_cleared(&self, removed: u32, waiting: u32) {
+        let mut out = removed.to_be_bytes().to_vec();
+        out.extend_from_slice(&waiting.to_be_bytes());
+        self.send(0x88, &out);
     }
 
     /// No view: the player is not online.
