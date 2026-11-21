@@ -7,7 +7,12 @@
 //! NUL and a line for their action bar (what the bot does; no console command, so no
 //! operator sees a command's feedback), `06` + a player's name (what they see: the plugin
 //! answers `83` w h palette-size, `86` index + block state per palette entry, `84` offset +
-//! 6 bytes per pixel (block u16, face, u, v, distance) and `85` + 1 or 0 at the end).
+//! 6 bytes per pixel (block u16, face, u, v, distance) and `85` + 1 or 0 at the end), `07` +
+//! an order for the bot's body (`body::Order`: 01 come + name, 02 remove, 03 follow + name,
+//! 04 stay, 05 walk + east i16 + south i16, 06 hit player + name, 07 hit mob + kind, 08 build +
+//! per block east/up/south as i8 and a length-prefixed (u8) block state). The plugin tells
+//! where the body is once a second: `87` + dimension, NUL, x y z (f64), what it does; `87`
+//! alone when there is none.
 //!
 //! Plugin to program: `FE 81` + the speaker's UUID + an Opus frame (what the group says), and
 //! `FE 82` + 1 or 0 (in a group or not).
@@ -27,6 +32,42 @@ pub enum Message {
     Audio(i64, Vec<u8>),
     ActionBar(String, String),
     View(String),
+    Body(crate::body::Order),
+}
+
+/// An order for the body: its kind byte, then what it needs; names, mob kinds and block
+/// states are checked here (a refused block is left out of a build).
+fn body_order(data: &[u8]) -> Option<crate::body::Order> {
+    use crate::body::{Order, allowed_state, mob_kind, player_name};
+    let text = || String::from_utf8(data.get(1..)?.to_vec()).ok();
+    let name = || text().filter(|n| player_name(n));
+    Some(match *data.first()? {
+        1 => Order::Come(name()?),
+        2 => Order::Remove,
+        3 => Order::Follow(name()?),
+        4 => Order::Stay,
+        5 => Order::Walk(
+            i16::from_be_bytes(data.get(1..3)?.try_into().ok()?),
+            i16::from_be_bytes(data.get(3..5)?.try_into().ok()?),
+        ),
+        6 => Order::AttackPlayer(name()?),
+        7 => Order::AttackMob(mob_kind(&text()?)?),
+        8 => {
+            let mut blocks = Vec::new();
+            let mut rest = data.get(1..)?;
+            while rest.len() >= 4 && blocks.len() < crate::body::MAX_BUILD {
+                let d = [rest[0] as i8, rest[1] as i8, rest[2] as i8];
+                let len = usize::from(rest[3]);
+                let state = std::str::from_utf8(rest.get(4..4 + len)?).ok()?;
+                if let Some(state) = allowed_state(state) {
+                    blocks.push((d, state));
+                }
+                rest = &rest[4 + len..];
+            }
+            Order::Build(blocks)
+        }
+        _ => return None,
+    })
 }
 
 /// Whether a datagram is meant for the bridge: from this machine, with the bridge's magic byte.
@@ -123,6 +164,7 @@ impl Bot {
                 }
                 Message::View(name)
             }
+            7 => Message::Body(body_order(body.get(1..)?)?),
             _ => return None,
         };
         self.program = Some(from.to_owned());
@@ -165,6 +207,20 @@ impl Bot {
             self.send(0x84, &body);
         }
         self.send(0x85, &[1]);
+    }
+
+    /// Where the body is and what it does, or that there is none.
+    pub fn tell_body(&self, body: Option<&crate::body::Body>) {
+        let mut out = Vec::new();
+        if let Some(b) = body {
+            out.extend_from_slice(b.dimension.as_bytes());
+            out.push(0);
+            for v in b.at {
+                out.extend_from_slice(&v.to_be_bytes());
+            }
+            out.extend_from_slice(b.doing().as_bytes());
+        }
+        self.send(0x87, &out);
     }
 
     /// No view: the player is not online.

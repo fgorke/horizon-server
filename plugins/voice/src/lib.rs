@@ -10,13 +10,14 @@
 use horizon_mod_sdk::{
     messages::Messages,
     server::{
-        Datagram, GameMode, Player, Registration, ServerMod, channels, network, players, random,
-        world,
+        Datagram, GameMode, Player, Registration, ServerMod, channels, command, network, players,
+        random, world,
     },
     storage,
 };
 
 mod aes;
+mod body;
 mod bridge;
 mod protocol;
 mod view;
@@ -52,6 +53,10 @@ struct Voice {
     bot: bridge::Bot,
     /// What a player sees, while its rays are cast (a few hundred a tick).
     view: Option<view::View>,
+    /// The bot's body, when it has one.
+    body: Option<body::Body>,
+    /// Whether bodies left from before a restart were taken away.
+    swept: bool,
 }
 
 impl Voice {
@@ -163,6 +168,8 @@ impl ServerMod for Voice {
             messages: Messages::load(MESSAGES),
             bot: bridge::Bot::new(storage::get("bridge_token")),
             view: None,
+            body: None,
+            swept: false,
         };
         if !voice.bot.enabled() {
             horizon_mod_sdk::info("voice: no bridge_token, no bot");
@@ -185,6 +192,7 @@ impl ServerMod for Voice {
         }
         self.bot_tick(tick);
         self.view_tick();
+        self.body_tick(tick);
     }
 
     /// A player left: out of the voice chat, and gone from the others' lists.
@@ -324,6 +332,7 @@ impl Voice {
             }
             bridge::Message::Leave => self.bot_leave(),
             bridge::Message::View(name) => self.start_view(&name),
+            bridge::Message::Body(order) => self.body_order(order),
             bridge::Message::ActionBar(name, text) => {
                 if let Some(p) = players::online().into_iter().find(|p| p.name == name) {
                     players::action_bar(&p.id, &text);
@@ -381,6 +390,89 @@ impl Voice {
             && let Some(v) = self.view.take()
         {
             self.bot.tell_view(&v);
+        }
+    }
+
+    /// The players as the body sees them.
+    fn seen() -> Vec<body::Seen> {
+        players::online()
+            .into_iter()
+            .map(|p| body::Seen {
+                yaw: players::rotation(&p.id).map_or(0.0, |r| r.0),
+                name: p.name,
+                dimension: p.dimension,
+                at: [p.x, p.y, p.z],
+            })
+            .collect()
+    }
+
+    fn body_order(&mut self, order: body::Order) {
+        match order {
+            body::Order::Come(name) => {
+                let seen = Self::seen();
+                let Some(p) = seen.iter().find(|p| p.name == name) else {
+                    return;
+                };
+                let near = self.body.as_ref().is_some_and(|b| {
+                    b.dimension == p.dimension
+                        && ((b.at[0] - p.at[0]).powi(2) + (b.at[2] - p.at[2]).powi(2)).sqrt() < 16.0
+                });
+                if near {
+                    if let Some(b) = self.body.as_mut() {
+                        b.order(body::Order::Follow(name));
+                    }
+                } else {
+                    let dimension = p.dimension.clone();
+                    let (b, made) =
+                        body::Body::new(p, &mut |[x, y, z]| world::get_block(&dimension, x, y, z));
+                    command::run_quiet(&made);
+                    self.body = Some(b);
+                }
+            }
+            body::Order::Remove => {
+                command::run_quiet(&[body::Body::remove_all()]);
+                self.body = None;
+            }
+            order => {
+                if let Some(b) = self.body.as_mut() {
+                    b.order(order);
+                }
+            }
+        }
+        self.bot.tell_body(self.body.as_ref());
+    }
+
+    fn body_tick(&mut self, tick: u64) {
+        if !self.swept && self.bot.enabled() && tick > 40 {
+            self.swept = true;
+            command::run_quiet(&[body::Body::remove_all()]);
+        }
+        if self.body.is_some() && self.bot.silent() {
+            command::run_quiet(&[body::Body::remove_all()]);
+            self.body = None;
+        }
+        let Some(b) = self.body.as_mut() else {
+            return;
+        };
+        let dimension = b.dimension.clone();
+        let out = b.tick(tick, &Self::seen(), &mut |[x, y, z]| {
+            world::get_block(&dimension, x, y, z)
+        });
+        if !out.commands.is_empty() {
+            command::run_quiet(&out.commands);
+        }
+        if !out.blocks.is_empty() {
+            let changes: Vec<world::BlockChange> = out
+                .blocks
+                .into_iter()
+                .map(|([x, y, z], state)| world::BlockChange { x, y, z, state })
+                .collect();
+            if let Err(err) = world::set_blocks(&b.dimension, &changes) {
+                horizon_mod_sdk::info(&format!("voice: the body couldn't build: {err}"));
+            }
+        }
+        if tick.is_multiple_of(20) {
+            self.bot.tell_body(self.body.as_ref());
         }
     }
 
