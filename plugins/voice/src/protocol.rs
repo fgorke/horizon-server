@@ -41,6 +41,8 @@ const MAX_PASSWORD: usize = 512;
 const MAGIC: u8 = 0xFF;
 const MAX_PACKET: usize = 2048;
 const MAX_OPUS: usize = 1275;
+/// Frames kept for the bot between two ticks at most (some seconds of a few speakers).
+const MAX_HEARD: usize = 1000;
 // ---- AES-128-GCM (`Secret`: a 12 byte IV in front, a 128 bit tag behind) ----
 
 fn gf_mul(x: u128, y: u128) -> u128 {
@@ -468,9 +470,16 @@ struct Client {
     group: Option<u128>,
 }
 
-/// The players by UUID, the groups by id, and the tick now.
+/// The players by UUID, the groups by id, the tick now, the group the bot listens to and what
+/// its members said since it was last asked (speaker, Opus frame).
 #[derive(Default)]
-pub struct Clients(HashMap<u128, Client>, HashMap<u128, Group>, u64);
+pub struct Clients(
+    HashMap<u128, Client>,
+    HashMap<u128, Group>,
+    u64,
+    Option<u128>,
+    Vec<(u128, Vec<u8>)>,
+);
 
 impl Clients {
     pub fn set_tick(&mut self, tick: u64) {
@@ -580,6 +589,38 @@ impl Clients {
     pub fn state(&self, player: u128) -> Option<(bool, Option<u128>)> {
         self.0.get(&player).map(|c| (c.disabled, c.group))
     }
+
+    /// Whether the group is there.
+    pub fn has_group(&self, group: u128) -> bool {
+        self.1.contains_key(&group)
+    }
+
+    /// The group whose voices are kept for the bot, or none.
+    pub fn listen_to(&mut self, group: Option<u128>) {
+        self.3 = group;
+        self.4.clear();
+    }
+
+    /// The Opus frames the listened group's members sent since the last call, with who spoke.
+    pub fn heard(&mut self) -> Vec<(u128, Vec<u8>)> {
+        std::mem::take(&mut self.4)
+    }
+}
+
+/// The bot's voice: one Opus frame as a `GroupSoundPacket` from `from` to every member of the
+/// group (as a member's voice, but the bot is no client of the relay).
+pub fn speak(
+    clients: &Clients,
+    from: u128,
+    group: u128,
+    opus: &[u8],
+    sequence: i64,
+    ivs: Ivs,
+) -> Vec<(String, Vec<u8>)> {
+    if opus.len() > MAX_OPUS {
+        return Vec::new();
+    }
+    group_voice(clients, from, group, opus, sequence, ivs)
 }
 
 /// `NetworkMessage.writeServer`: the magic byte and the encrypted packet.
@@ -669,6 +710,9 @@ pub fn handle(clients: &mut Clients, data: &[u8], from: &str, ivs: Ivs) -> Vec<(
             let Some(id) = group else {
                 return proximity(clients, player, &opus, sequence, whispering, ivs);
             };
+            if clients.3 == Some(id) && clients.4.len() < MAX_HEARD {
+                clients.4.push((player, opus.clone()));
+            }
             let mut out = group_voice(clients, player, id, &opus, sequence, ivs);
             if clients.1.get(&id).is_none_or(|g| g.kind == GroupKind::Open) {
                 out.extend(proximity(clients, player, &opus, sequence, whispering, ivs));
@@ -994,6 +1038,61 @@ mod tests {
             (Some(false), Some(false), Some(false), Some(2))
         );
         assert_eq!(joined_group_payload(None, true), vec![0, 1]);
+    }
+
+    #[test]
+    fn the_bot_hears_its_group_and_its_voice_reaches_every_member() {
+        let mut clients = Clients::default();
+        let (a, b, c, bot) = (1u128, 2u128, 3u128, 99u128);
+        join(&mut clients, a, [1; 16], addr(1), [0.0, 64.0, 0.0]);
+        join(&mut clients, b, [2; 16], addr(2), [5000.0, 64.0, 0.0]);
+        join(&mut clients, c, [3; 16], addr(3), [10.0, 64.0, 0.0]);
+        clients.1.insert(
+            7,
+            Group {
+                name: "g".into(),
+                password: None,
+                kind: GroupKind::Normal,
+            },
+        );
+        clients.0.get_mut(&a).unwrap().group = Some(7);
+        clients.0.get_mut(&b).unwrap().group = Some(7);
+        let mut mic = Writer::default();
+        mic.bytes(&[4, 2]).long(1).bool(false);
+        let talk = |clients: &mut Clients| {
+            handle(clients, &client_packet(a, &[1; 16], 0x1, &mic.0), addr(1));
+        };
+        // Not listening: nothing kept.
+        talk(&mut clients);
+        assert!(clients.heard().is_empty());
+        clients.listen_to(Some(7));
+        talk(&mut clients);
+        assert_eq!(clients.heard(), vec![(a, vec![4, 2])]);
+        assert!(clients.heard().is_empty());
+        // c (no group) talking is not the group's.
+        let mut mic = Writer::default();
+        mic.bytes(&[1]).long(1).bool(false);
+        handle(
+            &mut clients,
+            &client_packet(c, &[3; 16], 0x1, &mic.0),
+            addr(3),
+        );
+        assert!(clients.heard().is_empty());
+        // The bot's voice: to a and b, as a group sound from the bot; never to c.
+        let mut out = super::speak(&clients, bot, 7, &[5, 5], 3, &mut || Some([0; 12]));
+        out.sort();
+        assert_eq!(
+            out.iter().map(|o| o.0.as_str()).collect::<Vec<_>>(),
+            vec![addr(1), addr(2)]
+        );
+        let got = server_packet(&[2; 16], &out[1].1);
+        let mut r = Reader(&got);
+        assert_eq!(r.byte(), Some(0x3));
+        assert_eq!((r.uuid(), r.uuid()), (Some(bot), Some(bot)));
+        assert_eq!(r.bytes(MAX_OPUS), Some(&[5, 5][..]));
+        assert_eq!(r.long(), Some(3));
+        assert!(super::speak(&clients, bot, 7, &[0; 1300], 4, &mut || Some([0; 12])).is_empty());
+        assert!(clients.has_group(7) && !clients.has_group(8));
     }
 
     #[test]

@@ -3,6 +3,10 @@
 //! plugin's UDP port (24454, or the number in `storage` key `port`) over AES-128-GCM. The plugin
 //! only relays the players' Opus frames: to the players near the speaker in their level, and to
 //! the speaker's group wherever they are ([`protocol`]).
+//!
+//! A bot can take part too (Claude, from `/opt/claude-chat`): a program on the same machine
+//! talks to the plugin's UDP port from 127.0.0.1 with the secret in `storage` key `bridge_token`
+//! ([`bridge`]). It is told what the members of its group say, and its voice goes to them.
 use horizon_mod_sdk::{
     messages::Messages,
     server::{
@@ -12,6 +16,7 @@ use horizon_mod_sdk::{
 };
 
 mod aes;
+mod bridge;
 mod protocol;
 
 use protocol::{Clients, PlayerState};
@@ -42,6 +47,7 @@ struct Voice {
     clients: Clients,
     port: u16,
     messages: Messages,
+    bot: bridge::Bot,
 }
 
 impl Voice {
@@ -119,7 +125,9 @@ impl Voice {
         channels::send(id, "minecraft:register", &protocol::register_payload());
         let payload = protocol::secret_payload(&secret, self.port, uuid);
         channels::send(id, "voicechat:secret", &payload);
-        let states: Vec<PlayerState> = self.voice_players().into_iter().map(|(_, s)| s).collect();
+        let mut states: Vec<PlayerState> =
+            self.voice_players().into_iter().map(|(_, s)| s).collect();
+        states.extend(self.bot.state());
         channels::send(id, "voicechat:states", &protocol::states_payload(&states));
         // ServerGroupManager.onPlayerCompatibilityCheckSucceeded.
         for (group, g) in self.clients.groups() {
@@ -149,7 +157,11 @@ impl ServerMod for Voice {
             clients: Clients::default(),
             port,
             messages: Messages::load(MESSAGES),
+            bot: bridge::Bot::new(storage::get("bridge_token")),
         };
+        if !voice.bot.enabled() {
+            horizon_mod_sdk::info("voice: no bridge_token, no bot");
+        }
         Ok((voice, Registration::new().on_tick().on_joins()))
     }
 
@@ -166,6 +178,7 @@ impl ServerMod for Voice {
         if tick.is_multiple_of(protocol::KEEP_ALIVE_TICKS) {
             send_all(protocol::keep_alives(&mut self.clients, &mut iv));
         }
+        self.bot_tick(tick);
     }
 
     /// A player left: out of the voice chat, and gone from the others' lists.
@@ -183,6 +196,10 @@ impl ServerMod for Voice {
 
     fn udp(&mut self, datagrams: &[Datagram]) {
         for d in datagrams {
+            if bridge::is_bridge(&d.address, &d.data) {
+                self.bridge_datagram(&d.address, &d.data);
+                continue;
+            }
             send_all(protocol::handle(
                 &mut self.clients,
                 &d.data,
@@ -190,6 +207,7 @@ impl ServerMod for Voice {
                 &mut iv,
             ));
         }
+        self.pass_heard();
     }
 
     /// The mod's requests: the secret, groups (`ServerGroupManager`) and its state
@@ -247,6 +265,89 @@ impl ServerMod for Voice {
                 self.broadcast_state(uuid);
             }
             _ => {}
+        }
+    }
+}
+
+impl Voice {
+    /// The bot's state to everyone in the voice chat: in its group, or gone.
+    fn broadcast_bot(&self) {
+        let (channel, data) = match self.bot.state() {
+            Some(state) => ("voicechat:state", protocol::state_payload(&state)),
+            None => (
+                "voicechat:remove_state",
+                protocol::remove_state_payload(bridge::BOT_UUID),
+            ),
+        };
+        self.broadcast(channel, &data);
+    }
+
+    /// The bot leaves its group (asked to, its group is gone, or its program went quiet).
+    fn bot_leave(&mut self) {
+        if self.bot.group.take().is_some() {
+            self.clients.listen_to(None);
+            self.broadcast_bot();
+            self.cleanup_groups();
+        }
+        self.bot.tell_status();
+    }
+
+    /// The bot joins the group the player is in; false when the player is in none.
+    fn bot_join(&mut self, player: u128) -> bool {
+        let Some((_, Some(group))) = self.clients.state(player) else {
+            return false;
+        };
+        self.bot.group = Some(group);
+        self.clients.listen_to(Some(group));
+        self.broadcast_bot();
+        true
+    }
+
+    fn bridge_datagram(&mut self, from: &str, data: &[u8]) {
+        let Some(message) = self.bot.read(from, data) else {
+            return;
+        };
+        match message {
+            bridge::Message::Hello => self.bot.tell_status(),
+            bridge::Message::Join(player) => {
+                if !self.bot_join(player) {
+                    self.bot.group = None;
+                    self.clients.listen_to(None);
+                }
+                self.bot.tell_status();
+            }
+            bridge::Message::Leave => self.bot_leave(),
+            bridge::Message::Audio(sequence, opus) => {
+                if let Some(group) = self.bot.group {
+                    send_all(protocol::speak(
+                        &self.clients,
+                        bridge::BOT_UUID,
+                        group,
+                        &opus,
+                        sequence,
+                        &mut iv,
+                    ));
+                }
+            }
+        }
+    }
+
+    /// What the bot's group said, on to its program.
+    fn pass_heard(&mut self) {
+        let heard = self.clients.heard();
+        if self.bot.group.is_some() {
+            for (speaker, opus) in heard {
+                self.bot.tell_heard(speaker, &opus);
+            }
+        }
+    }
+
+    /// The bot leaves when its group is gone or its program stopped greeting.
+    fn bot_tick(&mut self, tick: u64) {
+        self.bot.set_tick(tick);
+        let gone = self.bot.group.is_some_and(|g| !self.clients.has_group(g));
+        if self.bot.group.is_some() && (gone || self.bot.silent()) {
+            self.bot_leave();
         }
     }
 }
