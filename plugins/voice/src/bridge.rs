@@ -3,7 +3,9 @@
 //! Program to plugin, from 127.0.0.1: `FE`, the 16 byte secret (`storage` key `bridge_token`,
 //! as 32 hex digits), then a kind: `01` hello (once a second; the plugin answers with its
 //! status), `02` + a player's UUID (join that player's group), `03` (leave), `04` + sequence
-//! (i64) + an Opus frame (the bot's voice, 48 kHz mono, 20 ms).
+//! (i64) + an Opus frame (the bot's voice, 48 kHz mono, 20 ms), `05` + a player's name, a
+//! NUL and a line for their action bar (what the bot does; no console command, so no
+//! operator sees a command's feedback).
 //!
 //! Plugin to program: `FE 81` + the speaker's UUID + an Opus frame (what the group says), and
 //! `FE 82` + 1 or 0 (in a group or not).
@@ -21,6 +23,7 @@ pub enum Message {
     Join(u128),
     Leave,
     Audio(i64, Vec<u8>),
+    ActionBar(String, String),
 }
 
 /// Whether a datagram is meant for the bridge: from this machine, with the bridge's magic byte.
@@ -100,6 +103,16 @@ impl Bot {
                 i64::from_be_bytes(body.get(1..9)?.try_into().ok()?),
                 body.get(9..)?.to_vec(),
             ),
+            5 => {
+                let rest = body.get(1..)?;
+                let nul = rest.iter().position(|b| *b == 0)?;
+                let name = String::from_utf8(rest[..nul].to_vec()).ok()?;
+                let text = String::from_utf8(rest[nul + 1..].to_vec()).ok()?;
+                if name.is_empty() || name.len() > 16 || text.chars().count() > 256 {
+                    return None;
+                }
+                Message::ActionBar(name, text)
+            }
             _ => return None,
         };
         self.program = Some(from.to_owned());
@@ -174,6 +187,16 @@ mod tests {
             _ => panic!("no audio"),
         }
         assert!(b.read("127.0.0.1:5000", &packet(TOKEN, &[2, 1])).is_none());
+        match b.read("127.0.0.1:5000", &packet(TOKEN, b"\x05Alex\x00\xc2\xa76hi")) {
+            Some(Message::ActionBar(name, text)) => {
+                assert_eq!((name.as_str(), text.as_str()), ("Alex", "\u{a7}6hi"))
+            }
+            _ => panic!("no action bar"),
+        }
+        assert!(
+            b.read("127.0.0.1:5000", &packet(TOKEN, b"\x05Alex"))
+                .is_none()
+        );
         // Without a secret there is no bot.
         let mut none = Bot::new(None);
         assert!(none.read("127.0.0.1:5000", &packet(TOKEN, &[1])).is_none());

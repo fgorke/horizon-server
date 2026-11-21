@@ -317,6 +317,11 @@ impl Voice {
                 self.bot.tell_status();
             }
             bridge::Message::Leave => self.bot_leave(),
+            bridge::Message::ActionBar(name, text) => {
+                if let Some(p) = players::online().into_iter().find(|p| p.name == name) {
+                    players::action_bar(&p.id, &text);
+                }
+            }
             bridge::Message::Audio(sequence, opus) => {
                 if let Some(group) = self.bot.group {
                     send_all(protocol::speak(
